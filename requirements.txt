@@ -1,0 +1,9 @@
+opencv-python
+numpy
+mss
+pyautogui
+keyboard
+pillow
+pygetwindow
+paddlepaddle
+paddleocr
