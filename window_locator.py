@@ -4,6 +4,20 @@ from typing import Callable, Optional, Sequence, Tuple
 Rect = Tuple[int, int, int, int]
 
 
+def _safe_window_snapshot(win):
+    try:
+        title = (getattr(win, "title", "") or "").strip()
+        left = int(getattr(win, "left", 0) or 0)
+        top = int(getattr(win, "top", 0) or 0)
+        width = int(getattr(win, "width", 0) or 0)
+        height = int(getattr(win, "height", 0) or 0)
+    except Exception:
+        return None
+    if not title or width <= 0 or height <= 0:
+        return None
+    return title, (left, top, width, height)
+
+
 def absolute_region_from_window(region: Sequence[int], window_rect: Rect) -> Rect:
     """Convert a window-relative region to absolute screen coordinates."""
     left, top, _, _ = window_rect
@@ -62,7 +76,7 @@ def relative_region_from_window(region: Sequence[int], window_rect: Rect) -> Rec
     return (abs_left - left, abs_top - top, width, height)
 
 
-def find_window_rect(title_contains: str) -> Optional[Rect]:
+def find_window_rect(title_contains: str, window_provider: Optional[Callable] = None) -> Optional[Rect]:
     """
     Return the first visible window whose title contains the provided text.
 
@@ -72,27 +86,24 @@ def find_window_rect(title_contains: str) -> Optional[Rect]:
     if not title_contains:
         return None
 
-    try:
-        import pygetwindow as gw
-    except ImportError as exc:
-        raise RuntimeError(
-            "pygetwindow is required for target-window mode. "
-            "Install requirements.txt again."
-        ) from exc
+    if window_provider is None:
+        try:
+            import pygetwindow as gw
+        except ImportError as exc:
+            raise RuntimeError(
+                "pygetwindow is required for target-window mode. "
+                "Install requirements.txt again."
+            ) from exc
+        window_provider = gw.getAllWindows
 
-    matches = []
-    for win in gw.getAllWindows():
-        title = (getattr(win, "title", "") or "").strip()
-        width = int(getattr(win, "width", 0) or 0)
-        height = int(getattr(win, "height", 0) or 0)
-        if title_contains in title.lower() and width > 0 and height > 0:
-            matches.append(win)
-
-    if not matches:
-        return None
-
-    win = matches[0]
-    return (int(win.left), int(win.top), int(win.width), int(win.height))
+    for win in window_provider():
+        snapshot = _safe_window_snapshot(win)
+        if snapshot is None:
+            continue
+        title, rect = snapshot
+        if title_contains in title.lower():
+            return rect
+    return None
 
 
 def visible_window_titles(window_provider: Optional[Callable] = None):
@@ -109,10 +120,11 @@ def visible_window_titles(window_provider: Optional[Callable] = None):
     titles = []
     seen = set()
     for win in window_provider():
-        title = (getattr(win, "title", "") or "").strip()
-        width = int(getattr(win, "width", 0) or 0)
-        height = int(getattr(win, "height", 0) or 0)
-        if not title or width <= 0 or height <= 0 or title in seen:
+        snapshot = _safe_window_snapshot(win)
+        if snapshot is None:
+            continue
+        title, _rect = snapshot
+        if title in seen:
             continue
         seen.add(title)
         titles.append(title)

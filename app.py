@@ -20,6 +20,14 @@ from models import (
 )
 from capture_tool import capture_template, select_region
 from engine import MacroEngine, _WINDOW_UNAVAILABLE
+from log_maintenance import (
+    DEFAULT_DEBUG_MAX_AGE_DAYS,
+    DEFAULT_DEBUG_MAX_FILES,
+    DEFAULT_LOG_BACKUPS,
+    DEFAULT_MAX_LOG_BYTES,
+    maintain_logs,
+    rotate_log_file,
+)
 from window_locator import (
     find_window_rect,
     proportional_region_from_window,
@@ -27,6 +35,7 @@ from window_locator import (
     resolve_window_region,
     visible_window_titles,
 )
+from alert_watcher import AlertWatcherFrame
 from app_helpers import duplicate_scenario, duplicate_step, duplicate_template_file
 
 
@@ -725,14 +734,28 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("PC Macro Builder")
-        root.geometry("780x640")
-        root.minsize(700, 560)
+        root.geometry("1040x760")
+        root.minsize(900, 650)
+        self._configure_style()
 
         self.scenario = Scenario(name="untitled")
         self.engine = None
         self.log_queue = queue.Queue()
         app_dir = os.path.dirname(os.path.abspath(__file__))
-        self.log_file_path = os.path.join(app_dir, "logs", "pc_macro_builder.log")
+        self.log_dir = os.path.join(app_dir, "logs")
+        self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
+        self.log_max_bytes = DEFAULT_MAX_LOG_BYTES
+        self.log_backups = DEFAULT_LOG_BACKUPS
+        self.debug_max_files = DEFAULT_DEBUG_MAX_FILES
+        self.debug_max_age_days = DEFAULT_DEBUG_MAX_AGE_DAYS
+        maintain_logs(
+            self.log_dir,
+            self.log_file_path,
+            self.log_max_bytes,
+            self.log_backups,
+            self.debug_max_files,
+            self.debug_max_age_days,
+        )
 
         self._build_ui()
         self._refresh_scenario_list()
@@ -741,63 +764,83 @@ class App:
         self.root.after(150, self._poll_log_queue)
         self._write_log_file("---- app started ----")
 
+    def _configure_style(self):
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TNotebook", padding=4)
+        style.configure("TNotebook.Tab", padding=(14, 6))
+        style.configure("TLabelframe", padding=6)
+        style.configure("TLabelframe.Label", font=("Segoe UI", 9, "bold"))
+
     # ---- layout ----
     def _build_ui(self):
-        top = tk.Frame(self.root)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True)
+
+        self.macro_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.macro_tab, text="Macro Builder")
+
+        self.alert_tab = AlertWatcherFrame(self.notebook, embedded=True)
+        self.notebook.add(self.alert_tab, text="Icon Alerts")
+
+        top = ttk.Frame(self.macro_tab, padding=(10, 10, 10, 6))
         top.pack(fill="x", padx=8, pady=6)
-        tk.Label(top, text="Scenario:").pack(side="left")
+        ttk.Label(top, text="Scenario:").pack(side="left")
         self.scenario_var = tk.StringVar()
         self.scenario_combo = ttk.Combobox(top, textvariable=self.scenario_var, state="readonly", width=24)
         self.scenario_combo.pack(side="left", padx=4)
         self.scenario_combo.bind("<<ComboboxSelected>>", self._on_scenario_selected)
-        tk.Button(top, text="New", command=self._new_scenario).pack(side="left", padx=2)
-        tk.Button(top, text="Save", command=self._save_scenario).pack(side="left", padx=2)
-        tk.Button(top, text="Save As...", command=self._save_scenario_as).pack(side="left", padx=2)
-        tk.Button(top, text="Duplicate", command=self._duplicate_scenario).pack(side="left", padx=2)
-        tk.Button(top, text="Delete", command=self._delete_scenario).pack(side="left", padx=2)
+        ttk.Button(top, text="New", command=self._new_scenario).pack(side="left", padx=2)
+        ttk.Button(top, text="Save", command=self._save_scenario).pack(side="left", padx=2)
+        ttk.Button(top, text="Save As...", command=self._save_scenario_as).pack(side="left", padx=2)
+        ttk.Button(top, text="Duplicate", command=self._duplicate_scenario).pack(side="left", padx=2)
+        ttk.Button(top, text="Delete", command=self._delete_scenario).pack(side="left", padx=2)
 
-        settings = tk.Frame(self.root)
-        settings.pack(fill="x", padx=8)
-        tk.Label(settings, text="Poll interval (s):").pack(side="left")
+        settings = ttk.LabelFrame(self.macro_tab, text="Scenario Settings", padding=8)
+        settings.pack(fill="x", padx=12, pady=(0, 6))
+        ttk.Label(settings, text="Poll interval (s):").pack(side="left")
         self.poll_var = tk.DoubleVar(value=self.scenario.poll_interval)
-        tk.Entry(settings, textvariable=self.poll_var, width=6).pack(side="left", padx=4)
-        tk.Label(settings, text="Monitor #:").pack(side="left", padx=(10, 0))
+        ttk.Entry(settings, textvariable=self.poll_var, width=6).pack(side="left", padx=4)
+        ttk.Label(settings, text="Monitor #:").pack(side="left", padx=(10, 0))
         self.monitor_var = tk.IntVar(value=self.scenario.monitor_index)
-        tk.Entry(settings, textvariable=self.monitor_var, width=4).pack(side="left", padx=4)
-        tk.Label(settings, text="Kill switch key:").pack(side="left", padx=(10, 0))
+        ttk.Entry(settings, textvariable=self.monitor_var, width=4).pack(side="left", padx=4)
+        ttk.Label(settings, text="Kill switch key:").pack(side="left", padx=(10, 0))
         self.kill_var = tk.StringVar(value=self.scenario.kill_switch)
-        tk.Entry(settings, textvariable=self.kill_var, width=8).pack(side="left", padx=4)
+        ttk.Entry(settings, textvariable=self.kill_var, width=8).pack(side="left", padx=4)
 
-        target = tk.Frame(self.root)
-        target.pack(fill="x", padx=8, pady=(4, 0))
-        tk.Label(target, text="Target window title contains:").pack(side="left")
+        target = ttk.LabelFrame(self.macro_tab, text="Target Window", padding=8)
+        target.pack(fill="x", padx=12, pady=(0, 6))
+        ttk.Label(target, text="Target window title contains:").pack(side="left")
         self.target_window_var = tk.StringVar(value=self.scenario.target_window_title)
         self.target_window_combo = ttk.Combobox(target, textvariable=self.target_window_var, width=42)
         self.target_window_combo.pack(side="left", padx=4)
-        tk.Button(target, text="Refresh", command=self._refresh_window_list).pack(side="left", padx=2)
-        tk.Label(target, text="blank = full screen", fg="#555").pack(side="left")
+        ttk.Button(target, text="Refresh", command=self._refresh_window_list).pack(side="left", padx=2)
+        ttk.Label(target, text="blank = full screen", foreground="#555").pack(side="left")
         self._refresh_window_list()
 
-        mid = tk.Frame(self.root)
-        mid.pack(fill="both", expand=True, padx=8, pady=6)
-        tk.Label(mid, text="Steps (checked top to bottom every cycle):").pack(anchor="w")
-        body = tk.Frame(mid)
+        mid = ttk.LabelFrame(self.macro_tab, text="Steps", padding=8)
+        mid.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        ttk.Label(mid, text="Checked top to bottom every cycle").pack(anchor="w")
+        body = ttk.Frame(mid)
         body.pack(fill="both", expand=True)
         self.steps_listbox = tk.Listbox(body, height=10)
         self.steps_listbox.pack(fill="both", expand=True, side="left")
-        step_btns = tk.Frame(body)
+        step_btns = ttk.Frame(body)
         step_btns.pack(side="left", fill="y", padx=6)
-        tk.Button(step_btns, text="Add Step...", width=14, command=self._add_step).pack(pady=2)
-        tk.Button(step_btns, text="Edit Step...", width=14, command=self._edit_step).pack(pady=2)
-        tk.Button(step_btns, text="Duplicate Step", width=14, command=self._duplicate_step).pack(pady=2)
-        tk.Button(step_btns, text="Test Step", width=14, command=self._test_step).pack(pady=2)
-        tk.Button(step_btns, text="Show Regions", width=14, command=self._show_step_regions).pack(pady=2)
-        tk.Button(step_btns, text="Remove Step", width=14, command=self._remove_step).pack(pady=2)
-        tk.Button(step_btns, text="Move Up", width=14, command=lambda: self._move_step(-1)).pack(pady=2)
-        tk.Button(step_btns, text="Move Down", width=14, command=lambda: self._move_step(1)).pack(pady=2)
+        ttk.Button(step_btns, text="Add Step...", width=14, command=self._add_step).pack(pady=2)
+        ttk.Button(step_btns, text="Edit Step...", width=14, command=self._edit_step).pack(pady=2)
+        ttk.Button(step_btns, text="Duplicate Step", width=14, command=self._duplicate_step).pack(pady=2)
+        ttk.Button(step_btns, text="Test Step", width=14, command=self._test_step).pack(pady=2)
+        ttk.Button(step_btns, text="Show Regions", width=14, command=self._show_step_regions).pack(pady=2)
+        ttk.Button(step_btns, text="Remove Step", width=14, command=self._remove_step).pack(pady=2)
+        ttk.Button(step_btns, text="Move Up", width=14, command=lambda: self._move_step(-1)).pack(pady=2)
+        ttk.Button(step_btns, text="Move Down", width=14, command=lambda: self._move_step(1)).pack(pady=2)
 
-        run_frame = tk.Frame(self.root)
-        run_frame.pack(fill="x", padx=8, pady=4)
+        run_frame = ttk.Frame(self.macro_tab, padding=(12, 0, 12, 6))
+        run_frame.pack(fill="x", padx=0, pady=0)
         self.run_btn = tk.Button(run_frame, text="\u25b6 Run", width=12, bg="#2e7d32", fg="white",
                                   command=self._start_engine)
         self.run_btn.pack(side="left", padx=2)
@@ -807,9 +850,8 @@ class App:
         self.status_label = tk.Label(run_frame, text="Stopped", fg="#c62828")
         self.status_label.pack(side="left", padx=12)
 
-        log_frame = tk.Frame(self.root)
-        log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        tk.Label(log_frame, text="Log:").pack(anchor="w")
+        log_frame = ttk.LabelFrame(self.macro_tab, text="Log", padding=8)
+        log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.log_text = tk.Text(log_frame, height=8, state="disabled", bg="#111111", fg="#33ff33")
         self.log_text.pack(fill="both", expand=True)
 
@@ -1143,7 +1185,8 @@ class App:
 
     def _write_log_file(self, line):
         try:
-            os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
+            os.makedirs(self.log_dir, exist_ok=True)
+            rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
             with open(self.log_file_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
         except Exception:
@@ -1152,6 +1195,8 @@ class App:
     def _on_close(self):
         if self.engine and self.engine.is_running:
             self.engine.stop()
+        if hasattr(self, "alert_tab"):
+            self.alert_tab.shutdown()
         self.root.destroy()
 
 

@@ -1,0 +1,27 @@
+{
+  "monitor_choice": "Monitor 1",
+  "grayscale": true,
+  "debug": false,
+  "cooldown_sec": 1.0,
+  "scan_region": [
+    5,
+    769,
+    1597,
+    157
+  ],
+  "scan_region_mode": "window",
+  "scan_region_ratio": [
+    0.003109452736318408,
+    0.8180851063829787,
+    0.9931592039800995,
+    0.16702127659574467
+  ],
+  "scan_region_window_size": [
+    1608,
+    940
+  ],
+  "target_window_title": "Last War-Survival Game",
+  "start_stop_hotkey": "ctrl+shift+f8",
+  "test_alert_hotkey": "ctrl+shift+f9",
+  "minimize_to_tray": false
+}

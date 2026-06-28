@@ -1,0 +1,119 @@
+{
+  "items": [
+    {
+      "id": 2,
+      "name": "Build/Task Icon (badge)",
+      "file": "template_2.png",
+      "threshold": 0.7,
+      "region": [
+        830,
+        781,
+        152,
+        147
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.5161691542288557,
+        0.8308510638297872,
+        0.0945273631840796,
+        0.15638297872340426
+      ],
+      "region_window_size": [
+        1608,
+        940
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Diamond",
+      "file": "template_3.png",
+      "threshold": 0.7,
+      "region": [
+        836,
+        788,
+        156,
+        144
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.5199004975124378,
+        0.8382978723404255,
+        0.09701492537313433,
+        0.15319148936170213
+      ],
+      "region_window_size": [
+        1608,
+        940
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Digs Text",
+      "file": "template_4.png",
+      "threshold": 0.8,
+      "region": [
+        123,
+        851,
+        254,
+        78
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.07649253731343283,
+        0.9053191489361702,
+        0.15796019900497513,
+        0.08297872340425531
+      ],
+      "region_window_size": [
+        1608,
+        940
+      ]
+    },
+    {
+      "id": 5,
+      "name": "#2212",
+      "file": "template_5.png",
+      "threshold": 0.8,
+      "region": [
+        121,
+        853,
+        292,
+        75
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.07524875621890548,
+        0.9074468085106383,
+        0.18159203980099503,
+        0.0797872340425532
+      ],
+      "region_window_size": [
+        1608,
+        940
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Digs Text Cyan",
+      "file": "template_7.png",
+      "threshold": 0.8,
+      "region": [
+        121,
+        853,
+        262,
+        75
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.07524875621890548,
+        0.9074468085106383,
+        0.16293532338308458,
+        0.0797872340425532
+      ],
+      "region_window_size": [
+        1608,
+        940
+      ]
+    }
+  ]
+}

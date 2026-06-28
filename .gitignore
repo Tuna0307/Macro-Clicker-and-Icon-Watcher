@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local runtime logs and generated debug captures
+logs/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Editor and OS noise
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
+# Large local model/artifact outputs
+runs/
+*.pt
+*.onnx
