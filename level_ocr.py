@@ -304,23 +304,30 @@ class LevelOcrReader:
         normalized = text.lower().replace(" ", "")
         normalized = normalized.replace("lⅴ", "lv").replace("1v", "lv").replace("iv", "lv")
 
-        for pattern in (r"lv[^\d]*(\d{1,4})", r"level[^\d]*(\d{1,4})", r"^l[^\d]*(\d{1,4})"):
+        for pattern in (r"lv([^\d]*)(\d{1,4})", r"level([^\d]*)(\d{1,4})", r"^l([^\d]*)(\d{1,4})"):
             match = re.search(pattern, normalized, flags=re.IGNORECASE)
             if match:
-                return self._normalize_level_digits(match.group(1), lv_prefixed=True)
+                separator, digits = match.group(1), match.group(2)
+                return self._normalize_level_digits(digits, lv_prefixed=True, separator=separator)
 
         numbers = re.findall(r"\d{1,3}", normalized)
         if not numbers:
             return None
         return int(numbers[-1])
 
-    def _normalize_level_digits(self, digits, lv_prefixed=False):
+    def _normalize_level_digits(self, digits, lv_prefixed=False, separator=""):
         if not digits:
             return None
         if lv_prefixed and len(digits) >= 3:
             value = int(digits)
             first_two = int(digits[:2])
-            if value > 150 and 1 <= first_two <= 150:
+            likely_noisy_prefix = "-" in separator
+            likely_extra_trailing_zero = not separator and digits.endswith("0")
+            likely_out_of_game_range = value > 300
+            if (
+                1 <= first_two <= 150
+                and (likely_noisy_prefix or likely_extra_trailing_zero or likely_out_of_game_range)
+            ):
                 return first_two
         return int(digits)
 

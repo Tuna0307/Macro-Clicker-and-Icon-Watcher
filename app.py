@@ -40,11 +40,28 @@ from app_helpers import duplicate_scenario, duplicate_step, duplicate_template_f
 
 
 def _monitor_box(monitor_index=1):
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         monitors = sct.monitors
         index = monitor_index if 0 <= monitor_index < len(monitors) else 1
         mon = monitors[index]
         return (mon["left"], mon["top"], mon["width"], mon["height"])
+
+
+def _parse_optional_int(value, field_name):
+    text = str(value).strip()
+    if text == "":
+        return None
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a whole number.") from exc
+
+
+def _parse_required_int(value, field_name):
+    parsed = _parse_optional_int(value, field_name)
+    if parsed is None:
+        raise ValueError(f"{field_name} is required.")
+    return parsed
 
 
 def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", monitor_index=1,
@@ -79,7 +96,7 @@ class RegionOverlay(tk.Toplevel):
         super().__init__(master)
         self.title("Search Region Preview")
 
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             virtual = sct.monitors[0]
 
         origin_x, origin_y = virtual["left"], virtual["top"]
@@ -456,74 +473,74 @@ def action_dialog(parent, action: Action = None, step_names=None, num_conditions
     def on_ok():
         t = action_type_values.get(type_var.get(), "click")
         new_action = Action(type=t)
-        if t == "click":
-            ci = cond_idx_var.get().strip()
-            new_action.on_condition_index = int(ci) if ci != "" else None
-            xs, ys = x_var.get().strip(), y_var.get().strip()
-            new_action.x = int(xs) if xs != "" else None
-            new_action.y = int(ys) if ys != "" else None
-            new_action.offset_x = offx_var.get()
-            new_action.offset_y = offy_var.get()
-            new_action.button = button_var.get()
-        elif t == "click_matching_row":
-            mi = match_idx_var.get().strip()
-            ci = row_cond_idx_var.get().strip()
-            if mi == "" or ci == "":
-                messagebox.showerror(
-                    "Missing condition",
-                    "Enter both the row reference condition and click condition.",
-                    parent=win,
+        try:
+            if t == "click":
+                new_action.on_condition_index = _parse_optional_int(
+                    cond_idx_var.get(),
+                    "Click condition",
                 )
-                return
-            new_action.match_condition_index = int(mi)
-            new_action.on_condition_index = int(ci)
-            new_action.row_tolerance = row_tolerance_var.get()
-            new_action.row_mode = row_mode_var.get()
-            new_action.target_choice = target_choice_var.get()
-            new_action.offset_x = row_offx_var.get()
-            new_action.offset_y = row_offy_var.get()
-            new_action.button = row_button_var.get()
-            min_level = min_level_var.get().strip()
-            max_level = max_level_var.get().strip()
-            try:
-                new_action.min_level = int(min_level) if min_level else None
-                new_action.max_level = int(max_level) if max_level else None
-            except ValueError:
-                messagebox.showerror("Invalid level", "Level values must be whole numbers.", parent=win)
-                return
-            new_action.level_digit_template_dir = level_digit_dir_var.get().strip()
-            new_action.level_min_digits = max(1, level_min_digits_var.get())
-            new_action.level_roi = [
-                level_roi_x_var.get(),
-                level_roi_y_var.get(),
-                level_roi_w_var.get(),
-                level_roi_h_var.get(),
-            ]
-            no_match_ci = no_match_cond_idx_var.get().strip()
-            try:
-                new_action.no_match_condition_index = int(no_match_ci) if no_match_ci else None
-            except ValueError:
-                messagebox.showerror("Invalid fallback", "No-match condition must be a whole number.", parent=win)
-                return
-            new_action.no_match_disable_steps = [
-                name.strip()
-                for name in no_match_disable_steps_var.get().split(",")
-                if name.strip()
-            ]
-        elif t == "key":
-            if not key_var.get().strip():
-                messagebox.showerror("Missing key", "Enter a key name.", parent=win)
-                return
-            new_action.key = key_var.get().strip()
-            new_action.hold = hold_var.get()
-        elif t == "wait":
-            new_action.seconds = seconds_var.get()
-        elif t == "set_step":
-            if not step_name_var.get().strip():
-                messagebox.showerror("Missing step", "Choose a step name.", parent=win)
-                return
-            new_action.step_name = step_name_var.get().strip()
-            new_action.set_enabled = set_enabled_var.get()
+                new_action.x = _parse_optional_int(x_var.get(), "Fixed x")
+                new_action.y = _parse_optional_int(y_var.get(), "Fixed y")
+                new_action.offset_x = offx_var.get()
+                new_action.offset_y = offy_var.get()
+                new_action.button = button_var.get()
+            elif t == "click_matching_row":
+                mi = match_idx_var.get().strip()
+                ci = row_cond_idx_var.get().strip()
+                if mi == "" or ci == "":
+                    messagebox.showerror(
+                        "Missing condition",
+                        "Enter both the row reference condition and click condition.",
+                        parent=win,
+                    )
+                    return
+                new_action.match_condition_index = _parse_required_int(mi, "Row reference condition")
+                new_action.on_condition_index = _parse_required_int(ci, "Click condition")
+                new_action.row_tolerance = row_tolerance_var.get()
+                new_action.row_mode = row_mode_var.get()
+                new_action.target_choice = target_choice_var.get()
+                new_action.offset_x = row_offx_var.get()
+                new_action.offset_y = row_offy_var.get()
+                new_action.button = row_button_var.get()
+                new_action.min_level = _parse_optional_int(min_level_var.get(), "Min level")
+                new_action.max_level = _parse_optional_int(max_level_var.get(), "Max level")
+                new_action.level_digit_template_dir = level_digit_dir_var.get().strip()
+                new_action.level_min_digits = max(
+                    1,
+                    _parse_required_int(level_min_digits_var.get(), "Min digits"),
+                )
+                new_action.level_roi = [
+                    level_roi_x_var.get(),
+                    level_roi_y_var.get(),
+                    level_roi_w_var.get(),
+                    level_roi_h_var.get(),
+                ]
+                new_action.no_match_condition_index = _parse_optional_int(
+                    no_match_cond_idx_var.get(),
+                    "No-match condition",
+                )
+                new_action.no_match_disable_steps = [
+                    name.strip()
+                    for name in no_match_disable_steps_var.get().split(",")
+                    if name.strip()
+                ]
+            elif t == "key":
+                if not key_var.get().strip():
+                    messagebox.showerror("Missing key", "Enter a key name.", parent=win)
+                    return
+                new_action.key = key_var.get().strip()
+                new_action.hold = hold_var.get()
+            elif t == "wait":
+                new_action.seconds = seconds_var.get()
+            elif t == "set_step":
+                if not step_name_var.get().strip():
+                    messagebox.showerror("Missing step", "Choose a step name.", parent=win)
+                    return
+                new_action.step_name = step_name_var.get().strip()
+                new_action.set_enabled = set_enabled_var.get()
+        except ValueError as exc:
+            messagebox.showerror("Invalid number", str(exc), parent=win)
+            return
         result["value"] = new_action
         win.destroy()
 
@@ -748,6 +765,9 @@ class App:
         self.log_backups = DEFAULT_LOG_BACKUPS
         self.debug_max_files = DEFAULT_DEBUG_MAX_FILES
         self.debug_max_age_days = DEFAULT_DEBUG_MAX_AGE_DAYS
+        self.log_text_max_lines = 1000
+        self._log_file_handle = None
+        self._log_write_count = 0
         maintain_logs(
             self.log_dir,
             self.log_file_path,
@@ -910,6 +930,9 @@ class App:
                                        initialvalue=self.scenario.name, parent=self.root)
         if not name:
             return
+        if name != self.scenario.name and name in list_scenarios():
+            messagebox.showerror("Duplicate name", "A scenario with that name already exists.")
+            return
         self.scenario.name = name
         self.scenario_var.set(name)
         self._save_scenario()
@@ -942,7 +965,14 @@ class App:
         name = self.scenario_var.get()
         if name and messagebox.askyesno("Delete", f"Delete scenario '{name}'?"):
             delete_scenario(name)
+            self.scenario = Scenario(name="untitled")
+            self.scenario_var.set(self.scenario.name)
+            self.poll_var.set(self.scenario.poll_interval)
+            self.monitor_var.set(self.scenario.monitor_index)
+            self.kill_var.set(self.scenario.kill_switch)
+            self.target_window_var.set(self.scenario.target_window_title)
             self._refresh_scenario_list()
+            self._refresh_steps()
 
     # ---- step management ----
     def _refresh_steps(self):
@@ -992,6 +1022,9 @@ class App:
         self.steps_listbox.selection_set(sel[0] + 1)
 
     def _test_step(self):
+        if self.engine and self.engine.is_running:
+            messagebox.showwarning("Macro running", "Stop the macro before testing a step.")
+            return
         sel = self.steps_listbox.curselection()
         if not sel:
             messagebox.showinfo("No step selected", "Select a step to test first.")
@@ -1179,24 +1212,46 @@ class App:
         self.log_text.config(state="normal")
         line = f"{timestamp} {msg}"
         self.log_text.insert(tk.END, line + "\n")
+        self._trim_log_text()
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
         self._write_log_file(line)
 
+    def _trim_log_text(self):
+        line_count = int(self.log_text.index("end-1c").split(".")[0])
+        if line_count > self.log_text_max_lines:
+            self.log_text.delete("1.0", f"{line_count - self.log_text_max_lines}.0")
+
     def _write_log_file(self, line):
         try:
             os.makedirs(self.log_dir, exist_ok=True)
-            rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
-            with open(self.log_file_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            if self._log_file_handle is None:
+                rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
+                self._log_file_handle = open(self.log_file_path, "a", encoding="utf-8")
+            self._log_file_handle.write(line + "\n")
+            self._log_file_handle.flush()
+            self._log_write_count += 1
+            if self._log_write_count % 100 == 0:
+                self._close_log_file()
         except Exception:
             pass
+
+    def _close_log_file(self):
+        handle = getattr(self, "_log_file_handle", None)
+        if handle is None:
+            return
+        try:
+            handle.close()
+        except Exception:
+            pass
+        self._log_file_handle = None
 
     def _on_close(self):
         if self.engine and self.engine.is_running:
             self.engine.stop()
         if hasattr(self, "alert_tab"):
             self.alert_tab.shutdown()
+        self._close_log_file()
         self.root.destroy()
 
 

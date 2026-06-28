@@ -90,6 +90,14 @@ DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
 REGION_UNAVAILABLE = object()
 
 
+def _drain_queue(q):
+    while True:
+        try:
+            yield q.get_nowait()
+        except queue.Empty:
+            break
+
+
 @dataclass(eq=True)
 class AppSettings:
     monitor_choice: str = "All monitors"
@@ -634,7 +642,7 @@ class WatcherThread(threading.Thread):
 
     def run(self):
         try:
-            with mss.mss() as sct:
+            with mss.MSS() as sct:
                 # monitors[0] is the combined virtual screen; skip it here,
                 # we want each physical monitor captured separately.
                 monitors = list(enumerate(sct.monitors[1:], start=1))
@@ -728,7 +736,7 @@ class ScreenRegionPicker(tk.Toplevel):
         self.completed = False
         self.withdraw()
 
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             virtual = sct.monitors[0]
             shot = sct.grab(virtual)
             self.origin_x, self.origin_y = virtual["left"], virtual["top"]
@@ -798,7 +806,7 @@ class RegionOverlay(tk.Toplevel):
         super().__init__(master)
         self.title("Scan Region Preview")
 
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             virtual = sct.monitors[0]
 
         origin_x, origin_y = virtual["left"], virtual["top"]
@@ -915,6 +923,7 @@ class AlertWatcherFrame(ttk.Frame):
         self.tray_icon = None
         self.tray_thread = None
         self.hotkey_handles = []
+        self.log_text_max_lines = 1000
 
         self._build_ui()
         self._refresh_list()
@@ -1055,7 +1064,7 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _monitor_choices(self):
         try:
-            with mss.mss() as sct:
+            with mss.MSS() as sct:
                 count = len(sct.monitors[1:])
         except Exception:
             count = 0
@@ -1385,7 +1394,7 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _selected_monitor_box(self):
         monitor_filter = self._selected_monitor_filter()
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             if monitor_filter is not None and monitor_filter < len(sct.monitors):
                 mon = sct.monitors[monitor_filter]
             else:
@@ -1574,14 +1583,16 @@ class AlertWatcherFrame(ttk.Frame):
     def _append_log(self, msg):
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        line_count = int(self.log_text.index("end-1c").split(".")[0])
+        if line_count > self.log_text_max_lines:
+            self.log_text.delete("1.0", f"{line_count - self.log_text_max_lines}.0")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
     def _poll_queues(self):
-        while not self.log_queue.empty():
-            self._append_log(self.log_queue.get())
-        while not self.event_queue.empty():
-            ev = self.event_queue.get()
+        for msg in _drain_queue(self.log_queue):
+            self._append_log(msg)
+        for ev in _drain_queue(self.event_queue):
             if ev.get("type") == "watcher_stopped":
                 self.watcher = None
                 self.start_btn.config(state="normal")

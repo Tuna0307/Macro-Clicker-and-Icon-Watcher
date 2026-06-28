@@ -147,7 +147,7 @@ class Step:
     @staticmethod
     def from_dict(d):
         return Step(
-            name=d["name"],
+            name=d.get("name", ""),
             conditions=[ImageCondition.from_dict(c) for c in d.get("conditions", [])],
             actions=[Action.from_dict(a) for a in d.get("actions", [])],
             condition_operator=d.get("condition_operator", "AND"),
@@ -179,7 +179,7 @@ class Scenario:
     @staticmethod
     def from_dict(d):
         return Scenario(
-            name=d["name"],
+            name=d.get("name", "untitled"),
             steps=[Step.from_dict(s) for s in d.get("steps", [])],
             poll_interval=d.get("poll_interval", 0.25),
             monitor_index=d.get("monitor_index", 1),

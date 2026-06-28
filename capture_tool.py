@@ -18,7 +18,7 @@ from PIL import Image, ImageTk
 
 
 def _grab_full_screenshot(monitor_index=1):
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         monitor = sct.monitors[monitor_index]
         raw = sct.grab(monitor)
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
@@ -123,8 +123,9 @@ def capture_template(root, save_dir="templates", monitor_index=1):
     base_path = os.path.join(save_dir, f"{safe_name}.png")
     path = base_path
     counter = 1
+    base_root, base_ext = os.path.splitext(base_path)
     while os.path.exists(path):
-        path = base_path.replace(".png", f"_{counter}.png")
+        path = f"{base_root}_{counter}{base_ext}"
         counter += 1
 
     crop.save(path)

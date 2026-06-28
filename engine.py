@@ -37,12 +37,14 @@ class MacroEngine:
         self._template_cache = {}
         self._digit_template_cache = {}
         self._level_ocr_reader = None
+        self._level_ocr_reader_lock = threading.Lock()
         self._level_ocr_unavailable_logged = False
         self._level_ocr_warmup_thread = None
         self._target_window_rect = None
         self._target_window_missing_logged = False
         self._window_rect_provider = find_window_rect
-        self.sct = mss.mss()
+        self.sct = mss.MSS()
+        self._sct_closed = False
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.02
         self.click_move_duration = 0.0
@@ -50,6 +52,8 @@ class MacroEngine:
         self.slow_step_threshold = 0.15
         self.slow_cycle_threshold = 0.35
         self._hotkey_handle = None
+        self._ever_started = False
+        self._all_match_indices = {}
 
     # ---- public control ----
     @property
@@ -59,7 +63,15 @@ class MacroEngine:
     def start(self):
         if self.is_running:
             return
+        if getattr(self, "_sct_closed", False):
+            self.sct = mss.MSS()
+            self._sct_closed = False
         self._stop_event.clear()
+        self._ever_started = True
+        self._all_match_indices = {
+            step.name: self._condition_indices_needing_all_matches(step)
+            for step in self.scenario.steps
+        }
         for s in self.scenario.steps:
             self._last_fired[s.name] = 0.0
         try:
@@ -72,14 +84,47 @@ class MacroEngine:
         self.log(f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}")
 
     def stop(self):
+        running = self.is_running
+        was_active = running or self._hotkey_handle is not None or getattr(self, "_ever_started", False)
         self._stop_event.set()
+        self._remove_hotkey()
+        if not running:
+            self._close_capture()
+        if was_active:
+            self.log("Scenario stopped.")
+            self._ever_started = False
+
+    def _cleanup_runtime(self):
+        self._remove_hotkey()
+        self._close_capture()
+
+    def _remove_hotkey(self):
         if self._hotkey_handle is not None:
             try:
                 keyboard.remove_hotkey(self._hotkey_handle)
             except Exception:
                 pass
             self._hotkey_handle = None
-        self.log("Scenario stopped.")
+
+    def _close_capture(self):
+        if getattr(self, "_sct_closed", False):
+            return
+        sct = getattr(self, "sct", None)
+        close = getattr(sct, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception:
+            pass
+        self._sct_closed = True
+
+    def _sleep_until_stop(self, seconds):
+        try:
+            seconds = max(0.0, float(seconds))
+        except (TypeError, ValueError):
+            seconds = 0.0
+        return self._stop_event.wait(seconds)
 
     # ---- internals ----
     def _run_loop(self):
@@ -90,9 +135,11 @@ class MacroEngine:
                     delay = min(self.scenario.poll_interval, getattr(self, "fast_poll_after_fire", 0.03))
                 else:
                     delay = self.scenario.poll_interval
-                time.sleep(delay)
+                self._sleep_until_stop(delay)
         except Exception as e:
             self.log(f"[error] engine crashed: {e}")
+        finally:
+            self._cleanup_runtime()
 
     def _load_template(self, path):
         if path not in self._template_cache:
@@ -174,26 +221,6 @@ class MacroEngine:
             return window_rect
 
         return None
-
-    def _check_condition(self, cond: ImageCondition):
-        region = self._resolve_capture_region(cond)
-        if region is _WINDOW_UNAVAILABLE:
-            return False, None
-
-        frame, off_x, off_y = self._grab(region)
-        template = self._load_template(cond.template_path)
-        result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        found = max_val >= cond.confidence
-
-        if cond.negate:
-            return (not found), None
-
-        if found:
-            h, w = template.shape[:2]
-            center = (off_x + max_loc[0] + w // 2, off_y + max_loc[1] + h // 2)
-            return True, center
-        return False, None
 
     def preview_step(self, step: Step):
         results, matches = [], []
@@ -357,25 +384,6 @@ class MacroEngine:
         kept.sort(key=lambda item: (item[1], item[0]))
         return kept
 
-    def _find_template_matches(self, result, template_shape, confidence):
-        h, w = template_shape
-        ys, xs = np.where(result >= confidence)
-        candidates = sorted(
-            ((int(x), int(y), float(result[y, x])) for x, y in zip(xs, ys)),
-            key=lambda item: item[2],
-            reverse=True,
-        )
-
-        kept = []
-        for x, y, score in candidates:
-            box = (x, y, x + w, y + h)
-            if any(self._box_iou(box, existing[:4]) > 0.3 for existing in kept):
-                continue
-            kept.append((box[0], box[1], box[2], box[3], score))
-
-        kept.sort(key=lambda item: (item[1], item[0]))
-        return [(x1, y1, score) for x1, y1, _, _, score in kept]
-
     def _box_iou(self, a, b):
         ax1, ay1, ax2, ay2 = a
         bx1, by1, bx2, by2 = b
@@ -401,7 +409,14 @@ class MacroEngine:
             return True, {}, {}
         results, points, matches = [], {}, {}
         frame_cache = {}
-        all_match_indices = self._condition_indices_needing_all_matches(step)
+        cached_all_match_indices = getattr(self, "_all_match_indices", None)
+        all_match_indices = (
+            cached_all_match_indices.get(step.name)
+            if cached_all_match_indices is not None
+            else None
+        )
+        if all_match_indices is None:
+            all_match_indices = self._condition_indices_needing_all_matches(step)
         for i, cond in enumerate(step.conditions):
             ok, condition_matches = self._evaluate_condition(
                 i,
@@ -461,15 +476,17 @@ class MacroEngine:
 
         elif action.type == "key":
             if action.hold > 0:
-                keyboard.press(action.key)
-                time.sleep(action.hold)
-                keyboard.release(action.key)
+                try:
+                    keyboard.press(action.key)
+                    self._sleep_until_stop(action.hold)
+                finally:
+                    keyboard.release(action.key)
             else:
                 keyboard.send(action.key)
             self.log(f"  key '{action.key}'")
 
         elif action.type == "wait":
-            time.sleep(action.seconds)
+            self._sleep_until_stop(action.seconds)
             self.log(f"  wait {action.seconds}s")
 
         elif action.type == "set_step":
@@ -699,11 +716,16 @@ class MacroEngine:
         return self._get_level_ocr_reader().read_level(frame)
 
     def _get_level_ocr_reader(self):
-        reader = getattr(self, "_level_ocr_reader", None)
-        if reader is None:
-            reader = LevelOcrReader()
-            self._level_ocr_reader = reader
-        return reader
+        lock = getattr(self, "_level_ocr_reader_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._level_ocr_reader_lock = lock
+        with lock:
+            reader = getattr(self, "_level_ocr_reader", None)
+            if reader is None:
+                reader = LevelOcrReader()
+                self._level_ocr_reader = reader
+            return reader
 
     def _scenario_uses_level_ocr(self):
         for step in getattr(self.scenario, "steps", []):
