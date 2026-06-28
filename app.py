@@ -1236,7 +1236,6 @@ class App:
             if self._log_write_count % 20 == 0:
                 self._log_file_handle.flush()
             if self._log_write_count % 100 == 0 and os.path.exists(self.log_file_path):
-                self._log_file_handle.flush()
                 if os.path.getsize(self.log_file_path) >= self.log_max_bytes:
                     self._close_log_file()
                     rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)

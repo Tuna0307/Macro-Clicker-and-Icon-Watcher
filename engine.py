@@ -6,6 +6,7 @@ callback instead of print) so it plays nicely with a GUI.
 """
 import os
 import re
+import inspect
 import threading
 import time
 from typing import Callable, Optional
@@ -157,6 +158,16 @@ class MacroEngine:
             self.log(f"[error] engine crashed: {e}")
         finally:
             self._cleanup_runtime()
+
+    def _evaluate_step_supports_frame_cache(self, evaluate_step):
+        try:
+            parameters = inspect.signature(evaluate_step).parameters
+        except (TypeError, ValueError):
+            return False
+        return (
+            "frame_cache" in parameters
+            or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+        )
 
     def _load_template(self, path):
         resolved_path = project_path(path)
@@ -972,6 +983,8 @@ class MacroEngine:
         fired_any = False
         steps = self._refresh_step_caches()
         frame_cache = {}
+        evaluate_step = self._evaluate_step
+        evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(evaluate_step)
         self._window_rect_lookup_cache = {}
         try:
             for step in steps:
@@ -983,8 +996,7 @@ class MacroEngine:
                     continue
 
                 eval_start = time.perf_counter()
-                evaluate_step = self._evaluate_step
-                if getattr(evaluate_step, "__func__", None) is MacroEngine._evaluate_step:
+                if evaluate_uses_frame_cache:
                     met, points, matches = evaluate_step(step, frame_cache=frame_cache)
                 else:
                     met, points, matches = evaluate_step(step)

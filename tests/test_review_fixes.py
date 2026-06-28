@@ -265,6 +265,54 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertEqual(grab_calls, [(1, 2, 30, 30)])
 
+    def test_cycle_passes_frame_cache_to_compatible_override(self):
+        seen_caches = []
+
+        class CacheAwareEngine(MacroEngine):
+            def _evaluate_step(self, step, frame_cache=None):
+                seen_caches.append(frame_cache)
+                return False, {}, {}
+
+        engine = object.__new__(CacheAwareEngine)
+        engine.scenario = Scenario(name="cache-aware", steps=[Step(name="one", cooldown=0.0)])
+        engine._last_fired = {"one": 0.0}
+        engine._stop_event = threading.Event()
+        engine.log = lambda _message: None
+
+        engine._cycle()
+
+        self.assertEqual(len(seen_caches), 1)
+        self.assertIsInstance(seen_caches[0], dict)
+
+    def test_log_file_flushes_once_on_hundredth_write(self):
+        class FakeHandle:
+            def __init__(self):
+                self.flush_count = 0
+                self.writes = []
+
+            def write(self, text):
+                self.writes.append(text)
+
+            def flush(self):
+                self.flush_count += 1
+
+        ui = object.__new__(app.App)
+        handle = FakeHandle()
+        ui._log_file_handle = handle
+        ui._log_write_count = 99
+        ui.log_max_bytes = 10_000
+        ui.log_backups = 3
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ui.log_dir = temp_dir
+            ui.log_file_path = os.path.join(temp_dir, "pc_macro_builder.log")
+            with open(ui.log_file_path, "w", encoding="utf-8") as f:
+                f.write("")
+
+            ui._write_log_file("line")
+
+        self.assertEqual(handle.flush_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
