@@ -18,7 +18,7 @@ import keyboard
 from PIL import Image
 
 from level_ocr import LevelOcrReader
-from models import Scenario, Step, ImageCondition, Action
+from models import Scenario, Step, ImageCondition, Action, project_path
 from window_locator import find_window_rect, resolve_window_region
 
 
@@ -46,7 +46,7 @@ class MacroEngine:
         self.sct = mss.MSS()
         self._sct_closed = False
         pyautogui.FAILSAFE = True
-        pyautogui.PAUSE = 0.02
+        pyautogui.PAUSE = 0.0
         self.click_move_duration = 0.0
         self.fast_poll_after_fire = 0.03
         self.slow_step_threshold = 0.15
@@ -54,6 +54,8 @@ class MacroEngine:
         self._hotkey_handle = None
         self._ever_started = False
         self._all_match_indices = {}
+        self._step_lookup = {}
+        self._step_names_snapshot = ()
 
     # ---- public control ----
     @property
@@ -68,10 +70,8 @@ class MacroEngine:
             self._sct_closed = False
         self._stop_event.clear()
         self._ever_started = True
-        self._all_match_indices = {
-            step.name: self._condition_indices_needing_all_matches(step)
-            for step in self.scenario.steps
-        }
+        self._step_names_snapshot = ()
+        self._refresh_step_caches()
         for s in self.scenario.steps:
             self._last_fired[s.name] = 0.0
         try:
@@ -88,11 +88,28 @@ class MacroEngine:
         was_active = running or self._hotkey_handle is not None or getattr(self, "_ever_started", False)
         self._stop_event.set()
         self._remove_hotkey()
+        thread = getattr(self, "_thread", None)
+        if running and thread is not None and threading.current_thread() is not thread:
+            thread.join(timeout=2.0)
+            running = thread.is_alive()
         if not running:
             self._close_capture()
         if was_active:
             self.log("Scenario stopped.")
             self._ever_started = False
+
+    def _refresh_step_caches(self):
+        steps = tuple(getattr(self.scenario, "steps", []))
+        names = tuple(step.name for step in steps)
+        if names == getattr(self, "_step_names_snapshot", ()):
+            return steps
+        self._step_names_snapshot = names
+        self._step_lookup = {step.name: step for step in steps}
+        self._all_match_indices = {
+            step.name: self._condition_indices_needing_all_matches(step)
+            for step in steps
+        }
+        return steps
 
     def _cleanup_runtime(self):
         self._remove_hotkey()
@@ -142,12 +159,14 @@ class MacroEngine:
             self._cleanup_runtime()
 
     def _load_template(self, path):
-        if path not in self._template_cache:
-            img = cv2.imread(path, cv2.IMREAD_COLOR)
+        resolved_path = project_path(path)
+        cache_key = os.path.abspath(resolved_path) if resolved_path else resolved_path
+        if cache_key not in self._template_cache:
+            img = cv2.imread(resolved_path, cv2.IMREAD_COLOR)
             if img is None:
                 raise FileNotFoundError(f"Could not load template image: {path}")
-            self._template_cache[path] = img
-        return self._template_cache[path]
+            self._template_cache[cache_key] = img
+        return self._template_cache[cache_key]
 
     def _grab(self, region=None):
         if region:
@@ -227,21 +246,26 @@ class MacroEngine:
         preview_image = None
         condition_previews = []
 
-        for i, cond in enumerate(step.conditions):
-            ok, condition_matches, image, capture_box = self._preview_condition(i, cond)
-            results.append(ok)
-            matches.extend(condition_matches)
-            if preview_image is None and image is not None:
-                preview_image = image
-            condition_previews.append({
-                "condition_index": i,
-                "ok": ok,
-                "image": image,
-                "capture_box": capture_box,
-                "matches": condition_matches,
-                "template_path": cond.template_path,
-                "negate": cond.negate,
-            })
+        previous_cache = getattr(self, "_window_rect_lookup_cache", None)
+        self._window_rect_lookup_cache = {}
+        try:
+            for i, cond in enumerate(step.conditions):
+                ok, condition_matches, image, capture_box = self._preview_condition(i, cond)
+                results.append(ok)
+                matches.extend(condition_matches)
+                if preview_image is None and image is not None:
+                    preview_image = image
+                condition_previews.append({
+                    "condition_index": i,
+                    "ok": ok,
+                    "image": image,
+                    "capture_box": capture_box,
+                    "matches": condition_matches,
+                    "template_path": cond.template_path,
+                    "negate": cond.negate,
+                })
+        finally:
+            self._window_rect_lookup_cache = previous_cache
 
         met = True if not results else (any(results) if step.condition_operator == "OR" else all(results))
         return {
@@ -404,11 +428,12 @@ class MacroEngine:
             return Image.fromarray(frame[:, :, ::-1])
         return None
 
-    def _evaluate_step(self, step: Step):
+    def _evaluate_step(self, step: Step, frame_cache=None):
         if not step.conditions:
             return True, {}, {}
         results, points, matches = [], {}, {}
-        frame_cache = {}
+        if frame_cache is None:
+            frame_cache = {}
         cached_all_match_indices = getattr(self, "_all_match_indices", None)
         all_match_indices = (
             cached_all_match_indices.get(step.name)
@@ -490,11 +515,12 @@ class MacroEngine:
             self.log(f"  wait {action.seconds}s")
 
         elif action.type == "set_step":
-            for s in self.scenario.steps:
-                if s.name == action.step_name:
-                    s.enabled = action.set_enabled
-                    state = "enabled" if action.set_enabled else "disabled"
-                    self.log(f"  step '{action.step_name}' -> {state}")
+            step_lookup = getattr(self, "_step_lookup", {})
+            scenario_step = step_lookup.get(action.step_name)
+            if scenario_step is not None:
+                scenario_step.enabled = action.set_enabled
+                state = "enabled" if action.set_enabled else "disabled"
+                self.log(f"  step '{action.step_name}' -> {state}")
 
     def _run_no_match_fallback(self, step: Step, action: Action, points: dict):
         if action.no_match_condition_index is None and not action.no_match_disable_steps:
@@ -513,15 +539,19 @@ class MacroEngine:
                 self.log(f"  [no-match] click condition #{action.no_match_condition_index} ({x}, {y})")
 
         for step_name in action.no_match_disable_steps:
-            for scenario_step in self.scenario.steps:
-                if scenario_step.name == step_name:
-                    scenario_step.enabled = False
-                    self.log(f"  [no-match] step '{step_name}' -> disabled")
-                    break
+            step_lookup = getattr(self, "_step_lookup", {})
+            scenario_step = step_lookup.get(step_name)
+            if scenario_step is not None:
+                scenario_step.enabled = False
+                self.log(f"  [no-match] step '{step_name}' -> disabled")
 
     def _click_point(self, x, y, button):
-        pyautogui.moveTo(x, y, duration=getattr(self, "click_move_duration", 0.0))
-        pyautogui.click(x=x, y=y, button=button)
+        move_duration = getattr(self, "click_move_duration", 0.0)
+        if move_duration:
+            pyautogui.moveTo(x, y, duration=move_duration)
+            pyautogui.click(button=button)
+        else:
+            pyautogui.click(x=x, y=y, button=button)
 
     def _find_matching_row_targets(self, action: Action, matches: dict):
         reference_index = action.match_condition_index
@@ -763,12 +793,14 @@ class MacroEngine:
             self.log(f"[ocr] warm-up unavailable after {elapsed:.2f}s: {error}")
 
     def _load_digit_templates(self, folder):
+        folder = project_path(folder)
+        cache_key = os.path.abspath(folder)
         cache = getattr(self, "_digit_template_cache", None)
         if cache is None:
             cache = {}
             self._digit_template_cache = cache
-        if folder in cache:
-            return cache[folder]
+        if cache_key in cache:
+            return cache[cache_key]
 
         templates = {}
         for digit in "0123456789":
@@ -776,7 +808,7 @@ class MacroEngine:
             img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
             if img is not None:
                 templates[digit] = self._preprocess_digit_image(img)
-        cache[folder] = templates
+        cache[cache_key] = templates
         return templates
 
     def _read_level_from_frame(self, frame, digit_templates, confidence=0.52, min_digits=1):
@@ -938,9 +970,11 @@ class MacroEngine:
         now = time.time()
         cycle_start = time.perf_counter()
         fired_any = False
+        steps = self._refresh_step_caches()
+        frame_cache = {}
         self._window_rect_lookup_cache = {}
         try:
-            for step in self.scenario.steps:
+            for step in steps:
                 if self._stop_event.is_set():
                     return fired_any
                 if not step.enabled:
@@ -949,7 +983,11 @@ class MacroEngine:
                     continue
 
                 eval_start = time.perf_counter()
-                met, points, matches = self._evaluate_step(step)
+                evaluate_step = self._evaluate_step
+                if getattr(evaluate_step, "__func__", None) is MacroEngine._evaluate_step:
+                    met, points, matches = evaluate_step(step, frame_cache=frame_cache)
+                else:
+                    met, points, matches = evaluate_step(step)
                 eval_elapsed = time.perf_counter() - eval_start
                 if eval_elapsed >= getattr(self, "slow_step_threshold", 0.15):
                     self.log(

@@ -16,8 +16,75 @@ from typing import List, Optional
 
 
 ACTION_TYPES = ["click", "click_matching_row", "key", "wait", "set_step"]
-SCENARIOS_DIR = "scenarios"
-TEMPLATES_DIR = "templates"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+SCENARIOS_DIR = os.path.join(APP_DIR, "scenarios")
+TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
+
+
+def project_path(path):
+    if not path or os.path.isabs(path):
+        return path
+    return os.path.join(APP_DIR, path)
+
+
+def _optional_int(value, default=None):
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _int_value(value, default=0):
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _float_value(value, default=0.0):
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
+def _bool_value(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _string_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(part) for part in value if str(part).strip()]
+    return []
+
+
+def _int_list(value):
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    try:
+        return [int(part) for part in value]
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_list(value):
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    try:
+        return [float(part) for part in value]
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -38,13 +105,13 @@ class ImageCondition:
     def from_dict(d):
         return ImageCondition(
             condition_type="template",
-            template_path=d.get("template_path", ""),
-            confidence=d.get("confidence", 0.85),
-            region=d.get("region"),
-            region_mode=d.get("region_mode", "screen"),
-            region_ratio=d.get("region_ratio"),
-            region_window_size=d.get("region_window_size"),
-            negate=d.get("negate", False),
+            template_path=str(d.get("template_path", "")),
+            confidence=_float_value(d.get("confidence"), 0.85),
+            region=_int_list(d.get("region")),
+            region_mode=str(d.get("region_mode", "screen") or "screen"),
+            region_ratio=_float_list(d.get("region_ratio")),
+            region_window_size=_int_list(d.get("region_window_size")),
+            negate=_bool_value(d.get("negate"), False),
         )
 
 
@@ -88,9 +155,33 @@ class Action:
     @staticmethod
     def from_dict(d):
         a = Action()
-        for k, v in d.items():
-            if hasattr(a, k):
-                setattr(a, k, v)
+        if not isinstance(d, dict):
+            return a
+        a.type = str(d.get("type", a.type) or a.type)
+        if a.type not in ACTION_TYPES:
+            a.type = "click"
+        a.on_condition_index = _optional_int(d.get("on_condition_index"), a.on_condition_index)
+        a.match_condition_index = _optional_int(d.get("match_condition_index"), a.match_condition_index)
+        a.row_tolerance = _int_value(d.get("row_tolerance"), a.row_tolerance)
+        a.row_mode = str(d.get("row_mode", a.row_mode) or a.row_mode)
+        a.target_choice = str(d.get("target_choice", a.target_choice) or a.target_choice)
+        a.min_level = _optional_int(d.get("min_level"), a.min_level)
+        a.max_level = _optional_int(d.get("max_level"), a.max_level)
+        a.level_digit_template_dir = str(d.get("level_digit_template_dir", a.level_digit_template_dir) or "")
+        a.level_roi = _int_list(d.get("level_roi"))
+        a.level_min_digits = max(1, _int_value(d.get("level_min_digits"), a.level_min_digits))
+        a.no_match_condition_index = _optional_int(d.get("no_match_condition_index"), a.no_match_condition_index)
+        a.no_match_disable_steps = _string_list(d.get("no_match_disable_steps"))
+        a.x = _optional_int(d.get("x"), a.x)
+        a.y = _optional_int(d.get("y"), a.y)
+        a.offset_x = _int_value(d.get("offset_x"), a.offset_x)
+        a.offset_y = _int_value(d.get("offset_y"), a.offset_y)
+        a.button = str(d.get("button", a.button) or a.button)
+        a.key = str(d.get("key", a.key) or "")
+        a.hold = _float_value(d.get("hold"), a.hold)
+        a.seconds = _float_value(d.get("seconds"), a.seconds)
+        a.step_name = str(d.get("step_name", a.step_name) or "")
+        a.set_enabled = _bool_value(d.get("set_enabled"), a.set_enabled)
         return a
 
     def summary(self):
@@ -147,13 +238,13 @@ class Step:
     @staticmethod
     def from_dict(d):
         return Step(
-            name=d.get("name", ""),
+            name=str(d.get("name", "")),
             conditions=[ImageCondition.from_dict(c) for c in d.get("conditions", [])],
             actions=[Action.from_dict(a) for a in d.get("actions", [])],
-            condition_operator=d.get("condition_operator", "AND"),
-            enabled=d.get("enabled", True),
-            cooldown=d.get("cooldown", 1.0),
-            repeatable=d.get("repeatable", True),
+            condition_operator=str(d.get("condition_operator", "AND") or "AND"),
+            enabled=_bool_value(d.get("enabled"), True),
+            cooldown=_float_value(d.get("cooldown"), 1.0),
+            repeatable=_bool_value(d.get("repeatable"), True),
         )
 
 
@@ -179,12 +270,12 @@ class Scenario:
     @staticmethod
     def from_dict(d):
         return Scenario(
-            name=d.get("name", "untitled"),
+            name=str(d.get("name", "untitled") or "untitled"),
             steps=[Step.from_dict(s) for s in d.get("steps", [])],
-            poll_interval=d.get("poll_interval", 0.25),
-            monitor_index=d.get("monitor_index", 1),
-            kill_switch=d.get("kill_switch", "f12"),
-            target_window_title=d.get("target_window_title", ""),
+            poll_interval=_float_value(d.get("poll_interval"), 0.25),
+            monitor_index=_int_value(d.get("monitor_index"), 1),
+            kill_switch=str(d.get("kill_switch", "f12") or "f12"),
+            target_window_title=str(d.get("target_window_title", "") or ""),
         )
 
 
@@ -196,8 +287,14 @@ def list_scenarios(folder=SCENARIOS_DIR):
 
 def load_scenario(name, folder=SCENARIOS_DIR):
     path = os.path.join(folder, f"{name}.json")
-    with open(path, "r", encoding="utf-8") as f:
-        return Scenario.from_dict(json.load(f))
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("scenario file must contain a JSON object")
+        return Scenario.from_dict(data)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Could not load scenario '{name}': {exc}") from exc
 
 
 def save_scenario(scenario: Scenario, folder=SCENARIOS_DIR):

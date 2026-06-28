@@ -6,12 +6,16 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 import app
 import alert_watcher
 import capture_tool
+import engine as engine_module
+import models
 from engine import MacroEngine
 from level_ocr import LevelOcrReader
-from models import Action, Scenario, Step
+from models import Action, ImageCondition, Scenario, Step
 
 
 class FakeVar:
@@ -145,6 +149,121 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertEqual(list(alert_watcher._drain_queue(q)), ["one", "two"])
         self.assertEqual(list(alert_watcher._drain_queue(q)), [])
+
+    def test_click_point_moves_only_once_when_move_duration_is_zero(self):
+        engine = object.__new__(MacroEngine)
+        engine.click_move_duration = 0.0
+        calls = []
+
+        with patch.object(engine_module.pyautogui, "moveTo", side_effect=lambda *args, **kwargs: calls.append(("move", args, kwargs))), \
+                patch.object(engine_module.pyautogui, "click", side_effect=lambda *args, **kwargs: calls.append(("click", args, kwargs))):
+            engine._click_point(10, 20, "left")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "click")
+        self.assertEqual(calls[0][2]["x"], 10)
+        self.assertEqual(calls[0][2]["y"], 20)
+
+    def test_stop_joins_running_thread_before_returning(self):
+        logs = []
+        joined = []
+        closed = []
+
+        class FakeThread:
+            def __init__(self):
+                self.alive = True
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout=None):
+                joined.append(timeout)
+                self.alive = False
+
+        engine = object.__new__(MacroEngine)
+        engine.log = logs.append
+        engine._stop_event = threading.Event()
+        engine._hotkey_handle = None
+        engine._ever_started = True
+        engine._thread = FakeThread()
+        engine.sct = type("Capture", (), {"close": lambda self: closed.append(True)})()
+
+        engine.stop()
+
+        self.assertEqual(joined, [2.0])
+        self.assertEqual(closed, [True])
+        self.assertEqual(logs, ["Scenario stopped."])
+
+    def test_model_default_paths_are_project_relative(self):
+        self.assertTrue(os.path.isabs(models.SCENARIOS_DIR))
+        self.assertTrue(os.path.isabs(models.TEMPLATES_DIR))
+        self.assertTrue(
+            os.path.normpath(models.project_path("templates/icon.png")).endswith(
+                os.path.join("templates", "icon.png")
+            )
+        )
+
+    def test_action_from_dict_coerces_saved_json_types(self):
+        action = Action.from_dict({
+            "type": "click_matching_row",
+            "on_condition_index": "2",
+            "match_condition_index": "1",
+            "row_tolerance": "45",
+            "max_level": "55",
+            "no_match_disable_steps": "Joining, Attack Confirm",
+            "set_enabled": "false",
+        })
+
+        self.assertEqual(action.on_condition_index, 2)
+        self.assertEqual(action.match_condition_index, 1)
+        self.assertEqual(action.row_tolerance, 45)
+        self.assertEqual(action.max_level, 55)
+        self.assertEqual(action.no_match_disable_steps, ["Joining", "Attack Confirm"])
+        self.assertFalse(action.set_enabled)
+
+    def test_load_scenario_reports_malformed_json_as_value_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with open(os.path.join(temp_dir, "Broken.json"), "w", encoding="utf-8") as f:
+                f.write("{not json")
+
+            with self.assertRaises(ValueError) as ctx:
+                models.load_scenario("Broken", folder=temp_dir)
+
+        self.assertIn("Could not load scenario 'Broken'", str(ctx.exception))
+
+    def test_level_ocr_text_entry_extraction_handles_recursive_data(self):
+        reader = LevelOcrReader()
+        raw = []
+        raw.append(raw)
+
+        self.assertEqual(list(reader._extract_text_entries(raw)), [])
+
+    def test_cycle_reuses_frame_cache_across_steps(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="cache",
+            steps=[
+                Step(name="one", conditions=[ImageCondition(template_path="templates/a.png", confidence=2.0)]),
+                Step(name="two", conditions=[ImageCondition(template_path="templates/b.png", confidence=2.0)]),
+            ],
+        )
+        engine._last_fired = {"one": 0.0, "two": 0.0}
+        engine._stop_event = threading.Event()
+        engine.log = lambda _message: None
+        engine._resolve_capture_region = lambda _cond: (1, 2, 30, 30)
+        frame = np.zeros((30, 30, 3), dtype=np.uint8)
+        grab_calls = []
+
+        def grab(region=None):
+            grab_calls.append(region)
+            return frame, 1, 2
+
+        engine._grab = grab
+        engine._load_template = lambda _path: np.zeros((3, 3, 3), dtype=np.uint8)
+
+        engine._cycle()
+
+        self.assertEqual(grab_calls, [(1, 2, 30, 30)])
 
 
 if __name__ == "__main__":

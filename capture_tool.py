@@ -16,6 +16,8 @@ from tkinter import simpledialog
 import mss
 from PIL import Image, ImageTk
 
+from models import TEMPLATES_DIR
+
 
 def _grab_full_screenshot(monitor_index=1):
     with mss.MSS() as sct:
@@ -33,10 +35,10 @@ def select_region(root, monitor_index=1):
     is a PIL Image of that area. Returns (None, None) if cancelled
     (Escape key).
     """
-    root.withdraw()
+    if root is not None:
+        root.withdraw()
     time.sleep(0.2)  # give the main window time to actually disappear before we screenshot
     screenshot, mon_left, mon_top = _grab_full_screenshot(monitor_index)
-    root.deiconify()
 
     result = {"region": None}
 
@@ -90,8 +92,12 @@ def select_region(root, monitor_index=1):
     canvas.bind("<ButtonRelease-1>", on_release)
     overlay.bind("<Escape>", on_escape)
 
-    overlay.grab_set()
-    overlay.wait_window()
+    try:
+        overlay.grab_set()
+        overlay.wait_window()
+    finally:
+        if root is not None:
+            root.deiconify()
 
     if result["region"] is None:
         return None, None
@@ -104,7 +110,7 @@ def select_region(root, monitor_index=1):
     return region, crop
 
 
-def capture_template(root, save_dir="templates", monitor_index=1):
+def capture_template(root, save_dir=TEMPLATES_DIR, monitor_index=1):
     """
     Drag-select a region, then prompt for a filename and save the crop
     as a PNG under save_dir. Returns the saved path, or None if

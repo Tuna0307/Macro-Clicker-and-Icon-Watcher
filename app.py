@@ -91,7 +91,7 @@ def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", 
     return _monitor_box(monitor_index)
 
 
-class RegionOverlay(tk.Toplevel):
+class MultiRegionOverlay(tk.Toplevel):
     def __init__(self, master, boxes, duration_ms=4500):
         super().__init__(master)
         self.title("Search Region Preview")
@@ -269,7 +269,7 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         label = os.path.basename(template_var.get()) if template_var.get() else "Search region"
         if negate_var.get():
             label = f"NOT {label}"
-        RegionOverlay(parent, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
+        MultiRegionOverlay(parent, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
 
     tk.Button(win, text="Show region", command=show_region).grid(row=5, column=0, sticky="we", **pad)
     tk.Button(win, text="Pick region...", command=pick_region).grid(row=5, column=1, sticky="we", **pad)
@@ -766,6 +766,7 @@ class App:
         self.debug_max_files = DEFAULT_DEBUG_MAX_FILES
         self.debug_max_age_days = DEFAULT_DEBUG_MAX_AGE_DAYS
         self.log_text_max_lines = 1000
+        self._log_line_count = 0
         self._log_file_handle = None
         self._log_write_count = 0
         maintain_logs(
@@ -1082,7 +1083,7 @@ class App:
             messagebox.showinfo("No regions", "This step has no conditions to show.")
             return
 
-        RegionOverlay(self.root, boxes)
+        MultiRegionOverlay(self.root, boxes)
         self._log(f"Showing {len(boxes)} search region(s) for step '{step.name}'")
 
     def _show_step_preview(self, step: Step, preview):
@@ -1212,15 +1213,17 @@ class App:
         self.log_text.config(state="normal")
         line = f"{timestamp} {msg}"
         self.log_text.insert(tk.END, line + "\n")
+        self._log_line_count += 1
         self._trim_log_text()
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
         self._write_log_file(line)
 
     def _trim_log_text(self):
-        line_count = int(self.log_text.index("end-1c").split(".")[0])
-        if line_count > self.log_text_max_lines:
-            self.log_text.delete("1.0", f"{line_count - self.log_text_max_lines}.0")
+        extra_lines = self._log_line_count - self.log_text_max_lines
+        if extra_lines > 0:
+            self.log_text.delete("1.0", f"{extra_lines + 1}.0")
+            self._log_line_count -= extra_lines
 
     def _write_log_file(self, line):
         try:
@@ -1229,10 +1232,23 @@ class App:
                 rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
                 self._log_file_handle = open(self.log_file_path, "a", encoding="utf-8")
             self._log_file_handle.write(line + "\n")
-            self._log_file_handle.flush()
             self._log_write_count += 1
-            if self._log_write_count % 100 == 0:
-                self._close_log_file()
+            if self._log_write_count % 20 == 0:
+                self._log_file_handle.flush()
+            if self._log_write_count % 100 == 0 and os.path.exists(self.log_file_path):
+                self._log_file_handle.flush()
+                if os.path.getsize(self.log_file_path) >= self.log_max_bytes:
+                    self._close_log_file()
+                    rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
+        except Exception:
+            pass
+
+    def _flush_log_file(self):
+        handle = getattr(self, "_log_file_handle", None)
+        if handle is None:
+            return
+        try:
+            handle.flush()
         except Exception:
             pass
 
@@ -1241,6 +1257,7 @@ class App:
         if handle is None:
             return
         try:
+            handle.flush()
             handle.close()
         except Exception:
             pass

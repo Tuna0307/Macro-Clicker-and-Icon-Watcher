@@ -247,12 +247,11 @@ class SingleInstanceLock:
     def release(self):
         if self.fd is None:
             return
-        if self.fd is not None:
-            try:
-                os.close(self.fd)
-            except OSError:
-                pass
-            self.fd = None
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.fd = None
         try:
             os.remove(self.path)
         except OSError:
@@ -543,7 +542,7 @@ class TemplateManager:
                     "region_mode": entry.get("region_mode", "screen"),
                     "region_ratio": entry.get("region_ratio"),
                     "region_window_size": entry.get("region_window_size"),
-                    "image": entry["image"].copy(),
+                    "image": entry["image"],
                 }
                 for tid, entry in self.items.items()
             ]
@@ -895,8 +894,13 @@ class AlertPopup(tk.Toplevel):
             row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
 
         self.update_idletasks()
-        sw = self.winfo_screenwidth()
-        self.geometry(f"+{sw - self.winfo_width() - 40}+40")
+        try:
+            with mss.MSS() as sct:
+                virtual = sct.monitors[0]
+            right = virtual["left"] + virtual["width"]
+        except Exception:
+            right = self.winfo_screenwidth()
+        self.geometry(f"+{right - self.winfo_width() - 40}+40")
         self.after(8000, self._safe_destroy)
 
     def _safe_destroy(self):

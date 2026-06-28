@@ -258,9 +258,18 @@ class LevelOcrReader:
                 return engine.ocr(image)
         raise RuntimeError("PaddleOCR engine has no predict/ocr method")
 
-    def _extract_text_entries(self, raw):
+    def _extract_text_entries(self, raw, _depth=0, _seen=None):
         if raw is None:
             return
+        if _depth > 8:
+            return
+        if _seen is None:
+            _seen = set()
+        if isinstance(raw, (dict, list, tuple)) or hasattr(raw, "json") or hasattr(raw, "res"):
+            raw_id = id(raw)
+            if raw_id in _seen:
+                return
+            _seen.add(raw_id)
 
         if isinstance(raw, dict):
             if "rec_text" in raw:
@@ -272,7 +281,7 @@ class LevelOcrReader:
                     score = scores[i] if i < len(scores) else None
                     yield str(text), self._coerce_score(score)
             for value in raw.values():
-                yield from self._extract_text_entries(value)
+                yield from self._extract_text_entries(value, _depth + 1, _seen)
             return
 
         if isinstance(raw, (list, tuple)):
@@ -284,17 +293,17 @@ class LevelOcrReader:
                 yield raw[1][0], self._coerce_score(score)
                 return
             for item in raw:
-                yield from self._extract_text_entries(item)
+                yield from self._extract_text_entries(item, _depth + 1, _seen)
             return
 
         if hasattr(raw, "json"):
             try:
-                yield from self._extract_text_entries(raw.json)
+                yield from self._extract_text_entries(raw.json, _depth + 1, _seen)
             except Exception:
                 pass
         if hasattr(raw, "res"):
             try:
-                yield from self._extract_text_entries(raw.res)
+                yield from self._extract_text_entries(raw.res, _depth + 1, _seen)
             except Exception:
                 pass
 
