@@ -769,6 +769,7 @@ class App:
         self._log_line_count = 0
         self._log_file_handle = None
         self._log_write_count = 0
+        os.makedirs(self.log_dir, exist_ok=True)
         maintain_logs(
             self.log_dir,
             self.log_file_path,
@@ -1227,7 +1228,6 @@ class App:
 
     def _write_log_file(self, line):
         try:
-            os.makedirs(self.log_dir, exist_ok=True)
             if self._log_file_handle is None:
                 rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
                 self._log_file_handle = open(self.log_file_path, "a", encoding="utf-8")

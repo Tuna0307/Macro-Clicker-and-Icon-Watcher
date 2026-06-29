@@ -114,6 +114,29 @@
         1608,
         940
       ]
+    },
+    {
+      "id": 9,
+      "name": "Secret Task",
+      "file": "template_9.png",
+      "threshold": 0.85,
+      "region": [
+        4,
+        644,
+        78,
+        83
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.0020833333333333333,
+        0.5962962962962963,
+        0.040625,
+        0.07685185185185185
+      ],
+      "region_window_size": [
+        1920,
+        1080
+      ]
     }
   ]
 }

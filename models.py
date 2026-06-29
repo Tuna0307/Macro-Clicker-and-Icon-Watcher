@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
 
-ACTION_TYPES = ["click", "click_matching_row", "key", "wait", "set_step"]
+ACTION_TYPES = frozenset({"click", "click_matching_row", "key", "wait", "set_step"})
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SCENARIOS_DIR = os.path.join(APP_DIR, "scenarios")
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
@@ -300,8 +300,10 @@ def load_scenario(name, folder=SCENARIOS_DIR):
 def save_scenario(scenario: Scenario, folder=SCENARIOS_DIR):
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"{scenario.name}.json")
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(scenario.to_dict(), f, indent=2)
+    os.replace(tmp_path, path)
     return path
 
 

@@ -37,6 +37,7 @@ def select_region(root, monitor_index=1):
     """
     if root is not None:
         root.withdraw()
+        root.update_idletasks()
     time.sleep(0.2)  # give the main window time to actually disappear before we screenshot
     screenshot, mon_left, mon_top = _grab_full_screenshot(monitor_index)
 

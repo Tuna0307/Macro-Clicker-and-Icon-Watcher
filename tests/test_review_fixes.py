@@ -1,5 +1,6 @@
 import os
 import queue
+import json
 import tempfile
 import threading
 import time
@@ -312,6 +313,104 @@ class ReviewFixTests(unittest.TestCase):
             ui._write_log_file("line")
 
         self.assertEqual(handle.flush_count, 1)
+
+    def test_app_log_write_does_not_makedirs_on_each_line(self):
+        class FakeHandle:
+            def write(self, _text):
+                pass
+
+            def flush(self):
+                pass
+
+        ui = object.__new__(app.App)
+        ui._log_file_handle = FakeHandle()
+        ui._log_write_count = 0
+        ui.log_file_path = "unused.log"
+        ui.log_max_bytes = 10_000
+        ui.log_backups = 3
+
+        with patch.object(app.os, "makedirs") as makedirs:
+            ui._write_log_file("line")
+
+        makedirs.assert_not_called()
+
+    def test_screen_region_picker_ignores_release_and_drag_without_press(self):
+        picker = object.__new__(alert_watcher.ScreenRegionPicker)
+        picker.start_x = None
+        picker.start_y = None
+        picker.rect_id = None
+        picker.canvas = Mock()
+
+        event = type("Event", (), {"x": 10, "y": 20})()
+
+        picker._on_drag(event)
+        picker._on_release(event)
+
+        picker.canvas.coords.assert_not_called()
+
+    def test_alert_log_trim_uses_counter(self):
+        class FakeText:
+            def __init__(self):
+                self.deleted = []
+
+            def config(self, **_kwargs):
+                pass
+
+            def insert(self, *_args):
+                pass
+
+            def delete(self, start, end):
+                self.deleted.append((start, end))
+
+            def see(self, *_args):
+                pass
+
+            def index(self, *_args):
+                raise AssertionError("line counting should use the counter, not Text.index")
+
+        frame = object.__new__(alert_watcher.AlertWatcherFrame)
+        frame.log_text = FakeText()
+        frame.log_text_max_lines = 2
+        frame._log_line_count = 2
+
+        frame._append_log("third")
+
+        self.assertEqual(frame._log_line_count, 2)
+        self.assertEqual(frame.log_text.deleted, [("1.0", "2.0")])
+
+    def test_save_scenario_uses_atomic_replace(self):
+        scenario = Scenario(name="Atomic")
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch.object(models.os, "replace", wraps=models.os.replace) as replace:
+            path = models.save_scenario(scenario, folder=temp_dir)
+
+            replace.assert_called_once()
+            self.assertFalse(os.path.exists(f"{path}.tmp"))
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["name"], "Atomic")
+
+    def test_alert_settings_save_uses_atomic_replace(self):
+        settings = alert_watcher.AppSettings(target_window_title="Game")
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch.object(alert_watcher.os, "replace", wraps=alert_watcher.os.replace) as replace:
+            path = os.path.join(temp_dir, "settings.json")
+
+            alert_watcher.save_settings(path, settings)
+
+            replace.assert_called_once()
+            self.assertFalse(os.path.exists(f"{path}.tmp"))
+
+    def test_engine_cycle_does_not_inspect_signature_every_cycle_when_cached(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="cached", steps=[Step(name="one", cooldown=0.0)])
+        engine._last_fired = {"one": 0.0}
+        engine._stop_event = threading.Event()
+        engine.log = lambda _message: None
+        engine._evaluate_uses_frame_cache = False
+        engine._evaluate_step = lambda _step: (False, {}, {})
+
+        with patch.object(engine_module.inspect, "signature", side_effect=AssertionError("should be cached")):
+            engine._cycle()
 
 
 if __name__ == "__main__":

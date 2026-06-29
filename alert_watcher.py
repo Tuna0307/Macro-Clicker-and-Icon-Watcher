@@ -164,8 +164,13 @@ def save_settings(path, settings):
         data["scan_region_ratio"] = list(data["scan_region_ratio"])
     if data["scan_region_window_size"] is not None:
         data["scan_region_window_size"] = list(data["scan_region_window_size"])
-    with open(path, "w", encoding="utf-8") as f:
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
 
 
 class SingleInstanceLock:
@@ -465,8 +470,10 @@ class TemplateManager:
                     item["region_window_size"] = list(v["region_window_size"])
                 items.append(item)
             data = {"items": items}
-        with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            tmp_path = f"{MANIFEST_PATH}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, MANIFEST_PATH)
 
     def add(self, image_bgr, name, threshold=DEFAULT_THRESHOLD):
         with self._lock:
@@ -497,12 +504,13 @@ class TemplateManager:
                 pass
             self._save()
 
-    def set_threshold(self, tid, threshold):
+    def set_threshold(self, tid, threshold, save=True):
         with self._lock:
             if tid in self.items:
                 self.items[tid]["threshold"] = threshold
             else:
                 return
+        if save:
             self._save()
 
     def set_region(self, tid, region, region_mode="screen",
@@ -776,9 +784,13 @@ class ScreenRegionPicker(tk.Toplevel):
         )
 
     def _on_drag(self, event):
+        if self.rect_id is None or self.start_x is None or self.start_y is None:
+            return
         self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
 
     def _on_release(self, event):
+        if self.start_x is None or self.start_y is None:
+            return
         x0, y0 = min(self.start_x, event.x), min(self.start_y, event.y)
         x1, y1 = max(self.start_x, event.x), max(self.start_y, event.y)
         if x1 - x0 < 4 or y1 - y0 < 4:
@@ -928,6 +940,9 @@ class AlertWatcherFrame(ttk.Frame):
         self.tray_thread = None
         self.hotkey_handles = []
         self.log_text_max_lines = 1000
+        self._log_line_count = 0
+        self._settings_save_after_id = None
+        self._template_save_after_id = None
 
         self._build_ui()
         self._refresh_list()
@@ -1102,15 +1117,21 @@ class AlertWatcherFrame(ttk.Frame):
         )
 
     def _save_settings(self):
+        self._settings_save_after_id = None
         self.settings = self._current_settings()
         try:
             save_settings(SETTINGS_PATH, self.settings)
         except OSError as exc:
             self._append_log(f"Could not save settings: {exc}")
 
+    def _schedule_settings_save(self):
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+        self._settings_save_after_id = self.after(300, self._save_settings)
+
     def _on_settings_changed(self):
         if hasattr(self, "monitor_var") and hasattr(self, "tray_var"):
-            self._save_settings()
+            self._schedule_settings_save()
 
     def _update_region_label(self):
         if self.scan_region is None:
@@ -1280,8 +1301,18 @@ class AlertWatcherFrame(ttk.Frame):
             return
         val = round(self.thresh_var.get(), 2)
         self.thresh_label.config(text=f"{val:.2f}")
-        self.tm.set_threshold(tid, val)
+        self.tm.set_threshold(tid, val, save=False)
         self._refresh_list(selected_tid=tid)
+        self._schedule_template_save()
+
+    def _schedule_template_save(self):
+        if self._template_save_after_id is not None:
+            self.after_cancel(self._template_save_after_id)
+        self._template_save_after_id = self.after(300, self._flush_template_save)
+
+    def _flush_template_save(self):
+        self._template_save_after_id = None
+        self.tm._save()
 
     # ---------------- add / remove ----------------
     def _add_from_file(self):
@@ -1357,15 +1388,16 @@ class AlertWatcherFrame(ttk.Frame):
         self.withdraw()
         self.after(200, lambda: ScreenRegionPicker(
             self,
-            self._on_icon_region_picked,
+            lambda image_bgr, abs_box, selected_tid=tid: self._on_icon_region_picked(
+                image_bgr,
+                abs_box,
+                selected_tid,
+            ),
             on_cancel=self.deiconify,
         ))
 
-    def _on_icon_region_picked(self, _image_bgr, abs_box):
+    def _on_icon_region_picked(self, _image_bgr, abs_box, tid):
         self.deiconify()
-        tid = self._selected_id()
-        if tid is None:
-            return
         try:
             meta = self._region_metadata_from_abs_box(abs_box)
         except Exception as exc:
@@ -1462,15 +1494,11 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _on_scan_region_picked(self, _image_bgr, abs_box):
         self.deiconify()
-        title = self.target_window_var.get().strip()
-        if title:
-            try:
-                meta = self._region_metadata_from_abs_box(abs_box)
-            except Exception as exc:
-                messagebox.showerror("Window lookup failed", str(exc), parent=self)
-                return
-        else:
+        try:
             meta = self._region_metadata_from_abs_box(abs_box)
+        except Exception as exc:
+            messagebox.showerror("Window lookup failed", str(exc), parent=self)
+            return
         self.scan_region = meta["region"]
         self.scan_region_mode = meta["region_mode"]
         self.scan_region_ratio = meta["region_ratio"]
@@ -1587,9 +1615,11 @@ class AlertWatcherFrame(ttk.Frame):
     def _append_log(self, msg):
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-        line_count = int(self.log_text.index("end-1c").split(".")[0])
-        if line_count > self.log_text_max_lines:
-            self.log_text.delete("1.0", f"{line_count - self.log_text_max_lines}.0")
+        self._log_line_count += 1
+        extra_lines = self._log_line_count - self.log_text_max_lines
+        if extra_lines > 0:
+            self.log_text.delete("1.0", f"{extra_lines + 1}.0")
+            self._log_line_count -= extra_lines
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
@@ -1619,12 +1649,24 @@ class AlertWatcherFrame(ttk.Frame):
         self.after(150, self._poll_queues)
 
     def shutdown(self):
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+            self._save_settings()
+        if self._template_save_after_id is not None:
+            self.after_cancel(self._template_save_after_id)
+            self._flush_template_save()
         self._save_settings()
         self._cleanup_tray()
         self._cleanup_hotkeys()
         self._stop_watching()
 
     def on_close(self):
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+            self._save_settings()
+        if self._template_save_after_id is not None:
+            self.after_cancel(self._template_save_after_id)
+            self._flush_template_save()
         self._save_settings()
         if not self.embedded and self.tray_var.get() and HAVE_PYSTRAY:
             self.withdraw()

@@ -33,6 +33,7 @@ class LevelOcrReader:
         self._ocr_init_error = None
         self._recognition_init_error = None
         self._lock = threading.Lock()
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
 
     @property
     def init_error(self):
@@ -189,7 +190,7 @@ class LevelOcrReader:
         sharpened = self._sharpen(upscaled)
 
         gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(gray)
+        clahe = self._clahe.apply(gray)
         threshold = cv2.adaptiveThreshold(
             clahe,
             255,
@@ -314,7 +315,7 @@ class LevelOcrReader:
         normalized = normalized.replace("lⅴ", "lv").replace("1v", "lv").replace("iv", "lv")
 
         for pattern in (r"lv([^\d]*)(\d{1,4})", r"level([^\d]*)(\d{1,4})", r"^l([^\d]*)(\d{1,4})"):
-            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            match = re.search(pattern, normalized)
             if match:
                 separator, digits = match.group(1), match.group(2)
                 return self._normalize_level_digits(digits, lv_prefixed=True, separator=separator)

@@ -57,6 +57,7 @@ class MacroEngine:
         self._all_match_indices = {}
         self._step_lookup = {}
         self._step_names_snapshot = ()
+        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
 
     # ---- public control ----
     @property
@@ -73,6 +74,7 @@ class MacroEngine:
         self._ever_started = True
         self._step_names_snapshot = ()
         self._refresh_step_caches()
+        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
         for s in self.scenario.steps:
             self._last_fired[s.name] = 0.0
         try:
@@ -984,7 +986,10 @@ class MacroEngine:
         steps = self._refresh_step_caches()
         frame_cache = {}
         evaluate_step = self._evaluate_step
-        evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(evaluate_step)
+        if hasattr(self, "_evaluate_uses_frame_cache"):
+            evaluate_uses_frame_cache = self._evaluate_uses_frame_cache
+        else:
+            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(evaluate_step)
         self._window_rect_lookup_cache = {}
         try:
             for step in steps:
