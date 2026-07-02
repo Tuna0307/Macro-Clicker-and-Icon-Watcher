@@ -1,9 +1,10 @@
+import json
 import os
 import queue
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -154,12 +155,61 @@ class SettingsTests(unittest.TestCase):
                 start_stop_hotkey="ctrl+shift+f8",
                 test_alert_hotkey="ctrl+shift+f9",
                 minimize_to_tray=True,
+                alert_volume=0.42,
             )
 
             watcher.save_settings(path, settings)
             loaded = watcher.load_settings(path)
 
         self.assertEqual(loaded, settings)
+
+    def test_alert_volume_is_clamped_when_loading_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"alert_volume": 1.8}, f)
+
+            loaded = watcher.load_settings(path)
+
+        self.assertEqual(loaded.alert_volume, 1.0)
+
+
+class SoundTests(unittest.TestCase):
+    def test_play_alert_sound_uses_pygame_volume(self):
+        class FakeThread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                self.target()
+
+        class FakeSound:
+            def __init__(self, *args, **kwargs):
+                self.volume = None
+
+            def set_volume(self, volume):
+                self.volume = volume
+                fake_pygame.last_sound = self
+
+            def play(self):
+                fake_pygame.play_called = True
+
+        fake_pygame = Mock()
+        fake_pygame.mixer.get_init.return_value = True
+        fake_pygame.mixer.Sound.side_effect = FakeSound
+        fake_pygame.play_called = False
+        fake_pygame.last_sound = None
+
+        with patch.object(watcher, "HAVE_PYGAME", True), \
+                patch.object(watcher, "pygame", fake_pygame), \
+                patch.object(watcher, "threading") as threading_module:
+            threading_module.Thread.side_effect = FakeThread
+
+            watcher.play_alert_sound(volume=0.37)
+
+        self.assertTrue(fake_pygame.play_called)
+        self.assertAlmostEqual(fake_pygame.last_sound.volume, 0.37)
 
 
 class WindowRegionTests(unittest.TestCase):

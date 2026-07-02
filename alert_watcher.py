@@ -11,7 +11,8 @@ can multitask without having to stare at the game.
 - Alerts once per appearance: it won't spam you while the icon stays on
   screen, and re-arms automatically once the icon disappears.
 
-Windows only (uses winsound for the alert tone). Tested for Python 3.9+.
+Windows only (uses pygame for volume-controlled alert tones, with winsound fallback).
+Tested for Python 3.9+.
 
 Run:
     pip install opencv-python mss pillow
@@ -19,8 +20,10 @@ Run:
 """
 import ctypes
 import json
+import math
 import os
 import queue
+import struct
 import sys
 import threading
 import time
@@ -56,6 +59,14 @@ except ImportError:
     pystray = None
     HAVE_PYSTRAY = False
 
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+try:
+    import pygame
+    HAVE_PYGAME = True
+except ImportError:
+    pygame = None
+    HAVE_PYGAME = False
+
 try:
     import winsound
     HAVE_WINSOUND = True
@@ -85,9 +96,11 @@ DEFAULT_ROTATIONS = [0, -5, 5, -8, 8]
 POLL_INTERVAL_SEC = 0.6
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_COOLDOWN_SEC = 5.0
+DEFAULT_ALERT_VOLUME = 1.0
 DEFAULT_START_STOP_HOTKEY = "ctrl+shift+f8"
 DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
 REGION_UNAVAILABLE = object()
+_SOUND_LOCK = threading.Lock()
 
 
 def _drain_queue(q):
@@ -104,6 +117,7 @@ class AppSettings:
     grayscale: bool = True
     debug: bool = False
     cooldown_sec: float = DEFAULT_COOLDOWN_SEC
+    alert_volume: float = DEFAULT_ALERT_VOLUME
     scan_region: Optional[Tuple[int, int, int, int]] = None
     scan_region_mode: str = "screen"
     scan_region_ratio: Optional[Tuple[float, float, float, float]] = None
@@ -153,6 +167,10 @@ def load_settings(path=SETTINGS_PATH):
         values["cooldown_sec"] = max(0.0, float(values["cooldown_sec"]))
     except (TypeError, ValueError):
         values["cooldown_sec"] = defaults.cooldown_sec
+    try:
+        values["alert_volume"] = min(1.0, max(0.0, float(values["alert_volume"])))
+    except (TypeError, ValueError):
+        values["alert_volume"] = defaults.alert_volume
     return AppSettings(**values)
 
 
@@ -718,17 +736,59 @@ class WatcherThread(threading.Thread):
             self._report_fatal_error(e)
 
 
-def play_alert_sound():
-    if HAVE_WINSOUND:
-        def _beep():
+def _clamp_alert_volume(volume):
+    try:
+        return min(1.0, max(0.0, float(volume)))
+    except (TypeError, ValueError):
+        return DEFAULT_ALERT_VOLUME
+
+
+def _tone_buffer(freq, duration_ms, sample_rate=44100):
+    sample_count = int(sample_rate * duration_ms / 1000)
+    amplitude = 24000
+    return b"".join(
+        struct.pack("<h", int(amplitude * math.sin(2.0 * math.pi * freq * i / sample_rate)))
+        for i in range(sample_count)
+    )
+
+
+def _play_pygame_alert(volume):
+    with _SOUND_LOCK:
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=1)
+        for freq in (880, 1100, 880):
+            sound = pygame.mixer.Sound(buffer=_tone_buffer(freq, 140))
+            sound.set_volume(volume)
+            sound.play()
+            time.sleep(0.14)
+
+
+def _play_winsound_alert():
+    try:
+        for freq in (880, 1100, 880):
+            winsound.Beep(freq, 140)
+    except RuntimeError:
+        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+
+
+def play_alert_sound(volume=DEFAULT_ALERT_VOLUME):
+    volume = _clamp_alert_volume(volume)
+    if volume <= 0.0:
+        return
+
+    def _beep():
+        if HAVE_PYGAME:
             try:
-                for freq in (880, 1100, 880):
-                    winsound.Beep(freq, 140)
-            except RuntimeError:
-                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-        threading.Thread(target=_beep, daemon=True).start()
-    else:
-        print("\a", end="", flush=True)
+                _play_pygame_alert(volume)
+                return
+            except Exception:
+                pass
+        if HAVE_WINSOUND:
+            _play_winsound_alert()
+        else:
+            print("\a", end="", flush=True)
+
+    threading.Thread(target=_beep, daemon=True).start()
 
 
 # --------------------------------------------------------------------------
@@ -1044,6 +1104,20 @@ class AlertWatcherFrame(ttk.Frame):
         tk.Spinbox(cooldown_row, from_=0.0, to=60.0, increment=0.5,
                    textvariable=self.cooldown_var, width=5).pack(side="right")
 
+        volume_row = ttk.Frame(right)
+        volume_row.pack(fill="x", pady=(4, 4))
+        ttk.Label(volume_row, text="Alert volume").pack(side="left")
+        self.volume_var = tk.DoubleVar(value=self.settings.alert_volume * 100.0)
+        self.volume_label = ttk.Label(volume_row, text=f"{int(round(self.settings.alert_volume * 100))}%")
+        self.volume_label.pack(side="right")
+        ttk.Scale(
+            right,
+            from_=0,
+            to=100,
+            variable=self.volume_var,
+            command=self._on_volume_change,
+        ).pack(fill="x", pady=(0, 4))
+
         self.region_label = ttk.Label(right, text="Region: full screen")
         self.region_label.pack(anchor="w", pady=(4, 2))
         ttk.Button(right, text="Set Scan Region", command=self._set_scan_region).pack(fill="x", pady=1)
@@ -1106,6 +1180,7 @@ class AlertWatcherFrame(ttk.Frame):
             grayscale=bool(self.grayscale_var.get()),
             debug=bool(self.debug_var.get()),
             cooldown_sec=self._cooldown_seconds(),
+            alert_volume=self._alert_volume(),
             scan_region=self.scan_region,
             scan_region_mode=self.scan_region_mode,
             scan_region_ratio=self.scan_region_ratio,
@@ -1132,6 +1207,12 @@ class AlertWatcherFrame(ttk.Frame):
     def _on_settings_changed(self):
         if hasattr(self, "monitor_var") and hasattr(self, "tray_var"):
             self._schedule_settings_save()
+
+    def _on_volume_change(self, _value):
+        if not hasattr(self, "volume_label"):
+            return
+        self.volume_label.config(text=f"{int(round(self._alert_volume() * 100))}%")
+        self._schedule_settings_save()
 
     def _update_region_label(self):
         if self.scan_region is None:
@@ -1533,6 +1614,12 @@ class AlertWatcherFrame(ttk.Frame):
         except (tk.TclError, ValueError):
             return DEFAULT_COOLDOWN_SEC
 
+    def _alert_volume(self):
+        try:
+            return min(1.0, max(0.0, float(self.volume_var.get()) / 100.0))
+        except (tk.TclError, ValueError):
+            return DEFAULT_ALERT_VOLUME
+
     # ---------------- monitoring control ----------------
     def _start_watching(self):
         if not self.tm.snapshot():
@@ -1580,7 +1667,7 @@ class AlertWatcherFrame(ttk.Frame):
             rgb = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2RGB)
             thumb = Image.fromarray(rgb)
             thumb.thumbnail((64, 64))
-        play_alert_sound()
+        play_alert_sound(self._alert_volume())
         AlertPopup(self, name, monitor="-", thumb_img=thumb)
 
     def _test_screenshot(self):
@@ -1643,7 +1730,7 @@ class AlertWatcherFrame(ttk.Frame):
                 rgb = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2RGB)
                 thumb = Image.fromarray(rgb)
                 thumb.thumbnail((64, 64))
-            play_alert_sound()
+            play_alert_sound(self._alert_volume())
             AlertPopup(self, ev["name"], ev["monitor"], thumb)
             self._append_log(f"ALERT: '{ev['name']}' seen on monitor {ev['monitor']} (score {ev['score']:.2f})")
         self.after(150, self._poll_queues)

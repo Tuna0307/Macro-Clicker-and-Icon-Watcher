@@ -6,5 +6,6 @@ keyboard
 pillow
 pygetwindow
 pystray
+pygame
 paddlepaddle
 paddleocr
