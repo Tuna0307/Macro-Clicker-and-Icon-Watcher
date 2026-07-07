@@ -1,0 +1,60 @@
+{
+  "name": "Click Help",
+  "steps": [
+    {
+      "name": "Help",
+      "conditions": [
+        {
+          "condition_type": "template",
+          "template_path": "C:\\Users\\chimw\\OneDrive\\Desktop\\GitHub\\Macro-Clicker-and-Icon-Watcher\\templates\\Help.png",
+          "confidence": 0.85,
+          "region": [
+            -173,
+            723,
+            82,
+            80
+          ],
+          "region_mode": "screen",
+          "region_ratio": null,
+          "region_window_size": null,
+          "negate": false
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "match_condition_index": null,
+          "row_tolerance": 60,
+          "row_mode": "first",
+          "target_choice": "leftmost",
+          "min_level": null,
+          "max_level": null,
+          "level_digit_template_dir": "C:\\Users\\chimw\\OneDrive\\Desktop\\GitHub\\Macro-Clicker-and-Icon-Watcher\\templates\\level_digits",
+          "level_roi": null,
+          "level_min_digits": 1,
+          "no_match_condition_index": null,
+          "no_match_disable_steps": [],
+          "x": null,
+          "y": null,
+          "offset_x": 0,
+          "offset_y": 0,
+          "button": "left",
+          "key": "",
+          "hold": 0.0,
+          "seconds": 0.5,
+          "step_name": "",
+          "set_enabled": true
+        }
+      ],
+      "condition_operator": "AND",
+      "enabled": true,
+      "cooldown": 1.0,
+      "repeatable": true
+    }
+  ],
+  "poll_interval": 0.25,
+  "monitor_index": 1,
+  "kill_switch": "f12",
+  "target_window_title": ""
+}

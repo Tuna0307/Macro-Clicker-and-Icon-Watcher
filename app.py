@@ -64,6 +64,22 @@ def _parse_required_int(value, field_name):
     return parsed
 
 
+def schedule_mouse_position_fill(win, x_var, y_var, delay_ms=2000):
+    """Hide a dialog briefly, then fill vars with the current screen pointer."""
+    win.withdraw()
+
+    def capture_pointer():
+        try:
+            x_var.set(str(win.winfo_pointerx()))
+            y_var.set(str(win.winfo_pointery()))
+        finally:
+            win.deiconify()
+            win.lift()
+            win.grab_set()
+
+    win.after(delay_ms, capture_pointer)
+
+
 def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", monitor_index=1,
                                   window_rect_provider=find_window_rect):
     title = (target_window_title or "").strip()
@@ -359,6 +375,11 @@ def action_dialog(parent, action: Action = None, step_names=None, num_conditions
     tk.Entry(click_frame, textvariable=x_var, width=6).grid(row=2, column=1, sticky="w")
     tk.Label(click_frame, text="y:").grid(row=2, column=2, sticky="w")
     tk.Entry(click_frame, textvariable=y_var, width=6).grid(row=2, column=3, sticky="w")
+    tk.Button(
+        click_frame,
+        text="Use mouse position (2s)",
+        command=lambda: schedule_mouse_position_fill(win, x_var, y_var),
+    ).grid(row=2, column=4, sticky="w", padx=(8, 4))
     tk.Label(click_frame, text="Offset  x:").grid(row=3, column=0, sticky="w", padx=4, pady=2)
     tk.Entry(click_frame, textvariable=offx_var, width=6).grid(row=3, column=1, sticky="w")
     tk.Label(click_frame, text="y:").grid(row=3, column=2, sticky="w")

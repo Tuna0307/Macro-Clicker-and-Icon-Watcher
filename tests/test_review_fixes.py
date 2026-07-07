@@ -412,6 +412,49 @@ class ReviewFixTests(unittest.TestCase):
         with patch.object(engine_module.inspect, "signature", side_effect=AssertionError("should be cached")):
             engine._cycle()
 
+    def test_mouse_position_fill_hides_dialog_and_writes_pointer_coordinates(self):
+        class FakeDialog:
+            def __init__(self):
+                self.hidden = False
+                self.after_delay = None
+                self.callback = None
+                self.grabbed = False
+
+            def withdraw(self):
+                self.hidden = True
+
+            def after(self, delay, callback):
+                self.after_delay = delay
+                self.callback = callback
+
+            def winfo_pointerx(self):
+                return 123
+
+            def winfo_pointery(self):
+                return 456
+
+            def deiconify(self):
+                self.hidden = False
+
+            def lift(self):
+                pass
+
+            def grab_set(self):
+                self.grabbed = True
+
+        dialog = FakeDialog()
+        x_var = FakeVar("")
+        y_var = FakeVar("")
+
+        app.schedule_mouse_position_fill(dialog, x_var, y_var, delay_ms=10)
+        dialog.callback()
+
+        self.assertEqual(dialog.after_delay, 10)
+        self.assertEqual(x_var.get(), "123")
+        self.assertEqual(y_var.get(), "456")
+        self.assertFalse(dialog.hidden)
+        self.assertTrue(dialog.grabbed)
+
 
 if __name__ == "__main__":
     unittest.main()
