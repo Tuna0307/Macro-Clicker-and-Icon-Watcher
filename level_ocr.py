@@ -45,15 +45,19 @@ class LevelOcrReader:
 
     def warm_up(self) -> bool:
         with self._lock:
+            ready = False
             recognition_engine = self._get_recognition_engine()
             if recognition_engine is not None:
                 self._prime_recognition_engine(recognition_engine)
-                return True
+                ready = True
+
+            # read_level() falls back to the full OCR pipeline when text-only
+            # recognition cannot read a crop, so prime that model as well.
             engine = self._get_engine()
             if engine is not None:
                 self._prime_full_engine(engine)
-                return True
-            return False
+                ready = True
+            return ready
 
     def _read_level_locked(self, frame) -> LevelOcrResult:
         if frame is None:

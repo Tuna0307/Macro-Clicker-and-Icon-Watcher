@@ -389,6 +389,13 @@ class ReviewFixTests(unittest.TestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["name"], "Atomic")
 
+    def test_save_scenario_rejects_filename_unsafe_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for name in ("../escape", "bad/name", "bad\\name", "bad:name", "   "):
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError):
+                        models.save_scenario(Scenario(name=name), folder=temp_dir)
+
     def test_alert_settings_save_uses_atomic_replace(self):
         settings = alert_watcher.AppSettings(target_window_title="Game")
         with tempfile.TemporaryDirectory() as temp_dir, \

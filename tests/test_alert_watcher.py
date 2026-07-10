@@ -74,6 +74,18 @@ class TemplateManagerTests(unittest.TestCase):
         self.assertEqual(item["region_ratio"], (0.1, 0.2, 0.3, 0.4))
         self.assertEqual(item["region_window_size"], (100, 100))
 
+    def test_snapshot_reuses_prepared_template_variants(self):
+        tm = self._manager_in_temp_dir()
+        image = np.zeros((24, 24, 3), dtype=np.uint8)
+        image[6:18, 6:18] = (255, 255, 255)
+        tm.add(image, "cached")
+
+        first = tm.snapshot(use_grayscale=True)[0]
+        second = tm.snapshot(use_grayscale=True)[0]
+
+        self.assertIs(first["variants"], second["variants"])
+        self.assertGreater(len(first["variants"]), 1)
+
 
 class DetectionTests(unittest.TestCase):
     def test_matching_finds_smaller_icon_with_small_rotation(self):
@@ -124,6 +136,29 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(results[0]["name"], "blue")
         self.assertTrue(results[0]["matched"])
         self.assertGreaterEqual(results[0]["score"], 0.99)
+
+    def test_matching_can_use_prepared_template_variants(self):
+        screen = np.zeros((60, 60, 3), dtype=np.uint8)
+        icon = np.zeros((12, 12, 3), dtype=np.uint8)
+        icon[:, :, 1] = 255
+        screen[25:37, 30:42] = icon
+        variants = watcher.prepare_template_variants(
+            icon,
+            scales=[1.0],
+            rotations=[0],
+            use_grayscale=True,
+        )
+
+        score, loc, scale = watcher.match_template_multiscale(
+            screen,
+            icon,
+            use_grayscale=True,
+            variants=variants,
+        )
+
+        self.assertGreaterEqual(score, 0.99)
+        self.assertEqual(loc, (30, 25))
+        self.assertEqual(scale, 1.0)
 
 
 class TemplateStateTests(unittest.TestCase):

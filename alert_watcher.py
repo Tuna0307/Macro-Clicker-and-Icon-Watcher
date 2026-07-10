@@ -335,9 +335,29 @@ def _rotate_image(image, angle):
     )
 
 
+def prepare_template_variants(template_bgr, scales=DEFAULT_SCALES,
+                              rotations=DEFAULT_ROTATIONS, use_grayscale=False):
+    template = _prepare_match_image(template_bgr, use_grayscale)
+    th0, tw0 = template.shape[:2]
+    variants = []
+    for angle in rotations:
+        rotated_template = _rotate_image(template, angle)
+        for scale in scales:
+            tw, th = max(1, int(tw0 * scale)), max(1, int(th0 * scale))
+            resized = cv2.resize(rotated_template, (tw, th), interpolation=cv2.INTER_AREA)
+            variants.append({
+                "image": resized,
+                "scale": scale,
+                "angle": angle,
+                "low_variance": float(np.std(resized)) < 1e-6,
+            })
+    return tuple(variants)
+
+
 def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
                               use_grayscale=False, region=None,
-                              rotations=DEFAULT_ROTATIONS):
+                              rotations=DEFAULT_ROTATIONS, variants=None,
+                              early_exit_score=None):
     best_score, best_loc, best_scale = -1.0, None, 1.0
     best_angle = 0
     screen_bgr, offset = _crop_region(screen_bgr, region)
@@ -345,43 +365,49 @@ def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
         return best_score, best_loc, best_scale
 
     screen = _prepare_match_image(screen_bgr, use_grayscale)
-    template = _prepare_match_image(template_bgr, use_grayscale)
-    th0, tw0 = template.shape[:2]
     sh, sw = screen.shape[:2]
-    low_variance_template = float(np.std(template)) < 1e-6
-    for angle in rotations:
-        rotated_template = _rotate_image(template, angle)
-        for scale in scales:
-            tw, th = max(1, int(tw0 * scale)), max(1, int(th0 * scale))
-            if tw > sw or th > sh:
-                continue
-            resized = cv2.resize(rotated_template, (tw, th), interpolation=cv2.INTER_AREA)
-            if low_variance_template:
-                result = cv2.matchTemplate(screen, resized, cv2.TM_SQDIFF)
-                min_val, _, min_loc, _ = cv2.minMaxLoc(result)
-                channels = resized.shape[2] if resized.ndim == 3 else 1
-                worst = float(tw * th * channels * (255 ** 2))
-                score, loc = max(0.0, 1.0 - (min_val / worst)), min_loc
-            else:
-                result = cv2.matchTemplate(screen, resized, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                score, loc = max_val, max_loc
-            score_epsilon = 1e-6 if low_variance_template else 1e-9
-            is_better = score > best_score + score_epsilon
-            is_scale_tie = (
-                abs(score - best_score) <= score_epsilon
-                and abs(scale - 1.0) < abs(best_scale - 1.0)
-            )
-            is_angle_tie = (
-                abs(score - best_score) <= score_epsilon
-                and abs(scale - best_scale) <= 1e-9
-                and abs(angle) < abs(best_angle)
-            )
-            if is_better or is_scale_tie or is_angle_tie:
-                best_score = score
-                best_loc = (loc[0] + offset[0], loc[1] + offset[1])
-                best_scale = scale
-                best_angle = angle
+    if variants is None:
+        variants = prepare_template_variants(
+            template_bgr,
+            scales=scales,
+            rotations=rotations,
+            use_grayscale=use_grayscale,
+        )
+    for variant in variants:
+        resized = variant["image"]
+        th, tw = resized.shape[:2]
+        if tw > sw or th > sh:
+            continue
+        if variant["low_variance"]:
+            result = cv2.matchTemplate(screen, resized, cv2.TM_SQDIFF)
+            min_val, _, min_loc, _ = cv2.minMaxLoc(result)
+            channels = resized.shape[2] if resized.ndim == 3 else 1
+            worst = float(tw * th * channels * (255 ** 2))
+            score, loc = max(0.0, 1.0 - (min_val / worst)), min_loc
+        else:
+            result = cv2.matchTemplate(screen, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            score, loc = max_val, max_loc
+        scale = variant["scale"]
+        angle = variant["angle"]
+        score_epsilon = 1e-6 if variant["low_variance"] else 1e-9
+        is_better = score > best_score + score_epsilon
+        is_scale_tie = (
+            abs(score - best_score) <= score_epsilon
+            and abs(scale - 1.0) < abs(best_scale - 1.0)
+        )
+        is_angle_tie = (
+            abs(score - best_score) <= score_epsilon
+            and abs(scale - best_scale) <= 1e-9
+            and abs(angle) < abs(best_angle)
+        )
+        if is_better or is_scale_tie or is_angle_tie:
+            best_score = score
+            best_loc = (loc[0] + offset[0], loc[1] + offset[1])
+            best_scale = scale
+            best_angle = angle
+            if early_exit_score is not None and best_score >= early_exit_score:
+                break
     return best_score, best_loc, best_scale
 
 
@@ -466,6 +492,7 @@ class TemplateManager:
                     "region_window_size": tuple(entry["region_window_size"])
                     if entry.get("region_window_size") else None,
                     "image": img,
+                    "variant_cache": {},
                 }
                 self._next_id = max(self._next_id, tid + 1)
 
@@ -508,6 +535,7 @@ class TemplateManager:
                 "region_ratio": None,
                 "region_window_size": None,
                 "image": image_bgr.copy(),
+                "variant_cache": {},
             }
         self._save()
         return tid
@@ -554,12 +582,24 @@ class TemplateManager:
                 return None
             result = dict(entry)
             result["image"] = entry["image"].copy()
+            result.pop("variant_cache", None)
             return result
 
-    def snapshot(self):
+    def _variants_for_entry(self, entry, use_grayscale):
+        cache = entry.setdefault("variant_cache", {})
+        key = bool(use_grayscale)
+        if key not in cache:
+            cache[key] = prepare_template_variants(
+                entry["image"],
+                use_grayscale=key,
+            )
+        return cache[key]
+
+    def snapshot(self, use_grayscale=None):
         with self._lock:
-            return [
-                {
+            items = []
+            for tid, entry in self.items.items():
+                item = {
                     "id": tid,
                     "name": entry["name"],
                     "file": entry["file"],
@@ -570,8 +610,10 @@ class TemplateManager:
                     "region_window_size": entry.get("region_window_size"),
                     "image": entry["image"],
                 }
-                for tid, entry in self.items.items()
-            ]
+                if use_grayscale is not None:
+                    item["variants"] = self._variants_for_entry(entry, use_grayscale)
+                items.append(item)
+            return items
 
 
 # --------------------------------------------------------------------------
@@ -679,7 +721,7 @@ class WatcherThread(threading.Thread):
                 self.log_queue.put(f"Watching {len(monitors)} monitor(s).")
                 last_debug_log = 0.0
                 while not self._stop_flag.is_set():
-                    items = self.tm.snapshot()
+                    items = self.tm.snapshot(use_grayscale=self.use_grayscale)
                     self._sync_states(items)
                     if not items:
                         time.sleep(POLL_INTERVAL_SEC)
@@ -714,6 +756,8 @@ class WatcherThread(threading.Thread):
                                 entry["image"],
                                 use_grayscale=self.use_grayscale,
                                 region=region,
+                                variants=entry.get("variants"),
+                                early_exit_score=0.999,
                             )
                             if self.debug:
                                 debug_lines.append(

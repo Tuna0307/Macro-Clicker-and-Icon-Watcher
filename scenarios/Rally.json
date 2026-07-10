@@ -31,6 +31,8 @@
           "condition_type": "template",
           "template_path": "templates\\2_3Squad.png",
           "confidence": 0.78,
+          "comparison_template_path": "templates\\FullSquad3_3.png",
+          "comparison_margin": 0.03,
           "region": [
             0,
             155,
@@ -49,29 +51,6 @@
             940
           ],
           "negate": false
-        },
-        {
-          "condition_type": "template",
-          "template_path": "templates\\FullSquad3_3.png",
-          "confidence": 0.92,
-          "region": [
-            0,
-            155,
-            230,
-            85
-          ],
-          "region_mode": "window",
-          "region_ratio": [
-            0.0,
-            0.16489361702127658,
-            0.14303482587064675,
-            0.09042553191489362
-          ],
-          "region_window_size": [
-            1608,
-            940
-          ],
-          "negate": true
         }
       ],
       "actions": [

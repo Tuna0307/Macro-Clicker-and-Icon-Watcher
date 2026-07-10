@@ -19,6 +19,11 @@ ACTION_TYPES = frozenset({"click", "click_matching_row", "key", "wait", "set_ste
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SCENARIOS_DIR = os.path.join(APP_DIR, "scenarios")
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
+WINDOWS_RESERVED_SCENARIO_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 def project_path(path):
@@ -92,6 +97,8 @@ class ImageCondition:
     condition_type: str = "template"     # OpenCV template match
     template_path: str = ""
     confidence: float = 0.85
+    comparison_template_path: str = ""   # optional rival template that this template must outscore
+    comparison_margin: float = 0.03       # minimum score lead over the rival template
     region: Optional[List[int]] = None   # [left, top, width, height] screen coords, or None = full monitor
     region_mode: str = "screen"          # "screen" = absolute coords, "window" = relative to target window
     region_ratio: Optional[List[float]] = None  # proportional window region, used if target window resizes
@@ -107,6 +114,8 @@ class ImageCondition:
             condition_type="template",
             template_path=str(d.get("template_path", "")),
             confidence=_float_value(d.get("confidence"), 0.85),
+            comparison_template_path=str(d.get("comparison_template_path", "")),
+            comparison_margin=max(0.0, _float_value(d.get("comparison_margin"), 0.03)),
             region=_int_list(d.get("region")),
             region_mode=str(d.get("region_mode", "screen") or "screen"),
             region_ratio=_float_list(d.get("region_ratio")),
@@ -297,9 +306,28 @@ def load_scenario(name, folder=SCENARIOS_DIR):
         raise ValueError(f"Could not load scenario '{name}': {exc}") from exc
 
 
+def validate_scenario_name(name):
+    text = str(name or "")
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("Scenario name cannot be blank.")
+    if stripped != text or stripped.endswith("."):
+        raise ValueError("Scenario name cannot start/end with spaces or dots.")
+    invalid = set('<>:"/\\|?*')
+    if any(char in invalid or ord(char) < 32 for char in stripped):
+        raise ValueError('Scenario name cannot contain <>:"/\\|?* or control characters.')
+    if stripped in (".", "..") or ".." in stripped.split(os.sep):
+        raise ValueError("Scenario name cannot be a relative path.")
+    base = stripped.split(".")[0].upper()
+    if base in WINDOWS_RESERVED_SCENARIO_NAMES:
+        raise ValueError(f"Scenario name '{stripped}' is reserved by Windows.")
+    return stripped
+
+
 def save_scenario(scenario: Scenario, folder=SCENARIOS_DIR):
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{scenario.name}.json")
+    safe_name = validate_scenario_name(scenario.name)
+    path = os.path.join(folder, f"{safe_name}.json")
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(scenario.to_dict(), f, indent=2)

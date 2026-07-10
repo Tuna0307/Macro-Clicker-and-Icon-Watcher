@@ -48,7 +48,7 @@ class LevelOcrReaderTests(unittest.TestCase):
 
         self.assertEqual(entries, [("LVU22", 0.59)])
 
-    def test_warm_up_initializes_text_recognition_engine(self):
+    def test_warm_up_initializes_both_ocr_engines(self):
         reader = LevelOcrReader()
         calls = []
 
@@ -58,10 +58,15 @@ class LevelOcrReaderTests(unittest.TestCase):
                 return []
 
         reader._get_recognition_engine = lambda: calls.append("recognition") or FakeRecognitionEngine()
+        full_engine = object()
+        reader._get_engine = lambda: calls.append("full") or full_engine
+        reader._prime_full_engine = lambda engine: calls.append(("prime_full", engine))
 
         self.assertTrue(reader.warm_up())
         self.assertEqual(calls[0], "recognition")
         self.assertEqual(calls[1][0], "predict")
+        self.assertEqual(calls[2], "full")
+        self.assertEqual(calls[3], ("prime_full", full_engine))
 
     def test_preprocess_variants_include_lower_text_band(self):
         reader = LevelOcrReader()

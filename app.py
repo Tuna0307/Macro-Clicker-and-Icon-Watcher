@@ -17,6 +17,7 @@ from PIL import ImageDraw, ImageTk
 from models import (
     Scenario, Step, ImageCondition, Action,
     list_scenarios, load_scenario, save_scenario, delete_scenario,
+    validate_scenario_name,
 )
 from capture_tool import capture_template, select_region
 from engine import MacroEngine, _WINDOW_UNAVAILABLE
@@ -178,6 +179,8 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
 
     template_var = tk.StringVar(value=cond.template_path if cond else "")
     confidence_var = tk.DoubleVar(value=cond.confidence if cond else 0.85)
+    comparison_template_var = tk.StringVar(value=cond.comparison_template_path if cond else "")
+    comparison_margin_var = tk.DoubleVar(value=cond.comparison_margin if cond else 0.03)
     negate_var = tk.BooleanVar(value=cond.negate if cond else False)
     region_holder = {"region": list(cond.region) if (cond and cond.region) else None}
     region_mode_holder = {"mode": cond.region_mode if cond else "screen"}
@@ -219,11 +222,32 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
     tk.Scale(win, variable=confidence_var, from_=0.5, to=1.0, resolution=0.01,
              orient="horizontal", length=220).grid(row=2, column=1, columnspan=2, sticky="w", **pad)
 
-    tk.Checkbutton(win, text="Negate (succeeds when this image is ABSENT)",
-                   variable=negate_var).grid(row=3, column=0, columnspan=3, sticky="w", **pad)
+    tk.Label(win, text="Compare against:").grid(row=3, column=0, sticky="w", **pad)
+    tk.Entry(win, textvariable=comparison_template_var, width=32).grid(
+        row=3, column=1, sticky="we", **pad
+    )
 
-    tk.Label(win, text="Search region:").grid(row=4, column=0, sticky="w", **pad)
-    tk.Label(win, textvariable=region_var, fg="#555").grid(row=4, column=1, sticky="w", **pad)
+    def browse_comparison():
+        path = filedialog.askopenfilename(
+            filetypes=[("PNG images", "*.png")], initialdir="templates", parent=win
+        )
+        if path:
+            comparison_template_var.set(path)
+
+    tk.Button(win, text="Browse...", command=browse_comparison).grid(
+        row=3, column=2, sticky="we", **pad
+    )
+    tk.Label(win, text="Required score lead:").grid(row=4, column=0, sticky="w", **pad)
+    tk.Scale(
+        win, variable=comparison_margin_var, from_=0.0, to=0.25, resolution=0.01,
+        orient="horizontal", length=220,
+    ).grid(row=4, column=1, columnspan=2, sticky="w", **pad)
+
+    tk.Checkbutton(win, text="Negate (succeeds when this image is ABSENT)",
+                   variable=negate_var).grid(row=5, column=0, columnspan=3, sticky="w", **pad)
+
+    tk.Label(win, text="Search region:").grid(row=6, column=0, sticky="w", **pad)
+    tk.Label(win, textvariable=region_var, fg="#555").grid(row=6, column=1, sticky="w", **pad)
 
     def pick_region():
         region, _ = select_region(parent, monitor_index=monitor_index)
@@ -264,6 +288,8 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         temp_cond = ImageCondition(
             template_path=template_var.get(),
             confidence=round(confidence_var.get(), 2),
+            comparison_template_path=comparison_template_var.get(),
+            comparison_margin=round(comparison_margin_var.get(), 2),
             region=region_holder["region"],
             region_mode=region_mode_holder["mode"],
             region_ratio=region_ratio_holder["ratio"],
@@ -287,9 +313,9 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
             label = f"NOT {label}"
         MultiRegionOverlay(parent, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
 
-    tk.Button(win, text="Show region", command=show_region).grid(row=5, column=0, sticky="we", **pad)
-    tk.Button(win, text="Pick region...", command=pick_region).grid(row=5, column=1, sticky="we", **pad)
-    tk.Button(win, text="Clear (full screen)", command=clear_region).grid(row=5, column=2, sticky="we", **pad)
+    tk.Button(win, text="Show region", command=show_region).grid(row=7, column=0, sticky="we", **pad)
+    tk.Button(win, text="Pick region...", command=pick_region).grid(row=7, column=1, sticky="we", **pad)
+    tk.Button(win, text="Clear (full screen)", command=clear_region).grid(row=7, column=2, sticky="we", **pad)
 
     def on_ok():
         if not template_var.get():
@@ -298,6 +324,8 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         result["value"] = ImageCondition(
             template_path=template_var.get(),
             confidence=round(confidence_var.get(), 2),
+            comparison_template_path=comparison_template_var.get(),
+            comparison_margin=round(comparison_margin_var.get(), 2),
             region=region_holder["region"],
             region_mode=region_mode_holder["mode"],
             region_ratio=region_ratio_holder["ratio"],
@@ -307,7 +335,7 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         win.destroy()
 
     btns = tk.Frame(win)
-    btns.grid(row=6, column=0, columnspan=3, pady=10)
+    btns.grid(row=8, column=0, columnspan=3, pady=10)
     tk.Button(btns, text="OK", width=10, command=on_ok).pack(side="left", padx=4)
     tk.Button(btns, text="Cancel", width=10, command=win.destroy).pack(side="left", padx=4)
 
@@ -627,8 +655,15 @@ def step_dialog(parent, step: Step = None, existing_names=None, all_step_names=N
             else:
                 scope = "window" if c.region_mode == "window" else "screen"
                 region_txt = f"{scope} region {tuple(c.region)}"
-            cond_listbox.insert(tk.END, f"[{i}] {tag}{subject}  "
-                                         f"(conf {c.confidence}, {region_txt})")
+            comparison_txt = ""
+            if c.comparison_template_path:
+                rival = os.path.basename(c.comparison_template_path)
+                comparison_txt = f", beats {rival} by {c.comparison_margin:.2f}"
+            cond_listbox.insert(
+                tk.END,
+                f"[{i}] {tag}{subject}  "
+                f"(conf {c.confidence}{comparison_txt}, {region_txt})",
+            )
     refresh_conditions()
 
     def add_condition():
@@ -930,9 +965,19 @@ class App:
         self.scenario.kill_switch = self.kill_var.get().strip() or "f12"
         self.scenario.target_window_title = self.target_window_var.get().strip()
 
+    def _validate_scenario_name_for_ui(self, name):
+        try:
+            return validate_scenario_name(name)
+        except ValueError as exc:
+            messagebox.showerror("Invalid scenario name", str(exc))
+            return None
+
     def _new_scenario(self):
         name = simpledialog.askstring("New scenario", "Scenario name:", parent=self.root)
         if not name:
+            return
+        name = self._validate_scenario_name_for_ui(name)
+        if name is None:
             return
         self.scenario = Scenario(name=name)
         self.scenario_var.set(name)
@@ -953,6 +998,9 @@ class App:
                                        initialvalue=self.scenario.name, parent=self.root)
         if not name:
             return
+        name = self._validate_scenario_name_for_ui(name)
+        if name is None:
+            return
         if name != self.scenario.name and name in list_scenarios():
             messagebox.showerror("Duplicate name", "A scenario with that name already exists.")
             return
@@ -969,6 +1017,9 @@ class App:
             parent=self.root,
         )
         if not name:
+            return
+        name = self._validate_scenario_name_for_ui(name)
+        if name is None:
             return
         if name in list_scenarios():
             messagebox.showerror("Duplicate name", "A scenario with that name already exists.")

@@ -68,6 +68,8 @@ class WindowRegionTests(unittest.TestCase):
         scenario = Scenario(name="game", target_window_title="My Offline Game")
         condition = ImageCondition(
             template_path="templates/icon.png",
+            comparison_template_path="templates/full.png",
+            comparison_margin=0.06,
             region=[10, 20, 30, 40],
             region_mode="window",
             region_ratio=[0.0125, 0.0333333333, 0.0375, 0.0666666667],
@@ -86,6 +88,9 @@ class WindowRegionTests(unittest.TestCase):
             ImageCondition.from_dict(condition.to_dict()).region_ratio,
             [0.0125, 0.0333333333, 0.0375, 0.0666666667],
         )
+        restored_condition = ImageCondition.from_dict(condition.to_dict())
+        self.assertEqual(restored_condition.comparison_template_path, "templates/full.png")
+        self.assertEqual(restored_condition.comparison_margin, 0.06)
 
     def test_engine_resolves_window_relative_condition_region(self):
         engine = object.__new__(MacroEngine)

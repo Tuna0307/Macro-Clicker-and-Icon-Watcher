@@ -97,6 +97,21 @@ class EnginePerformanceTests(unittest.TestCase):
         self.assertEqual(calls, ["warm"])
         self.assertTrue(any("[ocr] warm-up ready" in message for message in logs))
 
+    def test_scenario_waits_for_ocr_warm_up_before_running(self):
+        engine = object.__new__(MacroEngine)
+        calls = []
+        logs = []
+        engine.scenario = Scenario(name="levels", kill_switch="f12")
+        engine.log = logs.append
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._warm_up_level_ocr = lambda: calls.append("warm") or True
+        engine._run_loop = lambda: calls.append("run")
+
+        engine._run_after_ocr_warmup()
+
+        self.assertEqual(calls, ["warm", "run"])
+        self.assertTrue(any("Scenario 'levels' started" in message for message in logs))
+
     def test_evaluate_step_short_circuits_failed_and_condition(self):
         engine = object.__new__(MacroEngine)
         calls = []

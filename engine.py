@@ -81,10 +81,14 @@ class MacroEngine:
             self._hotkey_handle = keyboard.add_hotkey(self.scenario.kill_switch, self.stop)
         except Exception as e:
             self.log(f"[warn] could not register kill switch hotkey: {e}")
-        self._warm_up_level_ocr_async()
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        uses_level_ocr = self._scenario_uses_level_ocr()
+        thread_target = self._run_after_ocr_warmup if uses_level_ocr else self._run_loop
+        if uses_level_ocr:
+            self.log(f"Scenario '{self.scenario.name}' preparing OCR before start...")
+        self._thread = threading.Thread(target=thread_target, daemon=True)
         self._thread.start()
-        self.log(f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}")
+        if not uses_level_ocr:
+            self.log(f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}")
 
     def stop(self):
         running = self.is_running
@@ -160,6 +164,19 @@ class MacroEngine:
             self.log(f"[error] engine crashed: {e}")
         finally:
             self._cleanup_runtime()
+
+    def _run_after_ocr_warmup(self):
+        ready = self._warm_up_level_ocr()
+        if self._stop_event.is_set():
+            self._cleanup_runtime()
+            return
+        if not ready:
+            self.log("[ocr] continuing with digit-template fallback")
+        self.log(
+            f"Scenario '{self.scenario.name}' started. "
+            f"Kill switch: {self.scenario.kill_switch.upper()}"
+        )
+        self._run_loop()
 
     def _evaluate_step_supports_frame_cache(self, evaluate_step):
         try:
@@ -311,6 +328,11 @@ class MacroEngine:
     def _evaluate_template_condition(self, index, cond, frame, off_x, off_y, collect_all):
         template = self._load_template(cond.template_path)
 
+        if cond.comparison_template_path:
+            return self._evaluate_competing_template_condition(
+                index, cond, frame, template, off_x, off_y
+            )
+
         if collect_all and not cond.negate:
             template_matches = self._find_template_matches_in_frame(frame, template, cond.confidence, collect_all=True)
             found = bool(template_matches)
@@ -325,8 +347,37 @@ class MacroEngine:
 
         return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
 
+    def _evaluate_competing_template_condition(self, index, cond, frame, template, off_x, off_y):
+        rival_template = self._load_template(cond.comparison_template_path)
+        target_match = self._find_best_template_match_in_frame(frame, template)
+        rival_match = self._find_best_template_match_in_frame(frame, rival_template)
+        target_score = target_match[4] if target_match else -1.0
+        rival_score = rival_match[4] if rival_match else -1.0
+        margin = max(0.0, float(cond.comparison_margin or 0.0))
+        found = target_score >= cond.confidence and target_score >= rival_score + margin
+        ok = (not found) if cond.negate else found
+        if not found or cond.negate:
+            return ok, []
+
+        matches = self._template_matches_to_runtime_matches(
+            index, cond, [target_match], off_x, off_y
+        )
+        for match in matches:
+            match["comparison_confidence"] = rival_score
+            match["score_margin"] = target_score - rival_score
+            match["label"] += (
+                f" beats {os.path.basename(cond.comparison_template_path)} "
+                f"{rival_score:.2f} by {target_score - rival_score:.2f}"
+            )
+        return ok, matches
+
     def _preview_template_condition(self, index, cond, frame, off_x, off_y, image):
         template = self._load_template(cond.template_path)
+        if cond.comparison_template_path:
+            ok, matches = self._evaluate_competing_template_condition(
+                index, cond, frame, template, off_x, off_y
+            )
+            return ok, matches, image
         template_matches = self._find_template_matches_in_frame(frame, template, cond.confidence, collect_all=True)
         found = bool(template_matches)
         ok = (not found) if cond.negate else found
@@ -354,6 +405,16 @@ class MacroEngine:
                 "center": center,
             })
         return matches
+
+    def _find_best_template_match_in_frame(self, frame, template):
+        candidates = []
+        for scale in self.TEMPLATE_SCALE_FACTORS:
+            candidates.extend(
+                self._find_template_matches_at_scale(
+                    frame, template, confidence=-1.0, scale=scale, collect_all=False
+                )
+            )
+        return max(candidates, key=lambda item: item[4]) if candidates else None
 
     def _find_template_matches_in_frame(self, frame, template, confidence, collect_all=True):
         matches = self._find_template_matches_at_scale(frame, template, confidence, 1.0, collect_all)
@@ -499,6 +560,11 @@ class MacroEngine:
             self.log(f"  click ({x}, {y})")
 
         elif action.type == "click_matching_row":
+            refreshed = self._refresh_click_matching_row_matches(step, action)
+            if refreshed is None:
+                self.log(f"  [skip] '{step.name}' conditions changed before row click")
+                return
+            points, matches = refreshed
             targets = self._find_matching_row_targets(action, matches)
             if not targets:
                 self.log(f"  [skip] '{step.name}' no valid matching row target")
@@ -558,6 +624,21 @@ class MacroEngine:
                 scenario_step.enabled = False
                 self.log(f"  [no-match] step '{step_name}' -> disabled")
 
+    def _refresh_click_matching_row_matches(self, step: Step, action: Action):
+        if action.match_condition_index is None or action.on_condition_index is None:
+            return None
+        frame_cache = {}
+        evaluate_uses_frame_cache = getattr(self, "_evaluate_uses_frame_cache", None)
+        if evaluate_uses_frame_cache is None:
+            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
+        if evaluate_uses_frame_cache:
+            met, points, matches = self._evaluate_step(step, frame_cache=frame_cache)
+        else:
+            met, points, matches = self._evaluate_step(step)
+        if not met:
+            return None
+        return points, matches
+
     def _click_point(self, x, y, button):
         move_duration = getattr(self, "click_move_duration", 0.0)
         if move_duration:
@@ -576,17 +657,18 @@ class MacroEngine:
         target_matches = matches.get(target_index, [])
         selected = []
         for reference in sorted(reference_matches, key=lambda m: m["center"][1]):
-            if not self._row_level_allowed(action, reference):
-                continue
             ref_y = reference["center"][1]
             row_targets = [
                 target for target in target_matches
                 if abs(target["center"][1] - ref_y) <= action.row_tolerance
             ]
-            if row_targets:
-                selected.append(self._choose_row_target(reference, row_targets, action.target_choice)["center"])
-                if action.row_mode != "all":
-                    break
+            if not row_targets:
+                continue
+            if not self._row_level_allowed(action, reference):
+                continue
+            selected.append(self._choose_row_target(reference, row_targets, action.target_choice)["center"])
+            if action.row_mode != "all":
+                break
         return selected
 
     def _row_level_allowed(self, action: Action, reference: dict):
@@ -618,13 +700,138 @@ class MacroEngine:
 
     def _read_level_for_row(self, action: Action, reference: dict):
         roi = action.level_roi or [-90, -45, 220, 100]
-        center_x, center_y = reference["center"]
-        left = int(center_x + roi[0])
-        top = int(center_y + roi[1])
-        width = int(roi[2])
-        height = int(roi[3])
-
         window_rect = self._get_target_window_rect()
+        roi_text = tuple(roi)
+        center_text = tuple(reference["center"])
+        min_digits = max(1, int(getattr(action, "level_min_digits", 1) or 1))
+        digit_templates = self._load_digit_templates(action.level_digit_template_dir)
+        if not digit_templates:
+            self.log(f"  [warn] no level digit templates found in {action.level_digit_template_dir}")
+
+        attempts = []
+        for attempt_index, rect in enumerate(self._level_crop_rects(action, reference, window_rect)):
+            frame, _, _ = self._grab(rect)
+            ocr_result = self._read_level_with_ocr(frame)
+            fallback_level = None
+            if digit_templates:
+                fallback_level = self._read_level_from_frame(
+                    frame,
+                    digit_templates,
+                    min_digits=min_digits,
+                )
+
+            attempt = {
+                "frame": frame,
+                "rect": rect,
+                "ocr_result": ocr_result,
+                "fallback_level": fallback_level,
+                "top_scores": None,
+                "status": "unread",
+            }
+            attempts.append(attempt)
+
+            if (
+                ocr_result
+                and ocr_result.level is not None
+                and not self._ocr_level_meets_min_digits(ocr_result, min_digits)
+            ):
+                confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
+                self.log(
+                    f"  [level] {ocr_result.engine} ignored {ocr_result.level}{confidence_text} "
+                    f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}; need {min_digits} digit(s)"
+                )
+
+            if (
+                ocr_result
+                and ocr_result.level is not None
+                and self._ocr_level_meets_min_digits(ocr_result, min_digits)
+            ):
+                confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
+                self.log(
+                    f"  [level] {ocr_result.engine} read {ocr_result.level}{confidence_text} "
+                    f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}"
+                )
+                if fallback_level is not None and fallback_level != ocr_result.level:
+                    if self._should_ignore_digit_fallback_conflict(ocr_result, fallback_level):
+                        self.log(
+                            f"  [level] ignored digit_fallback={fallback_level} for row center={center_text}; "
+                            f"matches OCR level {ocr_result.level} with extra digit noise"
+                        )
+                        if attempt_index:
+                            self.log(f"  [level] recovered with alternate crop rect={rect}")
+                        return ocr_result.level
+                    attempt["status"] = "conflict"
+                    continue
+                if attempt_index:
+                    self.log(f"  [level] recovered with alternate crop rect={rect}")
+                return ocr_result.level
+
+            if ocr_result and ocr_result.error and not getattr(self, "_level_ocr_unavailable_logged", False):
+                self.log(f"  [warn] OCR unavailable: {ocr_result.error}")
+                self._level_ocr_unavailable_logged = True
+
+            if fallback_level is not None:
+                ocr_text = "" if not ocr_result or not ocr_result.text else f"; OCR text='{ocr_result.text}'"
+                self.log(
+                    f"  [level] digit_fallback read {fallback_level} from crop rect={rect} "
+                    f"roi={roi_text}{ocr_text}"
+                )
+                if attempt_index:
+                    self.log(f"  [level] recovered with alternate crop rect={rect}")
+                return fallback_level
+
+            attempt["top_scores"] = self._level_read_top_scores(frame, digit_templates)
+
+        conflict_attempt = next((attempt for attempt in attempts if attempt["status"] == "conflict"), None)
+        if conflict_attempt:
+            rect = conflict_attempt["rect"]
+            ocr_result = conflict_attempt["ocr_result"]
+            fallback_level = conflict_attempt["fallback_level"]
+            self.log(
+                f"  [skip] OCR conflict for row center={center_text}: "
+                f"{ocr_result.engine}={ocr_result.level}, digit_fallback={fallback_level}"
+            )
+            path = self._save_level_debug_crop(conflict_attempt["frame"], rect, reference)
+            if path:
+                self.log(f"  [debug] saved level conflict crop: {path}")
+            return None
+
+        debug_attempt = self._best_level_debug_attempt(attempts)
+        if debug_attempt:
+            rect = debug_attempt["rect"]
+            self.log(
+                f"  [level] row center={center_text} unread from crop rect={rect} "
+                f"roi={roi_text}; need {min_digits} digit(s)"
+            )
+            top_scores = debug_attempt["top_scores"] or []
+            if top_scores:
+                scores_text = ", ".join(f"{digit}={score:.2f}" for digit, score in top_scores)
+                self.log(f"  [debug] top digit scores: {scores_text}")
+            path = self._save_level_debug_crop(debug_attempt["frame"], rect, reference)
+            if path:
+                self.log(f"  [debug] saved level crop: {path}")
+        return None
+
+    def _level_crop_rects(self, action: Action, reference: dict, window_rect=None):
+        roi = action.level_roi or [-90, -45, 220, 100]
+        center_x, center_y = reference["center"]
+        offsets = (0, 8, 16, 24, -8, -16)
+        rects = []
+        seen = set()
+        for y_offset in offsets:
+            left = int(center_x + roi[0])
+            top = int(center_y + roi[1] + y_offset)
+            width = int(roi[2])
+            height = int(roi[3])
+            rect = self._constrain_level_rect((left, top, width, height), window_rect)
+            if rect in seen:
+                continue
+            seen.add(rect)
+            rects.append(rect)
+        return rects
+
+    def _constrain_level_rect(self, rect, window_rect=None):
+        left, top, width, height = rect
         if window_rect:
             win_left, win_top, win_width, win_height = window_rect
             left = max(win_left, min(left, win_left + win_width - 1))
@@ -632,87 +839,24 @@ class MacroEngine:
             right = max(left + 1, min(left + width, win_left + win_width))
             bottom = max(top + 1, min(top + height, win_top + win_height))
             width, height = right - left, bottom - top
+        return (left, top, width, height)
 
-        frame, _, _ = self._grab((left, top, width, height))
-        rect = (left, top, width, height)
-        roi_text = tuple(roi)
-        center_text = tuple(reference["center"])
-        min_digits = max(1, int(getattr(action, "level_min_digits", 1) or 1))
-
-        ocr_result = self._read_level_with_ocr(frame)
-        digit_templates = self._load_digit_templates(action.level_digit_template_dir)
-        fallback_level = None
-        if digit_templates:
-            fallback_level = self._read_level_from_frame(
-                frame,
-                digit_templates,
-                min_digits=min_digits,
+    def _best_level_debug_attempt(self, attempts):
+        if not attempts:
+            return None
+        with_scores = [attempt for attempt in attempts if attempt.get("top_scores")]
+        if with_scores:
+            return max(with_scores, key=lambda attempt: attempt["top_scores"][0][1])
+        with_text = [
+            attempt for attempt in attempts
+            if attempt.get("ocr_result") is not None and attempt["ocr_result"].text
+        ]
+        if with_text:
+            return max(
+                with_text,
+                key=lambda attempt: attempt["ocr_result"].confidence or 0.0,
             )
-        else:
-            self.log(f"  [warn] no level digit templates found in {action.level_digit_template_dir}")
-
-        if (
-            ocr_result
-            and ocr_result.level is not None
-            and not self._ocr_level_meets_min_digits(ocr_result, min_digits)
-        ):
-            confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
-            self.log(
-                f"  [level] {ocr_result.engine} ignored {ocr_result.level}{confidence_text} "
-                f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}; need {min_digits} digit(s)"
-            )
-
-        if (
-            ocr_result
-            and ocr_result.level is not None
-            and self._ocr_level_meets_min_digits(ocr_result, min_digits)
-        ):
-            confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
-            self.log(
-                f"  [level] {ocr_result.engine} read {ocr_result.level}{confidence_text} "
-                f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}"
-            )
-            if fallback_level is not None and fallback_level != ocr_result.level:
-                if self._should_ignore_digit_fallback_conflict(ocr_result, fallback_level):
-                    self.log(
-                        f"  [level] ignored digit_fallback={fallback_level} for row center={center_text}; "
-                        f"matches OCR level {ocr_result.level} with extra digit noise"
-                    )
-                    return ocr_result.level
-                self.log(
-                    f"  [skip] OCR conflict for row center={center_text}: "
-                    f"{ocr_result.engine}={ocr_result.level}, digit_fallback={fallback_level}"
-                )
-                path = self._save_level_debug_crop(frame, rect, reference)
-                if path:
-                    self.log(f"  [debug] saved level conflict crop: {path}")
-                return None
-            return ocr_result.level
-
-        if ocr_result and ocr_result.error and not getattr(self, "_level_ocr_unavailable_logged", False):
-            self.log(f"  [warn] OCR unavailable: {ocr_result.error}")
-            self._level_ocr_unavailable_logged = True
-
-        level = fallback_level
-        if level is not None:
-            ocr_text = "" if not ocr_result or not ocr_result.text else f"; OCR text='{ocr_result.text}'"
-            self.log(
-                f"  [level] digit_fallback read {level} from crop rect={rect} "
-                f"roi={roi_text}{ocr_text}"
-            )
-        else:
-            self.log(
-                f"  [level] row center={center_text} unread from crop rect={rect} "
-                f"roi={roi_text}; need {min_digits} digit(s)"
-            )
-            top_scores = self._level_read_top_scores(frame, digit_templates)
-            if top_scores:
-                scores_text = ", ".join(f"{digit}={score:.2f}" for digit, score in top_scores)
-                self.log(f"  [debug] top digit scores: {scores_text}")
-            path = self._save_level_debug_crop(frame, rect, reference)
-            if path:
-                self.log(f"  [debug] saved level crop: {path}")
-        return level
+        return attempts[0]
 
     def _is_spurious_leading_one_conflict(self, ocr_level, fallback_level):
         if ocr_level is None or fallback_level is None:
@@ -737,13 +881,27 @@ class MacroEngine:
             return True
         if confidence is not None and confidence < 0.75:
             return False
+        if (
+            confidence is not None
+            and confidence >= 0.75
+            and self._ocr_text_has_level_prefix(ocr_result.text)
+            and self._is_repeated_one_noise(fallback_text, ocr_text)
+        ):
+            return True
         if confidence is not None and confidence >= 0.85 and self._ocr_text_has_level_prefix(ocr_result.text):
             return True
         return len(fallback_text) > len(ocr_text) and ocr_text in fallback_text
 
+    def _is_repeated_one_noise(self, fallback_text, ocr_text):
+        return (
+            len(fallback_text) > len(ocr_text)
+            and len(ocr_text) >= 2
+            and set(fallback_text) == {"1"}
+        )
+
     def _ocr_text_has_level_prefix(self, text):
         normalized = (text or "").lower().replace(" ", "")
-        normalized = normalized.replace("1v", "lv").replace("iv", "lv")
+        normalized = normalized.replace("1v", "lv").replace("iv", "lv").replace("ly", "lv")
         return bool(re.search(r"l[v\W_]*\d", normalized))
 
     def _ocr_level_meets_min_digits(self, ocr_result, min_digits):
@@ -797,13 +955,14 @@ class MacroEngine:
             ready = reader.warm_up()
         except Exception as exc:
             self.log(f"[ocr] warm-up failed: {exc}")
-            return
+            return False
         elapsed = time.perf_counter() - started
         if ready:
             self.log(f"[ocr] warm-up ready in {elapsed:.2f}s")
         else:
             error = reader.init_error or "unknown error"
             self.log(f"[ocr] warm-up unavailable after {elapsed:.2f}s: {error}")
+        return ready
 
     def _load_digit_templates(self, folder):
         folder = project_path(folder)
@@ -824,7 +983,14 @@ class MacroEngine:
         cache[cache_key] = templates
         return templates
 
-    def _read_level_from_frame(self, frame, digit_templates, confidence=0.52, min_digits=1):
+    def _read_level_from_frame(
+        self,
+        frame,
+        digit_templates,
+        confidence=0.52,
+        min_digits=1,
+        min_score_margin=0.0,
+    ):
         if frame is None or not digit_templates:
             return None
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
@@ -851,6 +1017,7 @@ class MacroEngine:
                     break
             candidates.extend(kept)
 
+        candidates = self._filter_digit_candidates_by_margin(candidates, min_score_margin)
         selected = []
         for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
             if any(self._box_iou(candidate["box"], existing["box"]) > 0.3 for existing in selected):
@@ -867,6 +1034,29 @@ class MacroEngine:
         if len(digits) < min_digits:
             return None
         return int(digits) if digits else None
+
+    def _filter_digit_candidates_by_margin(self, candidates, min_score_margin):
+        if not candidates or min_score_margin <= 0:
+            return candidates
+
+        groups = []
+        for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+            target_group = None
+            for group in groups:
+                if any(self._box_iou(candidate["box"], existing["box"]) > 0.3 for existing in group):
+                    target_group = group
+                    break
+            if target_group is None:
+                groups.append([candidate])
+            else:
+                target_group.append(candidate)
+
+        filtered = []
+        for group in groups:
+            group = sorted(group, key=lambda item: item["score"], reverse=True)
+            if len(group) == 1 or group[0]["score"] - group[1]["score"] >= min_score_margin:
+                filtered.append(group[0])
+        return filtered
 
     def _select_level_digit_run(self, candidates, min_digits):
         if not candidates:

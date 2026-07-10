@@ -47,6 +47,39 @@ class StepPreviewTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["image_box"], (18, 15, 40, 37))
 
+    def test_competing_template_condition_accepts_only_the_better_template(self):
+        engine = object.__new__(MacroEngine)
+        rng = np.random.default_rng(7)
+        target = rng.integers(0, 256, (12, 12, 3), dtype=np.uint8)
+        rival = target.copy()
+        rival[2:7, 2:7] = 255 - rival[2:7, 2:7]
+        templates = {"target.png": target, "rival.png": rival}
+        engine._load_template = templates.__getitem__
+        cond = ImageCondition(
+            template_path="target.png",
+            confidence=0.5,
+            comparison_template_path="rival.png",
+            comparison_margin=0.03,
+        )
+
+        target_frame = np.zeros((30, 30, 3), dtype=np.uint8)
+        target_frame[8:20, 9:21] = target
+        target_ok, target_matches, _ = engine._preview_template_condition(
+            0, cond, target_frame, 0, 0, None
+        )
+
+        rival_frame = np.zeros((30, 30, 3), dtype=np.uint8)
+        rival_frame[8:20, 9:21] = rival
+        rival_ok, rival_matches, _ = engine._preview_template_condition(
+            0, cond, rival_frame, 0, 0, None
+        )
+
+        self.assertTrue(target_ok)
+        self.assertEqual(len(target_matches), 1)
+        self.assertGreaterEqual(target_matches[0]["score_margin"], 0.03)
+        self.assertFalse(rival_ok)
+        self.assertEqual(rival_matches, [])
+
     def test_preview_step_keeps_each_condition_image_separate(self):
         engine = object.__new__(MacroEngine)
         image_a = object()
