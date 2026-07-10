@@ -195,6 +195,29 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(closed, [True])
         self.assertEqual(logs, ["Scenario stopped."])
 
+    def test_f11_start_hotkey_queues_start_on_ui_thread(self):
+        ui = object.__new__(app.App)
+        ui.control_queue = queue.Queue()
+        ui._start_hotkey_handle = None
+
+        with patch.object(app.keyboard, "add_hotkey", return_value="f11-handle") as add_hotkey:
+            ui._register_start_hotkey()
+            callback = add_hotkey.call_args.args[1]
+            callback()
+
+        self.assertEqual(add_hotkey.call_args.args[0], "f11")
+        self.assertEqual(ui._start_hotkey_handle, "f11-handle")
+        self.assertEqual(ui.control_queue.get_nowait(), "start")
+
+    def test_f11_start_hotkey_is_ignored_while_engine_is_running(self):
+        ui = object.__new__(app.App)
+        ui.engine = type("Engine", (), {"is_running": True})()
+        ui._start_engine = Mock()
+
+        ui._start_engine_from_hotkey()
+
+        ui._start_engine.assert_not_called()
+
     def test_model_default_paths_are_project_relative(self):
         self.assertTrue(os.path.isabs(models.SCENARIOS_DIR))
         self.assertTrue(os.path.isabs(models.TEMPLATES_DIR))

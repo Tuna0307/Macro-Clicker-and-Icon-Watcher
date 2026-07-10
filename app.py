@@ -11,6 +11,7 @@ import queue
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox, simpledialog
+import keyboard
 import mss
 from PIL import ImageDraw, ImageTk
 
@@ -814,6 +815,8 @@ class App:
         self.scenario = Scenario(name="untitled")
         self.engine = None
         self.log_queue = queue.Queue()
+        self.control_queue = queue.Queue()
+        self._start_hotkey_handle = None
         app_dir = os.path.dirname(os.path.abspath(__file__))
         self.log_dir = os.path.join(app_dir, "logs")
         self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
@@ -839,6 +842,7 @@ class App:
         self._refresh_scenario_list()
         self._refresh_steps()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._register_start_hotkey()
         self.root.after(150, self._poll_log_queue)
         self._write_log_file("---- app started ----")
 
@@ -1246,6 +1250,8 @@ class App:
 
     # ---- engine control ----
     def _start_engine(self):
+        if self.engine and self.engine.is_running:
+            return
         if not self.scenario.steps:
             messagebox.showwarning("No steps", "Add at least one step before running.")
             return
@@ -1267,11 +1273,44 @@ class App:
         self.stop_btn.config(state="disabled")
         self.status_label.config(text="Stopped", fg="#c62828")
 
+    def _register_start_hotkey(self):
+        try:
+            self._start_hotkey_handle = keyboard.add_hotkey(
+                "f11", self._request_start_from_hotkey
+            )
+        except Exception as exc:
+            self._queue_log(f"[warn] could not register start hotkey F11: {exc}")
+
+    def _request_start_from_hotkey(self):
+        self.control_queue.put("start")
+
+    def _start_engine_from_hotkey(self):
+        if self.engine and self.engine.is_running:
+            return
+        self._start_engine()
+
+    def _remove_start_hotkey(self):
+        handle = getattr(self, "_start_hotkey_handle", None)
+        if handle is None:
+            return
+        try:
+            keyboard.remove_hotkey(handle)
+        except Exception:
+            pass
+        self._start_hotkey_handle = None
+
     # ---- logging ----
     def _queue_log(self, msg):
         self.log_queue.put(msg)
 
     def _poll_log_queue(self):
+        try:
+            while True:
+                command = self.control_queue.get_nowait()
+                if command == "start":
+                    self._start_engine_from_hotkey()
+        except queue.Empty:
+            pass
         try:
             while True:
                 self._log(self.log_queue.get_nowait())
@@ -1335,6 +1374,7 @@ class App:
         self._log_file_handle = None
 
     def _on_close(self):
+        self._remove_start_hotkey()
         if self.engine and self.engine.is_running:
             self.engine.stop()
         if hasattr(self, "alert_tab"):

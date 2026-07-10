@@ -80,6 +80,32 @@ class StepPreviewTests(unittest.TestCase):
         self.assertFalse(rival_ok)
         self.assertEqual(rival_matches, [])
 
+    def test_competing_template_condition_supports_twenty_percent_ui_scaling(self):
+        import cv2
+
+        engine = object.__new__(MacroEngine)
+        rng = np.random.default_rng(11)
+        target = rng.integers(0, 256, (20, 20, 3), dtype=np.uint8)
+        rival = target.copy()
+        rival[4:12, 4:12] = 255 - rival[4:12, 4:12]
+        scaled_target = cv2.resize(target, (24, 24), interpolation=cv2.INTER_LINEAR)
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        frame[12:36, 14:38] = scaled_target
+        templates = {"target.png": target, "rival.png": rival}
+        engine._load_template = templates.__getitem__
+        cond = ImageCondition(
+            template_path="target.png",
+            confidence=0.85,
+            comparison_template_path="rival.png",
+            comparison_margin=0.03,
+        )
+
+        ok, matches, _ = engine._preview_template_condition(0, cond, frame, 0, 0, None)
+
+        self.assertTrue(ok)
+        self.assertEqual(matches[0]["scale"], 1.2)
+        self.assertGreaterEqual(matches[0]["score_margin"], 0.03)
+
     def test_preview_step_keeps_each_condition_image_separate(self):
         engine = object.__new__(MacroEngine)
         image_a = object()

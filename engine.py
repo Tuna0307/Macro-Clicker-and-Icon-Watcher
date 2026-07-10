@@ -27,7 +27,7 @@ _WINDOW_UNAVAILABLE = object()
 
 
 class MacroEngine:
-    TEMPLATE_SCALE_FACTORS = (1.0, 0.95, 1.05, 0.9, 1.1)
+    TEMPLATE_SCALE_FACTORS = (1.0, 0.95, 1.05, 0.9, 1.1, 0.85, 1.15, 0.8, 1.2)
 
     def __init__(self, scenario: Scenario, log: Optional[Callable[[str], None]] = None):
         self.scenario = scenario
