@@ -44,6 +44,7 @@ from window_locator import (
     resolve_window_region,
     visible_window_titles,
 )
+from ui_components import COLORS, CollapsibleSection, Tooltip, configure_theme
 
 try:
     import keyboard
@@ -1070,52 +1071,118 @@ class AlertWatcherFrame(ttk.Frame):
 
     # ---------------- UI construction ----------------
     def _build_ui(self):
-        top = ttk.Frame(self, padding=10)
-        top.pack(fill="both", expand=True)
+        toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(14, 11))
+        toolbar.pack(fill="x", padx=10, pady=(10, 6))
+        toolbar.columnconfigure(0, weight=1)
+        ttk.Label(toolbar, text="Icon Alerts", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.status_label = ttk.Label(toolbar, text="Idle", style="Idle.Status.TLabel")
+        self.status_label.grid(row=0, column=1, padx=(8, 10))
+        self.start_btn = ttk.Button(
+            toolbar,
+            text="Start monitoring",
+            style="Primary.TButton",
+            command=self._start_watching,
+        )
+        self.start_btn.grid(row=0, column=2, padx=3)
+        self.stop_btn = ttk.Button(
+            toolbar,
+            text="Stop",
+            style="Danger.TButton",
+            command=self._stop_watching,
+            state="disabled",
+        )
+        self.stop_btn.grid(row=0, column=3, padx=3)
+        test_alert_btn = ttk.Button(toolbar, text="Test alert", command=self._test_alert)
+        test_alert_btn.grid(row=0, column=4, padx=(8, 0))
+        Tooltip(self.start_btn, "Start or stop with the configured global hotkey")
+        Tooltip(test_alert_btn, "Play the current alert sound and popup")
 
-        left = ttk.Frame(top)
-        left.pack(side="left", fill="both", expand=True)
+        workspace = ttk.PanedWindow(self, orient="horizontal")
+        workspace.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
-        ttk.Label(left, text="Watched icons", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        self.listbox = tk.Listbox(left, height=12)
-        self.listbox.pack(fill="both", expand=True, pady=(4, 6))
+        left = ttk.Frame(workspace, style="Surface.TFrame", padding=14, width=650)
+        right = ttk.Frame(workspace, style="Surface.TFrame", padding=14, width=290)
+        workspace.add(left, weight=3)
+        workspace.add(right, weight=1)
+
+        ttk.Label(left, text="Watched icons", style="Title.TLabel").pack(anchor="w")
+        self.listbox = tk.Listbox(
+            left,
+            height=10,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            selectbackground=COLORS["accent_soft"],
+            selectforeground=COLORS["text"],
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["accent"],
+            relief="flat",
+            borderwidth=0,
+            font=("Segoe UI", 10),
+            exportselection=False,
+        )
+        self.listbox.pack(fill="both", expand=True, pady=(10, 8))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
-        btn_row = ttk.Frame(left)
+        btn_row = ttk.Frame(left, style="Surface.TFrame")
         btn_row.pack(fill="x")
-        ttk.Button(btn_row, text="Add From File", command=self._add_from_file).pack(side="left", padx=2)
-        ttk.Button(btn_row, text="Capture From Screen", command=self._add_from_screen).pack(side="left", padx=2)
-        ttk.Button(btn_row, text="Remove", command=self._remove_selected).pack(side="left", padx=2)
+        add_file_btn = ttk.Button(btn_row, text="Add from file", command=self._add_from_file)
+        add_file_btn.pack(side="left", padx=(0, 4))
+        capture_btn = ttk.Button(btn_row, text="Capture", command=self._add_from_screen)
+        capture_btn.pack(side="left", padx=4)
+        remove_btn = ttk.Button(btn_row, text="Remove", command=self._remove_selected)
+        remove_btn.pack(side="left", padx=4)
+        Tooltip(add_file_btn, "Add an existing icon image")
+        Tooltip(capture_btn, "Capture an icon from the screen")
 
-        icon_region_row = ttk.Frame(left)
-        icon_region_row.pack(fill="x", pady=(4, 0))
-        ttk.Button(icon_region_row, text="Set Icon Region",
-                   command=self._set_selected_icon_region).pack(side="left", padx=2)
-        ttk.Button(icon_region_row, text="Clear Icon Region",
-                   command=self._clear_selected_icon_region).pack(side="left", padx=2)
-        ttk.Button(icon_region_row, text="Show Icon Region",
-                   command=self._show_selected_icon_region).pack(side="left", padx=2)
-        self.icon_region_label = ttk.Label(icon_region_row, text="Icon region: global")
-        self.icon_region_label.pack(side="left", padx=8)
+        ttk.Separator(left).pack(fill="x", pady=12)
+        selected_header = ttk.Frame(left, style="Surface.TFrame")
+        selected_header.pack(fill="x")
+        ttk.Label(selected_header, text="Selected icon", style="Section.TLabel").pack(side="left")
+        self.icon_region_label = ttk.Label(selected_header, text="Region: global", style="Muted.TLabel")
+        self.icon_region_label.pack(side="right")
 
-        thresh_row = ttk.Frame(left)
-        thresh_row.pack(fill="x", pady=(8, 0))
-        ttk.Label(thresh_row, text="Match sensitivity:").pack(side="left")
+        icon_region_row = ttk.Frame(left, style="Surface.TFrame")
+        icon_region_row.pack(fill="x", pady=(6, 0))
+        ttk.Button(
+            icon_region_row,
+            text="Set region",
+            command=self._set_selected_icon_region,
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            icon_region_row,
+            text="Show region",
+            command=self._show_selected_icon_region,
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            icon_region_row,
+            text="Clear",
+            command=self._clear_selected_icon_region,
+        ).pack(side="left", padx=4)
+
+        thresh_row = ttk.Frame(left, style="Surface.TFrame")
+        thresh_row.pack(fill="x", pady=(12, 0))
+        ttk.Label(thresh_row, text="Match sensitivity", style="Surface.TLabel").pack(side="left")
         self.thresh_var = tk.DoubleVar(value=DEFAULT_THRESHOLD)
         self.thresh_scale = ttk.Scale(thresh_row, from_=0.6, to=0.97, variable=self.thresh_var,
                                        command=self._on_threshold_change)
         self.thresh_scale.pack(side="left", fill="x", expand=True, padx=6)
-        self.thresh_label = ttk.Label(thresh_row, text=f"{DEFAULT_THRESHOLD:.2f}")
+        self.thresh_label = ttk.Label(thresh_row, text=f"{DEFAULT_THRESHOLD:.2f}", style="Surface.TLabel")
         self.thresh_label.pack(side="left")
 
-        right = ttk.Frame(top, width=180)
-        right.pack(side="left", fill="y", padx=(12, 0))
-        ttk.Label(right, text="Preview", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        self.preview_label = tk.Label(right, bg="#2b2b2b", width=22, height=10)
-        self.preview_label.pack(pady=4)
+        ttk.Label(right, text="Detection settings", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(right, text="Preview", style="Section.TLabel").pack(anchor="w", pady=(12, 4))
+        self.preview_label = tk.Label(
+            right,
+            bg=COLORS["surface_alt"],
+            width=24,
+            height=4,
+            relief="flat",
+            borderwidth=0,
+        )
+        self.preview_label.pack(fill="x", pady=(0, 8))
 
-        ttk.Separator(right).pack(fill="x", pady=(8, 6))
-        ttk.Label(right, text="Scan options", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Separator(right).pack(fill="x", pady=(4, 10))
+        ttk.Label(right, text="Scan source", style="Section.TLabel").pack(anchor="w")
         self.monitor_var = tk.StringVar(value=self.settings.monitor_choice)
         self.monitor_combo = ttk.Combobox(
             right,
@@ -1125,7 +1192,7 @@ class AlertWatcherFrame(ttk.Frame):
             width=18,
         )
         self.monitor_combo.pack(fill="x", pady=(3, 4))
-        ttk.Label(right, text="Target window:").pack(anchor="w", pady=(4, 0))
+        ttk.Label(right, text="Target window", style="Surface.TLabel").pack(anchor="w", pady=(8, 0))
         self.target_window_var = tk.StringVar(value=self.settings.target_window_title)
         self.target_window_combo = ttk.Combobox(
             right,
@@ -1135,38 +1202,55 @@ class AlertWatcherFrame(ttk.Frame):
             width=18,
         )
         self.target_window_combo.pack(fill="x", pady=(2, 2))
-        ttk.Button(right, text="Refresh Windows", command=self._refresh_window_list).pack(fill="x", pady=(0, 4))
+        ttk.Button(right, text="Refresh windows", command=self._refresh_window_list).pack(fill="x", pady=(2, 6))
+
+        advanced_configured = (
+            not self.settings.grayscale
+            or self.settings.debug
+            or self.settings.cooldown_sec != DEFAULT_COOLDOWN_SEC
+            or self.settings.alert_volume != DEFAULT_ALERT_VOLUME
+        )
+        advanced_detection = CollapsibleSection(
+            right,
+            "Advanced detection" + (" (configured)" if advanced_configured else ""),
+            expanded=False,
+        )
+        advanced_detection.pack(fill="x", pady=(2, 4))
+        advanced = advanced_detection.content
+
         self.grayscale_var = tk.BooleanVar(value=self.settings.grayscale)
-        ttk.Checkbutton(right, text="Grayscale", variable=self.grayscale_var).pack(anchor="w")
+        ttk.Checkbutton(advanced, text="Grayscale", variable=self.grayscale_var).pack(anchor="w")
         self.debug_var = tk.BooleanVar(value=self.settings.debug)
-        ttk.Checkbutton(right, text="Debug scores", variable=self.debug_var).pack(anchor="w")
+        ttk.Checkbutton(advanced, text="Debug scores", variable=self.debug_var).pack(anchor="w")
 
-        cooldown_row = ttk.Frame(right)
+        cooldown_row = ttk.Frame(advanced, style="Surface.TFrame")
         cooldown_row.pack(fill="x", pady=(4, 4))
-        ttk.Label(cooldown_row, text="Cooldown").pack(side="left")
+        ttk.Label(cooldown_row, text="Cooldown", style="Surface.TLabel").pack(side="left")
         self.cooldown_var = tk.DoubleVar(value=self.settings.cooldown_sec)
-        tk.Spinbox(cooldown_row, from_=0.0, to=60.0, increment=0.5,
-                   textvariable=self.cooldown_var, width=5).pack(side="right")
+        ttk.Spinbox(cooldown_row, from_=0.0, to=60.0, increment=0.5,
+                    textvariable=self.cooldown_var, width=6).pack(side="right")
 
-        volume_row = ttk.Frame(right)
+        volume_row = ttk.Frame(advanced, style="Surface.TFrame")
         volume_row.pack(fill="x", pady=(4, 4))
-        ttk.Label(volume_row, text="Alert volume").pack(side="left")
+        ttk.Label(volume_row, text="Alert volume", style="Surface.TLabel").pack(side="left")
         self.volume_var = tk.DoubleVar(value=self.settings.alert_volume * 100.0)
         self.volume_label = ttk.Label(volume_row, text=f"{int(round(self.settings.alert_volume * 100))}%")
         self.volume_label.pack(side="right")
         ttk.Scale(
-            right,
+            advanced,
             from_=0,
             to=100,
             variable=self.volume_var,
             command=self._on_volume_change,
         ).pack(fill="x", pady=(0, 4))
 
-        self.region_label = ttk.Label(right, text="Region: full screen")
-        self.region_label.pack(anchor="w", pady=(4, 2))
-        ttk.Button(right, text="Set Scan Region", command=self._set_scan_region).pack(fill="x", pady=1)
-        ttk.Button(right, text="Clear Region", command=self._clear_scan_region).pack(fill="x", pady=1)
-        ttk.Button(right, text="Test Screenshot", command=self._test_screenshot).pack(fill="x", pady=(6, 1))
+        ttk.Separator(right).pack(fill="x", pady=(8, 10))
+        ttk.Label(right, text="Scan region", style="Section.TLabel").pack(anchor="w")
+        self.region_label = ttk.Label(right, text="Region: full screen", style="Muted.TLabel")
+        self.region_label.pack(anchor="w", pady=(3, 5))
+        ttk.Button(right, text="Set region", command=self._set_scan_region).pack(fill="x", pady=2)
+        ttk.Button(right, text="Clear region", command=self._clear_scan_region).pack(fill="x", pady=2)
+        ttk.Button(right, text="Test screenshot", command=self._test_screenshot).pack(fill="x", pady=(8, 2))
 
         ttk.Separator(right).pack(fill="x", pady=(8, 6))
         self.tray_var = tk.BooleanVar(value=self.settings.minimize_to_tray)
@@ -1174,21 +1258,28 @@ class AlertWatcherFrame(ttk.Frame):
             ttk.Checkbutton(right, text="Minimize to tray", variable=self.tray_var,
                             command=self._on_settings_changed).pack(anchor="w")
 
-        control_row = ttk.Frame(self, padding=(10, 0, 10, 10))
-        control_row.pack(fill="x")
-        self.start_btn = ttk.Button(control_row, text="Start Monitoring", command=self._start_watching)
-        self.start_btn.pack(side="left")
-        self.stop_btn = ttk.Button(control_row, text="Stop Monitoring", command=self._stop_watching, state="disabled")
-        self.stop_btn.pack(side="left", padx=6)
-        ttk.Button(control_row, text="Test Alert", command=self._test_alert).pack(side="left", padx=6)
-        self.status_label = ttk.Label(control_row, text="Idle", foreground="#888")
-        self.status_label.pack(side="right")
-
-        log_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
-        log_frame.pack(fill="both", expand=False)
-        ttk.Label(log_frame, text="Activity log", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        self.log_text = tk.Text(log_frame, height=6, state="disabled", bg="#161616", fg="#cccccc")
-        self.log_text.pack(fill="x")
+        log_frame = ttk.Frame(self, style="Surface.TFrame", padding=(12, 8))
+        # Reserve the activity area before the expanding workspace is sized.
+        log_frame.pack(fill="x", side="bottom", before=workspace, padx=10, pady=(0, 10))
+        ttk.Label(log_frame, text="Activity", style="Section.TLabel").pack(anchor="w")
+        log_body = ttk.Frame(log_frame, style="Surface.TFrame")
+        log_body.pack(fill="x", pady=(6, 0))
+        self.log_text = tk.Text(
+            log_body,
+            height=5,
+            state="disabled",
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            selectbackground=COLORS["accent_soft"],
+            relief="flat",
+            borderwidth=0,
+            font=("Cascadia Mono", 9),
+            wrap="none",
+        )
+        log_scroll = ttk.Scrollbar(log_body, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.pack(side="left", fill="x", expand=True)
+        log_scroll.pack(side="right", fill="y")
 
         for var in (
             self.monitor_var,
@@ -1689,7 +1780,7 @@ class AlertWatcherFrame(ttk.Frame):
         self.watcher.start()
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.status_label.config(text="Watching...", foreground="#3ddc6a")
+        self.status_label.config(text="Watching", style="Watching.Status.TLabel")
 
     def _stop_watching(self):
         if self.watcher:
@@ -1700,7 +1791,7 @@ class AlertWatcherFrame(ttk.Frame):
             self.watcher = None
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
-        self.status_label.config(text="Idle", foreground="#888")
+        self.status_label.config(text="Idle", style="Idle.Status.TLabel")
 
     def _test_alert(self):
         tid = self._selected_id()
@@ -1762,7 +1853,7 @@ class AlertWatcherFrame(ttk.Frame):
                 self.watcher = None
                 self.start_btn.config(state="normal")
                 self.stop_btn.config(state="disabled")
-                self.status_label.config(text="Watcher stopped", foreground="#d9534f")
+                self.status_label.config(text="Watcher stopped", style="Error.Status.TLabel")
                 messagebox.showwarning(
                     "Monitoring stopped",
                     f"The watcher stopped because of an error:\n{ev.get('error', 'Unknown error')}"
@@ -1812,8 +1903,9 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Icon Alert Watcher")
-        self.geometry("780x740")
-        self.minsize(740, 700)
+        self.geometry("1040x760")
+        self.minsize(900, 680)
+        configure_theme(self)
         self.frame = AlertWatcherFrame(self, embedded=False)
         self.frame.pack(fill="both", expand=True)
 

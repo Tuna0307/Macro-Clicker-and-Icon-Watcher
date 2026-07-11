@@ -8,6 +8,8 @@
           "condition_type": "template",
           "template_path": "templates\\RallyIcon.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             1824,
             633,
@@ -217,6 +219,8 @@
           "condition_type": "template",
           "template_path": "templates\\GoldMob.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             1030,
             137,
@@ -240,6 +244,8 @@
           "condition_type": "template",
           "template_path": "templates\\Join.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             664,
             146,
@@ -263,6 +269,8 @@
           "condition_type": "template",
           "template_path": "templates\\BackButton.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             556,
             846,
@@ -305,7 +313,7 @@
           "button": "left",
           "key": "",
           "hold": 0.0,
-          "seconds": 1.2,
+          "seconds": 1.5,
           "step_name": "",
           "set_enabled": true
         },
@@ -370,7 +378,7 @@
         }
       ],
       "condition_operator": "AND",
-      "enabled": true,
+      "enabled": false,
       "cooldown": 0.1,
       "repeatable": true
     },
@@ -381,6 +389,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/Attack.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             730,
             687,
@@ -404,6 +414,8 @@
           "condition_type": "template",
           "template_path": "templates\\SquadAmount.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             620,
             390,
@@ -527,7 +539,7 @@
         }
       ],
       "condition_operator": "AND",
-      "enabled": true,
+      "enabled": false,
       "cooldown": 0.1,
       "repeatable": true
     },
@@ -538,6 +550,8 @@
           "condition_type": "template",
           "template_path": "templates\\RallyPage.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             671,
             88,
@@ -561,6 +575,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/GoldMob.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             866,
             160,
@@ -584,6 +600,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/BackButton.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             556,
             846,
@@ -707,7 +725,7 @@
         }
       ],
       "condition_operator": "AND",
-      "enabled": true,
+      "enabled": false,
       "cooldown": 0.1,
       "repeatable": true
     },
@@ -718,6 +736,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/RallyPage.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             670,
             86,
@@ -741,6 +761,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/Join.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             562,
             154,
@@ -764,6 +786,8 @@
           "condition_type": "template",
           "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/BackButton.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             665,
             982,
@@ -923,6 +947,8 @@
           "condition_type": "template",
           "template_path": "templates\\MisClickBase.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": null,
           "region_mode": "screen",
           "region_ratio": null,
@@ -933,6 +959,8 @@
           "condition_type": "template",
           "template_path": "templates\\DiamondCart.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             1795,
             5,
@@ -1017,6 +1045,8 @@
           "condition_type": "template",
           "template_path": "templates\\FriendStatus.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             680,
             522,
@@ -1040,6 +1070,8 @@
           "condition_type": "template",
           "template_path": "templates\\CloseProfilePage.png",
           "confidence": 0.85,
+          "comparison_template_path": "",
+          "comparison_margin": 0.03,
           "region": [
             1182,
             8,

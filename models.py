@@ -32,6 +32,19 @@ def project_path(path):
     return os.path.join(APP_DIR, path)
 
 
+def portable_project_path(path):
+    """Store project-owned paths relatively while preserving external absolute paths."""
+    if not path:
+        return path
+    absolute = os.path.abspath(project_path(path))
+    try:
+        if os.path.commonpath((APP_DIR, absolute)) == os.path.abspath(APP_DIR):
+            return os.path.relpath(absolute, APP_DIR)
+    except ValueError:
+        pass
+    return path
+
+
 def _optional_int(value, default=None):
     if value is None or value == "":
         return default
@@ -278,9 +291,11 @@ class Scenario:
 
     @staticmethod
     def from_dict(d):
+        steps = [Step.from_dict(s) for s in d.get("steps", [])]
+        validate_step_names(steps)
         return Scenario(
             name=str(d.get("name", "untitled") or "untitled"),
-            steps=[Step.from_dict(s) for s in d.get("steps", [])],
+            steps=steps,
             poll_interval=_float_value(d.get("poll_interval"), 0.25),
             monitor_index=_int_value(d.get("monitor_index"), 1),
             kill_switch=str(d.get("kill_switch", "f12") or "f12"),
@@ -295,8 +310,9 @@ def list_scenarios(folder=SCENARIOS_DIR):
 
 
 def load_scenario(name, folder=SCENARIOS_DIR):
-    path = os.path.join(folder, f"{name}.json")
     try:
+        safe_name = validate_scenario_name(name)
+        path = os.path.join(folder, f"{safe_name}.json")
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
@@ -324,6 +340,17 @@ def validate_scenario_name(name):
     return stripped
 
 
+def validate_step_names(steps):
+    seen = set()
+    for step in steps:
+        name = str(getattr(step, "name", "") or "").strip()
+        if not name:
+            raise ValueError("Scenario steps must have non-empty names.")
+        if name in seen:
+            raise ValueError(f"Scenario contains duplicate step name: '{name}'.")
+        seen.add(name)
+
+
 def save_scenario(scenario: Scenario, folder=SCENARIOS_DIR):
     os.makedirs(folder, exist_ok=True)
     safe_name = validate_scenario_name(scenario.name)
@@ -336,6 +363,7 @@ def save_scenario(scenario: Scenario, folder=SCENARIOS_DIR):
 
 
 def delete_scenario(name, folder=SCENARIOS_DIR):
-    path = os.path.join(folder, f"{name}.json")
+    safe_name = validate_scenario_name(name)
+    path = os.path.join(folder, f"{safe_name}.json")
     if os.path.exists(path):
         os.remove(path)

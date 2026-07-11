@@ -30,12 +30,13 @@ class MacroEngine:
     TEMPLATE_SCALE_FACTORS = (1.0, 0.95, 1.05, 0.9, 1.1, 0.85, 1.15, 0.8, 1.2)
 
     def __init__(self, scenario: Scenario, log: Optional[Callable[[str], None]] = None):
-        self.scenario = scenario
+        self.scenario = Scenario.from_dict(scenario.to_dict())
         self.log = log or (lambda msg: None)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._last_fired = {s.name: 0.0 for s in scenario.steps}
+        self._last_fired = {s.name: 0.0 for s in self.scenario.steps}
         self._template_cache = {}
+        self._scaled_template_cache = {}
         self._digit_template_cache = {}
         self._level_ocr_reader = None
         self._level_ocr_reader_lock = threading.Lock()
@@ -43,6 +44,7 @@ class MacroEngine:
         self._level_ocr_warmup_thread = None
         self._target_window_rect = None
         self._target_window_missing_logged = False
+        self._monitor_index_warning_logged = None
         self._window_rect_provider = find_window_rect
         self.sct = mss.MSS()
         self._sct_closed = False
@@ -160,8 +162,10 @@ class MacroEngine:
                 else:
                     delay = self.scenario.poll_interval
                 self._sleep_until_stop(delay)
+        except pyautogui.FailSafeException:
+            self.log("[safety] scenario stopped because the mouse reached a fail-safe corner")
         except Exception as e:
-            self.log(f"[error] engine crashed: {e}")
+            self.log(f"[error] engine stopped ({type(e).__name__}): {e}")
         finally:
             self._cleanup_runtime()
 
@@ -203,7 +207,19 @@ class MacroEngine:
             left, top, width, height = region
             monitor = {"left": left, "top": top, "width": width, "height": height}
         else:
-            monitor = self.sct.monitors[self.scenario.monitor_index]
+            monitors = self.sct.monitors
+            requested = self.scenario.monitor_index
+            if 0 <= requested < len(monitors):
+                monitor_index = requested
+            else:
+                monitor_index = 1 if len(monitors) > 1 else 0
+                if getattr(self, "_monitor_index_warning_logged", None) != requested:
+                    self.log(
+                        f"[warn] monitor #{requested} is unavailable; "
+                        f"using monitor #{monitor_index}"
+                    )
+                    self._monitor_index_warning_logged = requested
+            monitor = monitors[monitor_index]
         raw = self.sct.grab(monitor)
         frame = np.array(raw)[:, :, :3]
         return frame, monitor["left"], monitor["top"]
@@ -330,7 +346,7 @@ class MacroEngine:
 
         if cond.comparison_template_path:
             return self._evaluate_competing_template_condition(
-                index, cond, frame, template, off_x, off_y
+                index, cond, frame, template, off_x, off_y, collect_all=collect_all
             )
 
         if collect_all and not cond.negate:
@@ -347,13 +363,36 @@ class MacroEngine:
 
         return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
 
-    def _evaluate_competing_template_condition(self, index, cond, frame, template, off_x, off_y):
+    def _evaluate_competing_template_condition(
+        self, index, cond, frame, template, off_x, off_y, collect_all=False
+    ):
         rival_template = self._load_template(cond.comparison_template_path)
+        margin = max(0.0, float(cond.comparison_margin or 0.0))
+
+        if collect_all and not cond.negate:
+            target_matches = self._find_template_matches_in_frame(
+                frame, template, cond.confidence, collect_all=True
+            )
+            accepted = []
+            rival_scores = []
+            for target_match in target_matches:
+                rival_match = self._find_best_template_match_near(
+                    frame, rival_template, target_match
+                )
+                rival_score = rival_match[4] if rival_match else -1.0
+                if target_match[4] >= rival_score + margin:
+                    accepted.append(target_match)
+                    rival_scores.append(rival_score)
+            matches = self._template_matches_to_runtime_matches(
+                index, cond, accepted, off_x, off_y
+            )
+            self._add_competing_match_details(cond, matches, rival_scores)
+            return bool(matches), matches
+
         target_match = self._find_best_template_match_in_frame(frame, template)
         rival_match = self._find_best_template_match_in_frame(frame, rival_template)
         target_score = target_match[4] if target_match else -1.0
         rival_score = rival_match[4] if rival_match else -1.0
-        margin = max(0.0, float(cond.comparison_margin or 0.0))
         found = target_score >= cond.confidence and target_score >= rival_score + margin
         ok = (not found) if cond.negate else found
         if not found or cond.negate:
@@ -362,20 +401,40 @@ class MacroEngine:
         matches = self._template_matches_to_runtime_matches(
             index, cond, [target_match], off_x, off_y
         )
-        for match in matches:
+        self._add_competing_match_details(cond, matches, [rival_score])
+        return ok, matches
+
+    def _add_competing_match_details(self, cond, matches, rival_scores):
+        for match, rival_score in zip(matches, rival_scores):
+            score_margin = match["confidence"] - rival_score
             match["comparison_confidence"] = rival_score
-            match["score_margin"] = target_score - rival_score
+            match["score_margin"] = score_margin
             match["label"] += (
                 f" beats {os.path.basename(cond.comparison_template_path)} "
-                f"{rival_score:.2f} by {target_score - rival_score:.2f}"
+                f"{rival_score:.2f} by {score_margin:.2f}"
             )
-        return ok, matches
+
+    def _find_best_template_match_near(self, frame, template, target_match):
+        x, y, width, height = target_match[:4]
+        padding = max(4, round(max(width, height) * 0.25))
+        frame_height, frame_width = frame.shape[:2]
+        left = max(0, x - padding)
+        top = max(0, y - padding)
+        right = min(frame_width, x + width + padding)
+        bottom = min(frame_height, y + height + padding)
+        local_match = self._find_best_template_match_in_frame(
+            frame[top:bottom, left:right], template
+        )
+        if local_match is None:
+            return None
+        local_x, local_y, match_width, match_height, score, scale = local_match
+        return (left + local_x, top + local_y, match_width, match_height, score, scale)
 
     def _preview_template_condition(self, index, cond, frame, off_x, off_y, image):
         template = self._load_template(cond.template_path)
         if cond.comparison_template_path:
             ok, matches = self._evaluate_competing_template_condition(
-                index, cond, frame, template, off_x, off_y
+                index, cond, frame, template, off_x, off_y, collect_all=True
             )
             return ok, matches, image
         template_matches = self._find_template_matches_in_frame(frame, template, cond.confidence, collect_all=True)
@@ -445,13 +504,7 @@ class MacroEngine:
         return kept
 
     def _find_template_matches_at_scale(self, frame, template, confidence, scale, collect_all):
-        template_h, template_w = template.shape[:2]
-        if abs(scale - 1.0) < 0.001:
-            scaled_template = template
-        else:
-            width = max(1, round(template_w * scale))
-            height = max(1, round(template_h * scale))
-            scaled_template = cv2.resize(template, (width, height), interpolation=cv2.INTER_LINEAR)
+        scaled_template = self._scaled_template(template, scale)
 
         h, w = scaled_template.shape[:2]
         frame_h, frame_w = frame.shape[:2]
@@ -481,6 +534,24 @@ class MacroEngine:
 
         kept.sort(key=lambda item: (item[1], item[0]))
         return kept
+
+    def _scaled_template(self, template, scale):
+        if abs(scale - 1.0) < 0.001:
+            return template
+        cache = getattr(self, "_scaled_template_cache", None)
+        if cache is None:
+            cache = {}
+            self._scaled_template_cache = cache
+        key = (id(template), scale)
+        cached = cache.get(key)
+        if cached is not None and cached[0] is template:
+            return cached[1]
+        template_h, template_w = template.shape[:2]
+        width = max(1, round(template_w * scale))
+        height = max(1, round(template_h * scale))
+        scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_LINEAR)
+        cache[key] = (template, scaled)
+        return scaled
 
     def _box_iou(self, a, b):
         ax1, ay1, ax2, ay2 = a
@@ -1170,7 +1241,7 @@ class MacroEngine:
         return sorted(row_targets, key=lambda m: m["center"][0])[0]
 
     def _cycle(self):
-        now = time.time()
+        now = time.monotonic()
         cycle_start = time.perf_counter()
         fired_any = False
         steps = self._refresh_step_caches()

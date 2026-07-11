@@ -255,6 +255,64 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertIn("Could not load scenario 'Broken'", str(ctx.exception))
 
+    def test_load_scenario_rejects_duplicate_step_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "Duplicate.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "name": "Duplicate",
+                        "steps": [{"name": "Join"}, {"name": "Join"}],
+                    },
+                    f,
+                )
+
+            with self.assertRaises(ValueError) as ctx:
+                models.load_scenario("Duplicate", folder=temp_dir)
+
+        self.assertIn("duplicate step name", str(ctx.exception).lower())
+
+    def test_load_and_delete_scenario_reject_unsafe_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outside = os.path.join(os.path.dirname(temp_dir), "outside.json")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("{}")
+            try:
+                with self.assertRaises(ValueError):
+                    models.load_scenario("../outside", folder=temp_dir)
+                with self.assertRaises(ValueError):
+                    models.delete_scenario("../outside", folder=temp_dir)
+                self.assertTrue(os.path.exists(outside))
+            finally:
+                if os.path.exists(outside):
+                    os.remove(outside)
+
+    def test_macro_engine_keeps_runtime_step_state_out_of_saved_scenario(self):
+        scenario = Scenario(
+            name="runtime-copy",
+            steps=[Step(name="Intro", enabled=True, repeatable=False)],
+        )
+        capture = type("Capture", (), {"close": lambda self: None})()
+
+        with patch.object(engine_module.mss, "MSS", return_value=capture):
+            runtime = MacroEngine(scenario)
+
+        runtime.scenario.steps[0].enabled = False
+
+        self.assertIsNot(runtime.scenario, scenario)
+        self.assertTrue(scenario.steps[0].enabled)
+
+    def test_portable_project_path_relativizes_only_project_files(self):
+        internal = os.path.join(models.APP_DIR, "templates", "icon.png")
+
+        self.assertEqual(
+            os.path.normpath(models.portable_project_path(internal)),
+            os.path.normpath(os.path.join("templates", "icon.png")),
+        )
+        with tempfile.TemporaryDirectory() as external:
+            external_path = os.path.join(external, "icon.png")
+            self.assertEqual(models.portable_project_path(external_path), external_path)
+
     def test_level_ocr_text_entry_extraction_handles_recursive_data(self):
         reader = LevelOcrReader()
         raw = []

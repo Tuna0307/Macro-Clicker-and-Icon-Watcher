@@ -106,6 +106,32 @@ class StepPreviewTests(unittest.TestCase):
         self.assertEqual(matches[0]["scale"], 1.2)
         self.assertGreaterEqual(matches[0]["score_margin"], 0.03)
 
+    def test_competing_template_condition_collects_every_winning_location(self):
+        engine = object.__new__(MacroEngine)
+        rng = np.random.default_rng(19)
+        target = rng.integers(0, 256, (12, 12, 3), dtype=np.uint8)
+        rival = target.copy()
+        rival[2:7, 2:7] = 255 - rival[2:7, 2:7]
+        templates = {"target.png": target, "rival.png": rival}
+        engine._load_template = templates.__getitem__
+        frame = np.zeros((82, 32, 3), dtype=np.uint8)
+        frame[5:17, 8:20] = target
+        frame[35:47, 8:20] = target
+        frame[65:77, 8:20] = rival
+        cond = ImageCondition(
+            template_path="target.png",
+            confidence=0.5,
+            comparison_template_path="rival.png",
+            comparison_margin=0.03,
+        )
+
+        ok, matches = engine._evaluate_template_condition(
+            0, cond, frame, 0, 0, collect_all=True
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual([match["image_box"][1] for match in matches], [5, 35])
+
     def test_preview_step_keeps_each_condition_image_separate(self):
         engine = object.__new__(MacroEngine)
         image_a = object()

@@ -77,6 +77,61 @@ class EnginePerformanceTests(unittest.TestCase):
 
         self.assertTrue(engine._cycle())
 
+    def test_grab_falls_back_when_saved_monitor_is_unavailable(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="perf", monitor_index=9)
+        logs = []
+        grabbed = []
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 20, "height": 10},
+                {"left": 3, "top": 4, "width": 8, "height": 6},
+            ]
+
+            def grab(self, monitor):
+                grabbed.append(monitor)
+                return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+
+        engine.sct = FakeCapture()
+        engine.log = logs.append
+
+        _, left, top = engine._grab()
+        engine._grab()
+
+        self.assertEqual((left, top), (3, 4))
+        self.assertEqual(grabbed[0], engine.sct.monitors[1])
+        self.assertEqual(len(logs), 1)
+
+    def test_cycle_uses_monotonic_time_for_cooldowns(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="clock")
+        engine._last_fired = {}
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+
+        from unittest.mock import patch
+        import engine as engine_module
+
+        with patch.object(engine_module.time, "monotonic", return_value=10.0) as monotonic, \
+                patch.object(engine_module.time, "time", side_effect=AssertionError("wall clock used")):
+            engine._cycle()
+
+        monotonic.assert_called_once()
+
+    def test_scaled_templates_are_cached(self):
+        engine = object.__new__(MacroEngine)
+        template = np.zeros((20, 30, 3), dtype=np.uint8)
+
+        from unittest.mock import patch
+        import engine as engine_module
+
+        with patch.object(engine_module.cv2, "resize", wraps=engine_module.cv2.resize) as resize:
+            first = engine._scaled_template(template, 1.2)
+            second = engine._scaled_template(template, 1.2)
+
+        self.assertIs(first, second)
+        resize.assert_called_once()
+
     def test_level_ocr_warm_up_logs_when_ready(self):
         engine = object.__new__(MacroEngine)
         logs = []
