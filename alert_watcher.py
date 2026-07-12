@@ -101,6 +101,26 @@ POLL_INTERVAL_SEC = 0.6
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_COOLDOWN_SEC = 5.0
 DEFAULT_ALERT_VOLUME = 1.0
+MATCH_MODE_TEXT = "colored_text"
+MATCH_MODE_STATIC = "static_picture"
+MATCH_MODE_ANIMATED = "animated_picture"
+MATCH_MODE_LABELS = {
+    MATCH_MODE_TEXT: "Text / colored text",
+    MATCH_MODE_STATIC: "Static picture",
+    MATCH_MODE_ANIMATED: "Animated/rotating picture",
+}
+MATCH_MODE_BY_LABEL = {label: mode for mode, label in MATCH_MODE_LABELS.items()}
+MATCH_MODE_LIST_TAGS = {
+    MATCH_MODE_TEXT: "Text",
+    MATCH_MODE_STATIC: "Static",
+    MATCH_MODE_ANIMATED: "Animated",
+}
+MATCH_MODE_VALUES = frozenset(MATCH_MODE_LABELS)
+DEFAULT_NEW_MATCH_MODE = MATCH_MODE_STATIC
+LEGACY_MATCH_MODE = MATCH_MODE_ANIMATED
+TEXT_CONFIRMATION_DELAY_SEC = 0.10
+TEXT_IMMEDIATE_SCORE = 0.97
+DEFAULT_TEXT_THRESHOLD = 0.90
 DEFAULT_START_STOP_HOTKEY = "ctrl+shift+f8"
 DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
 REGION_UNAVAILABLE = object()
@@ -444,13 +464,86 @@ def _prepare_match_image(image_bgr, use_grayscale):
     return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
 
+def normalize_match_mode(value, default=LEGACY_MATCH_MODE):
+    return value if value in MATCH_MODE_VALUES else default
+
+
+def _colored_text_profile(template_bgr):
+    """Infer the foreground text color from contrast with the template border."""
+    if template_bgr.ndim != 3 or template_bgr.shape[2] < 3 or template_bgr.size == 0:
+        return None
+    bgr = template_bgr[:, :, :3]
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    border = np.concatenate((lab[0], lab[-1], lab[:, 0], lab[:, -1]))
+    background = np.median(border, axis=0)
+    distance = np.linalg.norm(lab - background, axis=2)
+    maximum = float(distance.max())
+    if maximum <= 1e-6:
+        return None
+    normalized = np.clip(distance * (255.0 / maximum), 0, 255).astype(np.uint8)
+    _value, foreground = cv2.threshold(
+        normalized, 0.0, 255.0, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    coverage = float(np.count_nonzero(foreground)) / float(foreground.size)
+    if not 0.005 <= coverage <= 0.80:
+        return None
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    pixels = hsv[foreground > 0]
+    if pixels.size == 0:
+        return None
+    hue_angles = pixels[:, 0].astype(np.float64) * (2.0 * math.pi / 180.0)
+    hue_angle = math.atan2(float(np.sin(hue_angles).mean()), float(np.cos(hue_angles).mean()))
+    hue = (hue_angle % (2.0 * math.pi)) * (180.0 / (2.0 * math.pi))
+    saturation = float(np.median(pixels[:, 1]))
+    value = float(np.median(pixels[:, 2]))
+    return {
+        "hue": hue,
+        "saturation": saturation,
+        "value": value,
+        "colorful": bool(saturation >= 45.0),
+    }
+
+
+def _colored_text_mask(image_bgr, profile):
+    if image_bgr.ndim != 3 or image_bgr.shape[2] < 3 or image_bgr.size == 0:
+        return np.zeros(image_bgr.shape[:2], dtype=np.uint8)
+    hsv = cv2.cvtColor(image_bgr[:, :, :3], cv2.COLOR_BGR2HSV)
+    saturation = profile["saturation"]
+    value = profile["value"]
+    if profile["colorful"]:
+        hue = hsv[:, :, 0].astype(np.int16)
+        hue_distance = np.abs(hue - int(round(profile["hue"])))
+        hue_distance = np.minimum(hue_distance, 180 - hue_distance)
+        selected = (
+            (hue_distance <= 10)
+            & (hsv[:, :, 1] >= max(40.0, saturation * 0.50))
+            & (hsv[:, :, 2] >= max(70.0, value * 0.45))
+        )
+    else:
+        selected = (
+            (hsv[:, :, 2] >= max(140.0, value * 0.65))
+            & (hsv[:, :, 1] <= min(255.0, saturation + 60.0))
+        )
+    return selected.astype(np.uint8) * 255
+
+
 def _spatial_deviation(image):
     if image.ndim == 3:
         return float(np.max(np.std(image.astype(np.float32), axis=(0, 1))))
     return float(np.std(image))
 
 
-def _best_variant_match(screen, template, low_variance):
+def _text_shape_iou(screen, template, location):
+    x, y = location
+    height, width = template.shape[:2]
+    candidate = screen[y:y + height, x:x + width] > 127
+    expected = template > 127
+    intersection = int(np.count_nonzero(candidate & expected))
+    union = int(np.count_nonzero(candidate | expected))
+    return (intersection / union) if union else -1.0
+
+
+def _best_variant_match(screen, template, low_variance, text_shape=False):
     if low_variance:
         raw = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF)
         channels = template.shape[2] if template.ndim == 3 else 1
@@ -461,6 +554,26 @@ def _best_variant_match(screen, template, low_variance):
         raw = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
         scores = np.nan_to_num(raw, nan=-1.0, posinf=1.0, neginf=-1.0)
     _, max_score, _, max_loc = cv2.minMaxLoc(scores)
+    if text_shape and scores.size:
+        candidate_count = min(8, scores.size)
+        flat_scores = scores.reshape(-1)
+        candidate_indices = np.argpartition(flat_scores, -candidate_count)[-candidate_count:]
+        best_shape_score = -1.0
+        best_shape_loc = max_loc
+        best_correlation = -1.0
+        for flat_index in candidate_indices:
+            y, x = np.unravel_index(int(flat_index), scores.shape)
+            location = (int(x), int(y))
+            shape_score = _text_shape_iou(screen, template, location)
+            correlation = float(scores[y, x])
+            if shape_score > best_shape_score or (
+                abs(shape_score - best_shape_score) <= 1e-9
+                and correlation > best_correlation
+            ):
+                best_shape_score = shape_score
+                best_shape_loc = location
+                best_correlation = correlation
+        return best_shape_score, best_shape_loc
     if low_variance and scores.size > 1:
         if float(max_score) - float(scores.min()) <= 1e-6:
             return -1.0, None
@@ -483,15 +596,31 @@ def _rotate_image(image, angle):
 
 
 def prepare_template_variants(template_bgr, scales=DEFAULT_SCALES,
-                              rotations=DEFAULT_ROTATIONS, use_grayscale=False):
-    template = _prepare_match_image(template_bgr, use_grayscale)
+                              rotations=DEFAULT_ROTATIONS, use_grayscale=False,
+                              match_mode=LEGACY_MATCH_MODE):
+    match_mode = normalize_match_mode(match_mode)
+    text_profile = None
+    if match_mode == MATCH_MODE_TEXT:
+        text_profile = _colored_text_profile(template_bgr)
+        if text_profile is not None:
+            template = _colored_text_mask(template_bgr, text_profile)
+        else:
+            template = _prepare_match_image(template_bgr, True)
+        rotations = (0,)
+    else:
+        template = _prepare_match_image(template_bgr, use_grayscale)
+        if match_mode == MATCH_MODE_STATIC:
+            rotations = (0,)
     th0, tw0 = template.shape[:2]
     variants = []
     for angle in rotations:
         rotated_template = _rotate_image(template, angle)
         for scale in scales:
             tw, th = max(1, int(tw0 * scale)), max(1, int(th0 * scale))
-            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            if match_mode == MATCH_MODE_TEXT and text_profile is not None:
+                interpolation = cv2.INTER_NEAREST
+            else:
+                interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
             resized = cv2.resize(
                 rotated_template, (tw, th), interpolation=interpolation
             )
@@ -500,6 +629,8 @@ def prepare_template_variants(template_bgr, scales=DEFAULT_SCALES,
                 "scale": scale,
                 "angle": angle,
                 "low_variance": _spatial_deviation(resized) < 1e-6,
+                "match_mode": match_mode,
+                "text_profile": text_profile,
             })
     return tuple(variants)
 
@@ -534,7 +665,12 @@ def _coarse_multiscale_match(
             interpolation=cv2.INTER_AREA,
         )
         low_variance = _spatial_deviation(small_template) < 1e-6
-        score, loc = _best_variant_match(small_screen, small_template, low_variance)
+        score, loc = _best_variant_match(
+            small_screen,
+            small_template,
+            low_variance,
+            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
+        )
         if loc is not None:
             records.append((score, loc, variant))
 
@@ -584,7 +720,12 @@ def _coarse_multiscale_match(
         low_variance = bool(
             variant.get("low_variance", _spatial_deviation(template) < 1e-6)
         )
-        score, local_loc = _best_variant_match(local, template, low_variance)
+        score, local_loc = _best_variant_match(
+            local,
+            template,
+            low_variance,
+            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
+        )
         if local_loc is None:
             continue
         scale = float(variant.get("scale", 1.0))
@@ -611,23 +752,38 @@ def _coarse_multiscale_match(
 def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
                               use_grayscale=False, region=None,
                               rotations=DEFAULT_ROTATIONS, variants=None,
-                              early_exit_score=None, cancel_event=None):
+                              early_exit_score=None, cancel_event=None,
+                              match_mode=LEGACY_MATCH_MODE):
     best_score, best_loc, best_scale = -1.0, None, 1.0
     best_angle = 0
     screen_bgr, offset = _crop_region(screen_bgr, region)
     if screen_bgr.size == 0:
         return best_score, best_loc, best_scale
 
-    screen = _prepare_match_image(screen_bgr, use_grayscale)
-    sh, sw = screen.shape[:2]
+    match_mode = normalize_match_mode(match_mode)
     if variants is None:
         variants = prepare_template_variants(
             template_bgr,
             scales=scales,
             rotations=rotations,
             use_grayscale=use_grayscale,
+            match_mode=match_mode,
         )
     variants = tuple(variants)
+    if variants:
+        match_mode = normalize_match_mode(
+            variants[0].get("match_mode", match_mode), default=match_mode
+        )
+    if match_mode == MATCH_MODE_TEXT:
+        text_profile = variants[0].get("text_profile") if variants else None
+        screen = (
+            _colored_text_mask(screen_bgr, text_profile)
+            if text_profile is not None
+            else _prepare_match_image(screen_bgr, True)
+        )
+    else:
+        screen = _prepare_match_image(screen_bgr, use_grayscale)
+    sh, sw = screen.shape[:2]
     if (
         screen.shape[0] * screen.shape[1] >= 500_000
         and min(template_bgr.shape[:2]) >= 20
@@ -650,7 +806,12 @@ def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
         th, tw = resized.shape[:2]
         if tw > sw or th > sh:
             continue
-        score, loc = _best_variant_match(screen, resized, variant["low_variance"])
+        score, loc = _best_variant_match(
+            screen,
+            resized,
+            variant["low_variance"],
+            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
+        )
         if loc is None:
             continue
         scale = variant["scale"]
@@ -717,6 +878,7 @@ def test_detection_on_screenshot(path, template_items, use_grayscale=False, regi
             use_grayscale=use_grayscale,
             region=local_region,
             variants=item.get("variants"),
+            match_mode=item.get("match_mode", LEGACY_MATCH_MODE),
         )
         threshold = item.get("threshold", DEFAULT_THRESHOLD)
         results.append({
@@ -896,6 +1058,12 @@ class TemplateManager:
                     threshold = min(1.0, max(0.0, threshold))
                 except (TypeError, ValueError, OverflowError):
                     threshold = DEFAULT_THRESHOLD
+                raw_match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+                match_mode = normalize_match_mode(raw_match_mode)
+                if raw_match_mode not in MATCH_MODE_VALUES and "match_mode" in entry:
+                    self.load_warnings.append(
+                        f"Template ID {tid} has an invalid match mode; using animated picture."
+                    )
                 region = self._valid_region(entry.get("region"))
                 region_mode = entry.get("region_mode", "screen")
                 if region_mode not in ("screen", "window"):
@@ -915,6 +1083,7 @@ class TemplateManager:
                     "name": name.strip(),
                     "file": entry["file"],
                     "threshold": threshold,
+                    "match_mode": match_mode,
                     "region": region,
                     "region_mode": region_mode,
                     "region_ratio": region_ratio,
@@ -932,6 +1101,7 @@ class TemplateManager:
                     "name": v["name"],
                     "file": v["file"],
                     "threshold": v["threshold"],
+                    "match_mode": v.get("match_mode", LEGACY_MATCH_MODE),
                 }
                 if v.get("region") is not None:
                     item["region"] = list(v["region"])
@@ -943,7 +1113,8 @@ class TemplateManager:
                 items.append(item)
             _atomic_write_json(MANIFEST_PATH, {"items": items})
 
-    def add(self, image_bgr, name, threshold=DEFAULT_THRESHOLD):
+    def add(self, image_bgr, name, threshold=DEFAULT_THRESHOLD,
+            match_mode=DEFAULT_NEW_MATCH_MODE):
         with self._lock:
             tid = self._next_id
             filename = f"template_{tid}.png"
@@ -962,10 +1133,14 @@ class TemplateManager:
             if not math.isfinite(numeric_threshold):
                 raise ValueError("Template threshold must be a finite number")
             numeric_threshold = min(1.0, max(0.0, numeric_threshold))
+            parsed_match_mode = normalize_match_mode(match_mode, default="")
+            if parsed_match_mode not in MATCH_MODE_VALUES:
+                raise ValueError("Unknown template detection type")
             entry = {
                 "name": str(name).strip() or f"icon_{tid}",
                 "file": filename,
                 "threshold": numeric_threshold,
+                "match_mode": parsed_match_mode,
                 "region": None,
                 "region_mode": "screen",
                 "region_ratio": None,
@@ -1023,6 +1198,30 @@ class TemplateManager:
                     self.items[tid]["threshold"] = previous
                     raise
 
+    def set_match_mode(self, tid, match_mode, save=True):
+        parsed = normalize_match_mode(match_mode, default="")
+        if parsed not in MATCH_MODE_VALUES:
+            raise ValueError("Unknown template detection type")
+        with self._lock:
+            if tid not in self.items:
+                return
+            entry = self.items[tid]
+            previous = entry.get("match_mode", LEGACY_MATCH_MODE)
+            previous_threshold = entry["threshold"]
+            previous_cache = entry.get("variant_cache", {})
+            entry["match_mode"] = parsed
+            if parsed == MATCH_MODE_TEXT:
+                entry["threshold"] = max(entry["threshold"], DEFAULT_TEXT_THRESHOLD)
+            entry["variant_cache"] = {}
+            if save:
+                try:
+                    self._save()
+                except Exception:
+                    entry["match_mode"] = previous
+                    entry["threshold"] = previous_threshold
+                    entry["variant_cache"] = previous_cache
+                    raise
+
     def set_region(self, tid, region, region_mode="screen",
                    region_ratio=None, region_window_size=None):
         if region_mode not in ("screen", "window"):
@@ -1069,11 +1268,14 @@ class TemplateManager:
 
     def _variants_for_entry(self, entry, use_grayscale):
         cache = entry.setdefault("variant_cache", {})
-        key = bool(use_grayscale)
+        match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+        grayscale_key = bool(use_grayscale) if match_mode != MATCH_MODE_TEXT else False
+        key = (grayscale_key, match_mode)
         if key not in cache:
             cache[key] = prepare_template_variants(
                 entry["image"],
-                use_grayscale=key,
+                use_grayscale=grayscale_key,
+                match_mode=match_mode,
             )
         return cache[key]
 
@@ -1086,6 +1288,7 @@ class TemplateManager:
                     "name": entry["name"],
                     "file": entry["file"],
                     "threshold": entry["threshold"],
+                    "match_mode": entry.get("match_mode", LEGACY_MATCH_MODE),
                     "region": entry.get("region"),
                     "region_mode": entry.get("region_mode", "screen"),
                     "region_ratio": entry.get("region_ratio"),
@@ -1223,6 +1426,67 @@ class WatcherThread(threading.Thread):
             return None
         return (left - mon["left"], top - mon["top"], right - left, bottom - top)
 
+    def _match_entry(self, screen_bgr, entry, config, region=None):
+        match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+        early_exit_score = (
+            max(TEXT_IMMEDIATE_SCORE, entry["threshold"])
+            if match_mode == MATCH_MODE_TEXT
+            else entry["threshold"]
+        )
+        return match_template_multiscale(
+            screen_bgr,
+            entry["image"],
+            use_grayscale=config["use_grayscale"],
+            region=region,
+            variants=entry.get("variants"),
+            early_exit_score=early_exit_score,
+            cancel_event=self._stop_flag,
+            match_mode=match_mode,
+        )
+
+    def _confirm_text_candidate(self, sct, mon, entry, config, initial_result,
+                                absolute_scan_region):
+        score, loc, scale = initial_result
+        if entry.get("match_mode") != MATCH_MODE_TEXT or score < entry["threshold"]:
+            return initial_result
+        if score >= max(TEXT_IMMEDIATE_SCORE, entry["threshold"]):
+            return initial_result
+        if self._stop_flag.wait(TEXT_CONFIRMATION_DELAY_SEC):
+            return None
+
+        item_region = self._resolve_item_scan_region(
+            entry, absolute_scan_region, config
+        )
+        if item_region is REGION_UNAVAILABLE:
+            return None
+        local_region = self._local_region_for_monitor(mon, item_region)
+        if item_region is not None and local_region is None:
+            return None
+        try:
+            if local_region is None:
+                shot = sct.grab(mon)
+            else:
+                x, y, width, height = local_region
+                shot = sct.grab({
+                    "left": mon["left"] + x,
+                    "top": mon["top"] + y,
+                    "width": width,
+                    "height": height,
+                })
+            confirmation_bgr = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)
+        except Exception:
+            return None
+
+        confirmed_score, _confirmed_loc, _confirmed_scale = self._match_entry(
+            confirmation_bgr,
+            entry,
+            config,
+            region=None,
+        )
+        if confirmed_score < entry["threshold"]:
+            return confirmed_score, None, scale
+        return min(score, confirmed_score), loc, scale
+
     def _resolve_absolute_scan_region(self, config=None):
         if config is None:
             config = self._config_snapshot()
@@ -1348,15 +1612,21 @@ class WatcherThread(threading.Thread):
                             region = self._local_region_for_monitor(mon, item_region)
                             if item_region is not None and region is None:
                                 continue
-                            score, loc, scale = match_template_multiscale(
-                                screen_bgr,
-                                entry["image"],
-                                use_grayscale=config["use_grayscale"],
-                                region=region,
-                                variants=entry.get("variants"),
-                                early_exit_score=entry["threshold"],
-                                cancel_event=self._stop_flag,
+                            result = self._match_entry(
+                                screen_bgr, entry, config, region=region
                             )
+                            confirmed = self._confirm_text_candidate(
+                                sct,
+                                mon,
+                                entry,
+                                config,
+                                result,
+                                absolute_scan_region,
+                            )
+                            if confirmed is None:
+                                complete_ids.discard(tid)
+                                continue
+                            score, loc, scale = confirmed
                             if self._stop_flag.is_set():
                                 break
                             if config["debug"]:
@@ -1797,6 +2067,27 @@ class AlertWatcherFrame(ttk.Frame):
             command=self._clear_selected_icon_region,
         ).pack(side="left", padx=4)
 
+        mode_row = ttk.Frame(left, style="Surface.TFrame")
+        mode_row.pack(fill="x", pady=(12, 0))
+        ttk.Label(mode_row, text="Detection type", style="Surface.TLabel").pack(side="left")
+        self.match_mode_var = tk.StringVar(
+            value=MATCH_MODE_LABELS[DEFAULT_NEW_MATCH_MODE]
+        )
+        self.match_mode_combo = ttk.Combobox(
+            mode_row,
+            textvariable=self.match_mode_var,
+            values=list(MATCH_MODE_LABELS.values()),
+            state="readonly",
+            width=25,
+        )
+        self.match_mode_combo.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        self.match_mode_combo.bind("<<ComboboxSelected>>", self._on_match_mode_change)
+        Tooltip(
+            self.match_mode_combo,
+            "Text ignores translucent backgrounds; static pictures skip rotation; "
+            "animated pictures test small rotations.",
+        )
+
         thresh_row = ttk.Frame(left, style="Surface.TFrame")
         thresh_row.pack(fill="x", pady=(12, 0))
         ttk.Label(thresh_row, text="Match sensitivity", style="Surface.TLabel").pack(side="left")
@@ -1857,7 +2148,16 @@ class AlertWatcherFrame(ttk.Frame):
         advanced = advanced_detection.content
 
         self.grayscale_var = tk.BooleanVar(value=self.settings.grayscale)
-        ttk.Checkbutton(advanced, text="Grayscale", variable=self.grayscale_var).pack(anchor="w")
+        grayscale_check = ttk.Checkbutton(
+            advanced,
+            text="Grayscale pictures",
+            variable=self.grayscale_var,
+        )
+        grayscale_check.pack(anchor="w")
+        Tooltip(
+            grayscale_check,
+            "Applies to picture modes only. Colored-text mode always preserves color.",
+        )
         self.debug_var = tk.BooleanVar(value=self.settings.debug)
         ttk.Checkbutton(advanced, text="Debug scores", variable=self.debug_var).pack(anchor="w")
 
@@ -2124,7 +2424,12 @@ class AlertWatcherFrame(ttk.Frame):
         items = self.tm.snapshot()
         for entry in items:
             marker = " [region]" if entry.get("region") is not None else ""
-            self.listbox.insert("end", f"  {entry['name']}{marker}   (th={entry['threshold']:.2f})")
+            mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+            mode_tag = MATCH_MODE_LIST_TAGS.get(mode, "Animated")
+            self.listbox.insert(
+                "end",
+                f"  {entry['name']} [{mode_tag}]{marker}   (th={entry['threshold']:.2f})",
+            )
         self._id_order = [entry["id"] for entry in items]
         if selected_tid in self._id_order:
             index = self._id_order.index(selected_tid)
@@ -2146,6 +2451,8 @@ class AlertWatcherFrame(ttk.Frame):
             return
         self.thresh_var.set(entry["threshold"])
         self.thresh_label.config(text=f"{entry['threshold']:.2f}")
+        match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+        self.match_mode_var.set(MATCH_MODE_LABELS[match_mode])
         self._show_preview(entry["image"])
         self._update_icon_region_label(entry)
 
@@ -2175,6 +2482,25 @@ class AlertWatcherFrame(ttk.Frame):
         val = round(self.thresh_var.get(), 2)
         self.thresh_label.config(text=f"{val:.2f}")
         self.tm.set_threshold(tid, val, save=False)
+        self._refresh_list(selected_tid=tid)
+        self._schedule_template_save()
+
+    def _on_match_mode_change(self, _event=None):
+        tid = self._selected_id()
+        if tid is None:
+            return
+        match_mode = MATCH_MODE_BY_LABEL.get(self.match_mode_var.get())
+        if match_mode is None:
+            return
+        try:
+            self.tm.set_match_mode(tid, match_mode, save=False)
+        except ValueError as exc:
+            messagebox.showerror("Invalid detection type", str(exc), parent=self)
+            return
+        entry = self.tm.get(tid)
+        if entry is not None:
+            self.thresh_var.set(entry["threshold"])
+            self.thresh_label.config(text=f"{entry['threshold']:.2f}")
         self._refresh_list(selected_tid=tid)
         self._schedule_template_save()
 

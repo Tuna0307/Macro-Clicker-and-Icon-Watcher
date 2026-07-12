@@ -20,10 +20,15 @@ class CombinedAppTests(unittest.TestCase):
                 ui.notebook.tab(tab_id, "text")
                 for tab_id in ui.notebook.tabs()
             ]
+            detection_modes = tuple(ui.alert_tab.match_mode_combo["values"])
         finally:
             root.destroy()
 
         self.assertEqual(tabs, ["Macro Builder", "Icon Alerts"])
+        self.assertEqual(
+            detection_modes,
+            tuple(alert_watcher.MATCH_MODE_LABELS.values()),
+        )
 
 
 if __name__ == "__main__":

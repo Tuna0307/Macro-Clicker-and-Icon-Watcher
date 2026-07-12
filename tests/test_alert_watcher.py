@@ -86,6 +86,32 @@ class TemplateManagerTests(unittest.TestCase):
         self.assertIs(first["variants"], second["variants"])
         self.assertGreater(len(first["variants"]), 1)
 
+    def test_match_mode_is_persisted_and_invalidates_variant_cache(self):
+        tm = self._manager_in_temp_dir()
+        image = np.full((24, 60, 3), (50, 100, 90), dtype=np.uint8)
+        cv2.putText(
+            image,
+            "#2212",
+            (2, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 235, 71),
+            1,
+            cv2.LINE_AA,
+        )
+        tid = tm.add(image, "chat", threshold=0.8)
+        original_variants = tm.snapshot(use_grayscale=True)[0]["variants"]
+
+        tm.set_match_mode(tid, watcher.MATCH_MODE_TEXT)
+        text_item = tm.snapshot(use_grayscale=True)[0]
+        reloaded = watcher.TemplateManager().snapshot()[0]
+
+        self.assertEqual(text_item["match_mode"], watcher.MATCH_MODE_TEXT)
+        self.assertEqual(text_item["threshold"], watcher.DEFAULT_TEXT_THRESHOLD)
+        self.assertIsNot(text_item["variants"], original_variants)
+        self.assertEqual({item["angle"] for item in text_item["variants"]}, {0})
+        self.assertEqual(reloaded["match_mode"], watcher.MATCH_MODE_TEXT)
+
     def test_manifest_path_escape_is_ignored_and_cannot_delete_outside_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             templates_dir = os.path.join(temp_dir, "templates")
@@ -127,6 +153,33 @@ class TemplateManagerTests(unittest.TestCase):
             self.assertEqual(tm.snapshot(), [])
             self.assertTrue(tm.load_warnings)
 
+    def test_invalid_match_mode_uses_legacy_animated_behavior(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            templates_dir = os.path.join(temp_dir, "templates")
+            os.makedirs(templates_dir)
+            cv2.imwrite(
+                os.path.join(templates_dir, "template_1.png"),
+                np.zeros((8, 8, 3), dtype=np.uint8),
+            )
+            manifest_path = os.path.join(templates_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as file:
+                json.dump({
+                    "items": [{
+                        "id": 1,
+                        "name": "legacy",
+                        "file": "template_1.png",
+                        "threshold": 0.8,
+                        "match_mode": "unknown",
+                    }]
+                }, file)
+
+            with patch.object(watcher, "TEMPLATES_DIR", templates_dir), \
+                    patch.object(watcher, "MANIFEST_PATH", manifest_path):
+                tm = watcher.TemplateManager()
+
+            self.assertEqual(tm.snapshot()[0]["match_mode"], watcher.MATCH_MODE_ANIMATED)
+            self.assertTrue(any("invalid match mode" in item for item in tm.load_warnings))
+
     def test_add_skips_unlisted_existing_template_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             templates_dir = os.path.join(temp_dir, "templates")
@@ -157,8 +210,105 @@ class TemplateManagerTests(unittest.TestCase):
             [],
         )
 
+    def test_failed_match_mode_save_rolls_back_mode_threshold_and_cache(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "rollback", threshold=0.8)
+        before = tm.items[tid]
+        original_cache = before["variant_cache"]
+
+        with patch.object(tm, "_save", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                tm.set_match_mode(tid, watcher.MATCH_MODE_TEXT)
+
+        self.assertEqual(tm.items[tid]["match_mode"], watcher.MATCH_MODE_STATIC)
+        self.assertEqual(tm.items[tid]["threshold"], 0.8)
+        self.assertIs(tm.items[tid]["variant_cache"], original_cache)
+
 
 class DetectionTests(unittest.TestCase):
+    @staticmethod
+    def _text_tile(text, background):
+        image = np.full((32, 130, 3), background, dtype=np.uint8)
+        cv2.putText(
+            image,
+            text,
+            (3, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 235, 71),
+            2,
+            cv2.LINE_AA,
+        )
+        return image
+
+    def test_match_modes_apply_rotation_only_to_animated_pictures(self):
+        image = self._text_tile("#2212", (54, 111, 99))
+
+        text = watcher.prepare_template_variants(
+            image, match_mode=watcher.MATCH_MODE_TEXT
+        )
+        static = watcher.prepare_template_variants(
+            image, match_mode=watcher.MATCH_MODE_STATIC
+        )
+        animated = watcher.prepare_template_variants(
+            image, match_mode=watcher.MATCH_MODE_ANIMATED
+        )
+
+        self.assertEqual({item["angle"] for item in text}, {0})
+        self.assertEqual({item["angle"] for item in static}, {0})
+        self.assertEqual(
+            {item["angle"] for item in animated}, set(watcher.DEFAULT_ROTATIONS)
+        )
+
+    def test_colored_text_mode_ignores_background_and_rejects_similar_digits(self):
+        template = self._text_tile("#2212", (54, 111, 99))
+
+        def score_for(text):
+            screen = np.full((80, 260, 3), (120, 60, 40), dtype=np.uint8)
+            screen[25:57, 70:200] = self._text_tile(text, (120, 60, 40))
+            return watcher.match_template_multiscale(
+                screen,
+                template,
+                scales=[1.0],
+                rotations=[0],
+                match_mode=watcher.MATCH_MODE_TEXT,
+            )
+
+        true_score, location, _scale = score_for("#2212")
+        wrong_score, _wrong_location, _scale = score_for("#2217")
+
+        self.assertGreaterEqual(true_score, 0.93)
+        self.assertEqual(location, (70, 25))
+        self.assertLess(wrong_score, watcher.DEFAULT_TEXT_THRESHOLD)
+
+    def test_colored_text_mode_supports_red_and_white_foreground(self):
+        for color in ((0, 0, 255), (245, 245, 245)):
+            with self.subTest(color=color):
+                template = np.full((32, 130, 3), (54, 111, 99), dtype=np.uint8)
+                candidate = np.full((32, 130, 3), (100, 50, 30), dtype=np.uint8)
+                for image in (template, candidate):
+                    cv2.putText(
+                        image,
+                        "ALERT",
+                        (3, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                screen = np.full((80, 260, 3), (100, 50, 30), dtype=np.uint8)
+                screen[25:57, 70:200] = candidate
+
+                score, location, _scale = watcher.match_template_multiscale(
+                    screen,
+                    template,
+                    scales=[1.0],
+                    match_mode=watcher.MATCH_MODE_TEXT,
+                )
+
+                self.assertGreaterEqual(score, 0.95)
+                self.assertEqual(location, (70, 25))
     def test_matching_finds_smaller_icon_with_small_rotation(self):
         icon = np.zeros((48, 58, 3), dtype=np.uint8)
         cv2.rectangle(icon, (8, 8), (50, 40), (40, 180, 240), -1)
@@ -472,6 +622,61 @@ class WatcherThreadTests(unittest.TestCase):
         self.assertTrue(config["debug"])
         self.assertEqual(config["cooldown_sec"], 2.5)
         self.assertTrue(thread._wake_flag.is_set())
+
+    def test_text_candidate_uses_fast_region_only_confirmation(self):
+        class FakeCapture:
+            def __init__(self):
+                self.requests = []
+
+            def grab(self, request):
+                self.requests.append(request)
+                return np.zeros((10, 30, 4), dtype=np.uint8)
+
+        thread = watcher.WatcherThread(Mock(), queue.Queue(), queue.Queue())
+        entry = self._template_item()
+        entry.update({
+            "match_mode": watcher.MATCH_MODE_TEXT,
+            "threshold": 0.9,
+            "region": (110, 220, 30, 10),
+        })
+        monitor = {"left": 100, "top": 200, "width": 80, "height": 60}
+        capture = FakeCapture()
+        config = thread._config_snapshot()
+
+        with patch.object(watcher, "TEXT_CONFIRMATION_DELAY_SEC", 0.0), \
+                patch.object(thread, "_match_entry", return_value=(0.94, (1, 1), 1.0)):
+            result = thread._confirm_text_candidate(
+                capture,
+                monitor,
+                entry,
+                config,
+                (0.92, (12, 23), 1.0),
+                None,
+            )
+
+        self.assertEqual(result, (0.92, (12, 23), 1.0))
+        self.assertEqual(
+            capture.requests,
+            [{"left": 110, "top": 220, "width": 30, "height": 10}],
+        )
+
+    def test_near_exact_text_candidate_alerts_without_confirmation_delay(self):
+        thread = watcher.WatcherThread(Mock(), queue.Queue(), queue.Queue())
+        entry = self._template_item()
+        entry.update({"match_mode": watcher.MATCH_MODE_TEXT, "threshold": 0.9})
+        capture = Mock()
+
+        result = thread._confirm_text_candidate(
+            capture,
+            {"left": 0, "top": 0, "width": 10, "height": 10},
+            entry,
+            thread._config_snapshot(),
+            (0.98, (1, 1), 1.0),
+            None,
+        )
+
+        self.assertEqual(result, (0.98, (1, 1), 1.0))
+        capture.grab.assert_not_called()
 
 
 class WatcherFrameLifecycleTests(unittest.TestCase):

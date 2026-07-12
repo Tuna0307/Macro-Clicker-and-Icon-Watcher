@@ -119,6 +119,22 @@ actions to move between rally detection, joining, confirmation, and safe
 back-out states. Its template paths are project-relative, so the folder can be
 moved to another computer without rewriting the scenario JSON.
 
+## Alert detection types
+
+Each alert template has its own detection type:
+
+- **Text / colored text** isolates the foreground text color so translucent or
+  changing backgrounds do not become part of the match. Text does not use
+  rotation. Near-exact matches alert immediately; other passing matches are
+  confirmed against a second chat-region capture after 100 ms.
+- **Static picture** searches the configured scales without rotated variants.
+- **Animated/rotating picture** searches the configured scales at 0, ±5, and
+  ±8 degrees for icons that visibly tilt or wobble.
+
+Changing the global **Grayscale pictures** option affects only the two picture
+modes. New templates default to **Static picture**. Older manifests without a
+detection type retain the previous animated/rotating behavior.
+
 ## Tips
 
 - Start `confidence` around 0.85; raise it if you get false

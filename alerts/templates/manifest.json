@@ -5,6 +5,7 @@
       "name": "Build/Task Icon (badge)",
       "file": "template_2.png",
       "threshold": 0.7,
+      "match_mode": "animated_picture",
       "region": [
         830,
         781,
@@ -28,6 +29,7 @@
       "name": "Diamond",
       "file": "template_3.png",
       "threshold": 0.7,
+      "match_mode": "animated_picture",
       "region": [
         836,
         788,
@@ -47,33 +49,11 @@
       ]
     },
     {
-      "id": 4,
-      "name": "Digs Text",
-      "file": "template_4.png",
-      "threshold": 0.8,
-      "region": [
-        136,
-        985,
-        571,
-        94
-      ],
-      "region_mode": "window",
-      "region_ratio": [
-        0.07083333333333333,
-        0.9120370370370371,
-        0.29739583333333336,
-        0.08703703703703704
-      ],
-      "region_window_size": [
-        1920,
-        1080
-      ]
-    },
-    {
       "id": 7,
       "name": "Digs Text Cyan",
       "file": "template_7.png",
-      "threshold": 0.8,
+      "threshold": 0.9,
+      "match_mode": "colored_text",
       "region": [
         135,
         981,
@@ -97,6 +77,7 @@
       "name": "Secret Task",
       "file": "template_9.png",
       "threshold": 0.85,
+      "match_mode": "static_picture",
       "region": [
         4,
         644,
@@ -120,6 +101,7 @@
       "name": "Resources Dig Icon",
       "file": "template_14.png",
       "threshold": 0.85,
+      "match_mode": "static_picture",
       "region": [
         149,
         810,
@@ -142,7 +124,8 @@
       "id": 15,
       "name": "#2212",
       "file": "template_15.png",
-      "threshold": 0.75,
+      "threshold": 0.9,
+      "match_mode": "colored_text",
       "region": [
         139,
         986,
