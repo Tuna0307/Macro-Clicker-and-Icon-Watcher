@@ -61,6 +61,27 @@ class LogMaintenanceTests(unittest.TestCase):
             self.assertEqual(len(remaining), 3)
             self.assertNotIn("old.png", remaining)
 
+    def test_cleanup_preserves_labels_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now = time.time()
+            labels = os.path.join(tmp, "labels.json")
+            old_crop = os.path.join(tmp, "old.png")
+            for path in (labels, old_crop):
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("{}")
+                os.utime(path, (now - 10 * 86400, now - 10 * 86400))
+
+            cleanup_directory(
+                tmp,
+                max_files=0,
+                max_age_days=1,
+                now=now,
+                preserve_names={"labels.json"},
+            )
+
+            self.assertTrue(os.path.exists(labels))
+            self.assertFalse(os.path.exists(old_crop))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,18 +25,20 @@ import os
 import queue
 import struct
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
 from dataclasses import asdict, dataclass
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import cv2
 import mss
 import numpy as np
 from PIL import Image, ImageTk
 
+from runtime_paths import INSTANCE_LOCK_PATH
 from window_locator import (
     find_window_rect,
     proportional_region_from_window,
@@ -62,7 +64,8 @@ except ImportError:
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 try:
-    import pygame
+    import pygame as _pygame
+    pygame: Any = _pygame
     HAVE_PYGAME = True
 except ImportError:
     pygame = None
@@ -86,7 +89,7 @@ ALERTS_DIR = os.path.join(APP_DIR, "alerts")
 TEMPLATES_DIR = os.path.join(ALERTS_DIR, "templates")
 MANIFEST_PATH = os.path.join(TEMPLATES_DIR, "manifest.json")
 SETTINGS_PATH = os.path.join(ALERTS_DIR, "settings.json")
-LOCK_PATH = os.path.join(ALERTS_DIR, "icon_alert_watcher.lock")
+LOCK_PATH = INSTANCE_LOCK_PATH
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 
 DEFAULT_SCALES = [
@@ -102,6 +105,9 @@ DEFAULT_START_STOP_HOTKEY = "ctrl+shift+f8"
 DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
 REGION_UNAVAILABLE = object()
 _SOUND_LOCK = threading.Lock()
+_SOUND_QUEUE_LOCK = threading.Lock()
+_SOUND_THREAD = None
+_PENDING_SOUND_VOLUME = None
 
 
 def _drain_queue(q):
@@ -110,6 +116,52 @@ def _drain_queue(q):
             yield q.get_nowait()
         except queue.Empty:
             break
+
+
+def _atomic_write_json(path, data):
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=folder
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_png(path, image_bgr):
+    try:
+        ok, encoded = cv2.imencode(".png", image_bgr)
+    except cv2.error as exc:
+        raise OSError(f"Could not encode template image: {path}") from exc
+    if not ok:
+        raise OSError(f"Could not encode template image: {path}")
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".png", dir=folder
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(encoded.tobytes())
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass(eq=True)
@@ -135,43 +187,98 @@ def load_settings(path=SETTINGS_PATH):
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return AppSettings()
+
+    if not isinstance(data, dict):
         return AppSettings()
 
     defaults = AppSettings()
     values = asdict(defaults)
     values.update({key: data[key] for key in values if key in data})
-    if values["scan_region"] is not None:
+
+    def _int_tuple(value, length, positive_size_from=None):
+        if value is None or isinstance(value, (str, bytes, dict)):
+            return None
         try:
-            values["scan_region"] = tuple(int(v) for v in values["scan_region"])
-            if len(values["scan_region"]) != 4:
-                values["scan_region"] = None
-        except (TypeError, ValueError):
-            values["scan_region"] = None
+            if any(isinstance(v, bool) for v in value):
+                return None
+            result = tuple(int(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if len(result) != length:
+            return None
+        if positive_size_from is not None and any(v <= 0 for v in result[positive_size_from:]):
+            return None
+        return result
+
+    def _float_tuple(value, length):
+        if value is None or isinstance(value, (str, bytes, dict)):
+            return None
+        try:
+            if any(isinstance(v, bool) for v in value):
+                return None
+            result = tuple(float(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if len(result) != length or not all(math.isfinite(v) for v in result):
+            return None
+        return result
+
+    values["scan_region"] = _int_tuple(values["scan_region"], 4, positive_size_from=2)
     if values["scan_region_mode"] not in ("screen", "window"):
         values["scan_region_mode"] = "screen"
-    if values["scan_region_ratio"] is not None:
-        try:
-            values["scan_region_ratio"] = tuple(float(v) for v in values["scan_region_ratio"])
-            if len(values["scan_region_ratio"]) != 4:
-                values["scan_region_ratio"] = None
-        except (TypeError, ValueError):
-            values["scan_region_ratio"] = None
-    if values["scan_region_window_size"] is not None:
-        try:
-            values["scan_region_window_size"] = tuple(int(v) for v in values["scan_region_window_size"])
-            if len(values["scan_region_window_size"]) != 2:
-                values["scan_region_window_size"] = None
-        except (TypeError, ValueError):
-            values["scan_region_window_size"] = None
+    ratio = _float_tuple(values["scan_region_ratio"], 4)
+    if ratio is not None:
+        x, y, width, height = ratio
+        if (
+            x < 0.0
+            or y < 0.0
+            or width <= 0.0
+            or height <= 0.0
+            or x + width > 1.001
+            or y + height > 1.001
+        ):
+            ratio = None
+    values["scan_region_ratio"] = ratio
+    values["scan_region_window_size"] = _int_tuple(
+        values["scan_region_window_size"],
+        2,
+        positive_size_from=0,
+    )
+    if (
+        values["scan_region"] is None
+        or values["scan_region_mode"] == "screen"
+        or (values["scan_region_ratio"] is None)
+        != (values["scan_region_window_size"] is None)
+    ):
+        values["scan_region_ratio"] = None
+        values["scan_region_window_size"] = None
     try:
-        values["cooldown_sec"] = max(0.0, float(values["cooldown_sec"]))
-    except (TypeError, ValueError):
+        cooldown = float(values["cooldown_sec"])
+        values["cooldown_sec"] = max(0.0, cooldown) if math.isfinite(cooldown) else defaults.cooldown_sec
+    except (TypeError, ValueError, OverflowError):
         values["cooldown_sec"] = defaults.cooldown_sec
     try:
-        values["alert_volume"] = min(1.0, max(0.0, float(values["alert_volume"])))
-    except (TypeError, ValueError):
+        volume = float(values["alert_volume"])
+        values["alert_volume"] = (
+            min(1.0, max(0.0, volume)) if math.isfinite(volume) else defaults.alert_volume
+        )
+    except (TypeError, ValueError, OverflowError):
         values["alert_volume"] = defaults.alert_volume
+
+    for key in ("grayscale", "debug", "minimize_to_tray"):
+        if not isinstance(values[key], bool):
+            values[key] = getattr(defaults, key)
+    for key in ("monitor_choice", "target_window_title", "start_stop_hotkey", "test_alert_hotkey"):
+        if not isinstance(values[key], str):
+            values[key] = getattr(defaults, key)
+    if not values["monitor_choice"].strip():
+        values["monitor_choice"] = defaults.monitor_choice
+    if not values["start_stop_hotkey"].strip():
+        values["start_stop_hotkey"] = defaults.start_stop_hotkey
+    if not values["test_alert_hotkey"].strip():
+        values["test_alert_hotkey"] = defaults.test_alert_hotkey
     return AppSettings(**values)
 
 
@@ -183,13 +290,7 @@ def save_settings(path, settings):
         data["scan_region_ratio"] = list(data["scan_region_ratio"])
     if data["scan_region_window_size"] is not None:
         data["scan_region_window_size"] = list(data["scan_region_window_size"])
-    folder = os.path.dirname(path)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp_path, path)
+    _atomic_write_json(path, data)
 
 
 class SingleInstanceLock:
@@ -197,6 +298,7 @@ class SingleInstanceLock:
         self.path = path
         self.process_exists = process_exists or self._process_exists
         self.fd = None
+        self._locked = False
 
     def _process_exists(self, pid):
         try:
@@ -256,30 +358,51 @@ class SingleInstanceLock:
             pass
 
     def acquire(self):
-        for _attempt in range(2):
-            try:
-                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                os.write(self.fd, str(os.getpid()).encode("ascii"))
-                return True
-            except FileExistsError:
-                if self._is_stale_lock():
-                    self._remove_stale_lock()
-                    continue
-                return False
-        return False
+        if self.fd is not None:
+            return True
+        folder = os.path.dirname(self.path)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if os.path.getsize(self.path) == 0:
+                os.write(fd, b" ")
+            os.lseek(fd, 0, os.SEEK_SET)
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            os.fsync(fd)
+        except (OSError, BlockingIOError):
+            os.close(fd)
+            return False
+        self.fd = fd
+        self._locked = True
+        return True
 
     def release(self):
         if self.fd is None:
             return
         try:
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            if self._locked and sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+            elif self._locked:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
             os.close(self.fd)
         except OSError:
             pass
         self.fd = None
-        try:
-            os.remove(self.path)
-        except OSError:
-            pass
+        self._locked = False
 
 
 def resolve_item_absolute_region(item, global_region, target_window_title="",
@@ -321,6 +444,29 @@ def _prepare_match_image(image_bgr, use_grayscale):
     return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
 
+def _spatial_deviation(image):
+    if image.ndim == 3:
+        return float(np.max(np.std(image.astype(np.float32), axis=(0, 1))))
+    return float(np.std(image))
+
+
+def _best_variant_match(screen, template, low_variance):
+    if low_variance:
+        raw = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF)
+        channels = template.shape[2] if template.ndim == 3 else 1
+        height, width = template.shape[:2]
+        worst = float(width * height * channels * (255 ** 2))
+        scores = np.clip(1.0 - (raw / worst), 0.0, 1.0)
+    else:
+        raw = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+        scores = np.nan_to_num(raw, nan=-1.0, posinf=1.0, neginf=-1.0)
+    _, max_score, _, max_loc = cv2.minMaxLoc(scores)
+    if low_variance and scores.size > 1:
+        if float(max_score) - float(scores.min()) <= 1e-6:
+            return -1.0, None
+    return float(max_score), max_loc
+
+
 def _rotate_image(image, angle):
     if angle == 0:
         return image
@@ -345,20 +491,127 @@ def prepare_template_variants(template_bgr, scales=DEFAULT_SCALES,
         rotated_template = _rotate_image(template, angle)
         for scale in scales:
             tw, th = max(1, int(tw0 * scale)), max(1, int(th0 * scale))
-            resized = cv2.resize(rotated_template, (tw, th), interpolation=cv2.INTER_AREA)
+            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(
+                rotated_template, (tw, th), interpolation=interpolation
+            )
             variants.append({
                 "image": resized,
                 "scale": scale,
                 "angle": angle,
-                "low_variance": float(np.std(resized)) < 1e-6,
+                "low_variance": _spatial_deviation(resized) < 1e-6,
             })
     return tuple(variants)
+
+
+def _coarse_multiscale_match(
+    screen, variants, early_exit_score=None, cancel_event=None, factor=0.5
+):
+    """Coarse-to-fine search for large captures, returning full-resolution coordinates."""
+    small_screen = cv2.resize(
+        screen, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA
+    )
+    zero_angle = [
+        variant
+        for variant in variants
+        if abs(float(variant.get("angle", 0))) < 1e-9
+    ]
+    initial = zero_angle or list(variants)
+    records = []
+
+    def evaluate_coarse(variant):
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        template = variant["image"]
+        height, width = template.shape[:2]
+        small_width = max(1, round(width * factor))
+        small_height = max(1, round(height * factor))
+        if small_width > small_screen.shape[1] or small_height > small_screen.shape[0]:
+            return
+        small_template = cv2.resize(
+            template,
+            (small_width, small_height),
+            interpolation=cv2.INTER_AREA,
+        )
+        low_variance = _spatial_deviation(small_template) < 1e-6
+        score, loc = _best_variant_match(small_screen, small_template, low_variance)
+        if loc is not None:
+            records.append((score, loc, variant))
+
+    for variant in initial:
+        evaluate_coarse(variant)
+    if not records or (cancel_event is not None and cancel_event.is_set()):
+        return -1.0, None, 1.0
+
+    best_base_scale = float(
+        max(records, key=lambda record: record[0])[2].get("scale", 1.0)
+    )
+    by_angle = {}
+    for variant in variants:
+        angle = float(variant.get("angle", 0))
+        if abs(angle) < 1e-9:
+            continue
+        by_angle.setdefault(angle, []).append(variant)
+    for angle_variants in by_angle.values():
+        nearest = sorted(
+            angle_variants,
+            key=lambda variant: abs(
+                float(variant.get("scale", 1.0)) - best_base_scale
+            ),
+        )[:4]
+        for variant in nearest:
+            evaluate_coarse(variant)
+
+    best_score, best_loc, best_scale = -1.0, None, 1.0
+    best_angle = 0.0
+    for _coarse_score, coarse_loc, variant in sorted(
+        records, key=lambda item: item[0], reverse=True
+    ):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        template = variant["image"]
+        height, width = template.shape[:2]
+        expected_x = round(coarse_loc[0] / factor)
+        expected_y = round(coarse_loc[1] / factor)
+        margin = max(8, round(max(width, height) * 0.35))
+        left = max(0, expected_x - margin)
+        top = max(0, expected_y - margin)
+        right = min(screen.shape[1], expected_x + width + margin)
+        bottom = min(screen.shape[0], expected_y + height + margin)
+        local = screen[top:bottom, left:right]
+        if local.shape[0] < height or local.shape[1] < width:
+            continue
+        low_variance = bool(
+            variant.get("low_variance", _spatial_deviation(template) < 1e-6)
+        )
+        score, local_loc = _best_variant_match(local, template, low_variance)
+        if local_loc is None:
+            continue
+        scale = float(variant.get("scale", 1.0))
+        angle = float(variant.get("angle", 0))
+        tied = abs(score - best_score) <= 1e-9
+        if (
+            score > best_score + 1e-9
+            or (tied and abs(scale - 1.0) < abs(best_scale - 1.0))
+            or (
+                tied
+                and abs(scale - best_scale) <= 1e-9
+                and abs(angle) < abs(best_angle)
+            )
+        ):
+            best_score = score
+            best_loc = (left + local_loc[0], top + local_loc[1])
+            best_scale = scale
+            best_angle = angle
+            if early_exit_score is not None and best_score >= early_exit_score:
+                break
+    return best_score, best_loc, best_scale
 
 
 def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
                               use_grayscale=False, region=None,
                               rotations=DEFAULT_ROTATIONS, variants=None,
-                              early_exit_score=None):
+                              early_exit_score=None, cancel_event=None):
     best_score, best_loc, best_scale = -1.0, None, 1.0
     best_angle = 0
     screen_bgr, offset = _crop_region(screen_bgr, region)
@@ -374,21 +627,32 @@ def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
             rotations=rotations,
             use_grayscale=use_grayscale,
         )
+    variants = tuple(variants)
+    if (
+        screen.shape[0] * screen.shape[1] >= 500_000
+        and min(template_bgr.shape[:2]) >= 20
+        and len(variants) > 8
+    ):
+        coarse_score, coarse_loc, coarse_scale = _coarse_multiscale_match(
+            screen,
+            variants,
+            early_exit_score=early_exit_score,
+            cancel_event=cancel_event,
+            factor=0.5 if min(template_bgr.shape[:2]) >= 30 else 0.67,
+        )
+        if coarse_loc is not None:
+            coarse_loc = (coarse_loc[0] + offset[0], coarse_loc[1] + offset[1])
+        return coarse_score, coarse_loc, coarse_scale
     for variant in variants:
+        if cancel_event is not None and cancel_event.is_set():
+            break
         resized = variant["image"]
         th, tw = resized.shape[:2]
         if tw > sw or th > sh:
             continue
-        if variant["low_variance"]:
-            result = cv2.matchTemplate(screen, resized, cv2.TM_SQDIFF)
-            min_val, _, min_loc, _ = cv2.minMaxLoc(result)
-            channels = resized.shape[2] if resized.ndim == 3 else 1
-            worst = float(tw * th * channels * (255 ** 2))
-            score, loc = max(0.0, 1.0 - (min_val / worst)), min_loc
-        else:
-            result = cv2.matchTemplate(screen, resized, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            score, loc = max_val, max_loc
+        score, loc = _best_variant_match(screen, resized, variant["low_variance"])
+        if loc is None:
+            continue
         scale = variant["scale"]
         angle = variant["angle"]
         score_epsilon = 1e-6 if variant["low_variance"] else 1e-9
@@ -412,18 +676,47 @@ def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
     return best_score, best_loc, best_scale
 
 
-def test_detection_on_screenshot(path, template_items, use_grayscale=False, region=None):
+def _region_relative_to_origin(region, origin):
+    if region is None:
+        return None
+    x, y, width, height = region
+    return (x - origin[0], y - origin[1], width, height)
+
+
+def test_detection_on_screenshot(path, template_items, use_grayscale=False, region=None,
+                                 region_origin=(0, 0), target_window_title="",
+                                 window_rect_provider=find_window_rect):
     screenshot = cv2.imread(path)
     if screenshot is None:
         raise ValueError(f"Could not read screenshot: {path}")
 
     results = []
     for item in template_items:
+        item_region = resolve_item_absolute_region(
+            item,
+            region,
+            target_window_title,
+            window_rect_provider,
+        )
+        if item_region is REGION_UNAVAILABLE:
+            results.append({
+                "id": item.get("id"),
+                "name": item["name"],
+                "threshold": item.get("threshold", DEFAULT_THRESHOLD),
+                "score": -1.0,
+                "loc": None,
+                "scale": 1.0,
+                "matched": False,
+                "unavailable": True,
+            })
+            continue
+        local_region = _region_relative_to_origin(item_region, region_origin)
         score, loc, scale = match_template_multiscale(
             screenshot,
             item["image"],
             use_grayscale=use_grayscale,
-            region=region,
+            region=local_region,
+            variants=item.get("variants"),
         )
         threshold = item.get("threshold", DEFAULT_THRESHOLD)
         results.append({
@@ -469,38 +762,171 @@ class TemplateManager:
         self.items = {}  # id -> {"name", "file", "threshold", "image"(np.array)}
         self._lock = threading.RLock()
         self._next_id = 1
+        self.load_warnings = []
         self._load()
 
+    @staticmethod
+    def _safe_template_path(filename):
+        if not isinstance(filename, str) or not filename.strip():
+            raise ValueError("Template filename must be a non-empty string")
+        root = os.path.realpath(TEMPLATES_DIR)
+        candidate = os.path.realpath(os.path.join(root, filename))
+        try:
+            inside_root = os.path.commonpath((root, candidate)) == root
+        except ValueError:
+            inside_root = False
+        if os.path.isabs(filename) or not inside_root:
+            raise ValueError(f"Template path escapes the template directory: {filename!r}")
+        return candidate
+
+    @staticmethod
+    def _valid_region(value):
+        if value is None or isinstance(value, (str, bytes, dict)):
+            return None
+        try:
+            if any(isinstance(v, bool) for v in value):
+                return None
+            region = tuple(int(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if len(region) != 4 or region[2] <= 0 or region[3] <= 0:
+            return None
+        return region
+
+    @staticmethod
+    def _valid_ratio(value):
+        if value is None or isinstance(value, (str, bytes, dict)):
+            return None
+        try:
+            if any(isinstance(v, bool) for v in value):
+                return None
+            ratio = tuple(float(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if len(ratio) != 4 or not all(math.isfinite(v) for v in ratio):
+            return None
+        if ratio[0] < 0 or ratio[1] < 0 or ratio[2] <= 0 or ratio[3] <= 0:
+            return None
+        if ratio[0] + ratio[2] > 1.001 or ratio[1] + ratio[3] > 1.001:
+            return None
+        return ratio
+
+    @staticmethod
+    def _valid_window_size(value):
+        if value is None or isinstance(value, (str, bytes, dict)):
+            return None
+        try:
+            if any(isinstance(v, bool) for v in value):
+                return None
+            size = tuple(int(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if len(size) != 2 or size[0] <= 0 or size[1] <= 0:
+            return None
+        return size
+
+    def _reserve_existing_template_ids(self):
+        try:
+            filenames = os.listdir(TEMPLATES_DIR)
+        except OSError:
+            return
+        for filename in filenames:
+            stem, extension = os.path.splitext(filename)
+            if extension.lower() != ".png" or not stem.startswith("template_"):
+                continue
+            try:
+                tid = int(stem[len("template_"):])
+            except ValueError:
+                continue
+            if tid > 0:
+                self._next_id = max(self._next_id, tid + 1)
+
     def _load(self):
+        self._reserve_existing_template_ids()
         if not os.path.exists(MANIFEST_PATH):
             return
-        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+            self.load_warnings.append(f"Could not load template manifest: {exc}")
+            return
+        if not isinstance(data, dict) or not isinstance(data.get("items", []), list):
+            self.load_warnings.append("Template manifest must contain an 'items' list.")
+            return
+        used_paths = set()
         with self._lock:
             for entry in data.get("items", []):
-                path = os.path.join(TEMPLATES_DIR, entry["file"])
+                if not isinstance(entry, dict):
+                    self.load_warnings.append("Ignored a malformed template manifest entry.")
+                    continue
+                tid = entry.get("id")
+                if isinstance(tid, bool) or not isinstance(tid, int) or tid <= 0:
+                    self.load_warnings.append("Ignored a template with an invalid ID.")
+                    continue
+                self._next_id = max(self._next_id, tid + 1)
+                if tid in self.items:
+                    self.load_warnings.append(f"Ignored duplicate template ID {tid}.")
+                    continue
+                try:
+                    path = self._safe_template_path(entry.get("file"))
+                except ValueError as exc:
+                    self.load_warnings.append(str(exc))
+                    continue
+                normalized_path = os.path.normcase(path)
+                if normalized_path in used_paths:
+                    self.load_warnings.append(
+                        f"Ignored template ID {tid}; its image file is already in use."
+                    )
+                    continue
                 img = cv2.imread(path)
                 if img is None:
+                    self.load_warnings.append(
+                        f"Could not read template image for ID {tid}: {entry.get('file')!r}"
+                    )
                     continue
-                tid = entry["id"]
+                used_paths.add(normalized_path)
+                name = entry.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    name = f"icon_{tid}"
+                try:
+                    threshold = float(entry.get("threshold", DEFAULT_THRESHOLD))
+                    if not math.isfinite(threshold):
+                        raise ValueError
+                    threshold = min(1.0, max(0.0, threshold))
+                except (TypeError, ValueError, OverflowError):
+                    threshold = DEFAULT_THRESHOLD
+                region = self._valid_region(entry.get("region"))
+                region_mode = entry.get("region_mode", "screen")
+                if region_mode not in ("screen", "window"):
+                    region_mode = "screen"
+                region_ratio = self._valid_ratio(entry.get("region_ratio"))
+                region_window_size = self._valid_window_size(
+                    entry.get("region_window_size")
+                )
+                if (
+                    region is None
+                    or region_mode == "screen"
+                    or (region_ratio is None) != (region_window_size is None)
+                ):
+                    region_ratio = None
+                    region_window_size = None
                 self.items[tid] = {
-                    "name": entry["name"],
+                    "name": name.strip(),
                     "file": entry["file"],
-                    "threshold": entry.get("threshold", DEFAULT_THRESHOLD),
-                    "region": tuple(entry["region"]) if entry.get("region") else None,
-                    "region_mode": entry.get("region_mode", "screen"),
-                    "region_ratio": tuple(entry["region_ratio"]) if entry.get("region_ratio") else None,
-                    "region_window_size": tuple(entry["region_window_size"])
-                    if entry.get("region_window_size") else None,
+                    "threshold": threshold,
+                    "region": region,
+                    "region_mode": region_mode,
+                    "region_ratio": region_ratio,
+                    "region_window_size": region_window_size,
                     "image": img,
                     "variant_cache": {},
                 }
-                self._next_id = max(self._next_id, tid + 1)
 
     def _save(self):
         with self._lock:
             items = []
-            for tid, v in self.items.items():
+            for tid, v in sorted(self.items.items()):
                 item = {
                     "id": tid,
                     "name": v["name"],
@@ -515,22 +941,31 @@ class TemplateManager:
                 if v.get("region_window_size") is not None:
                     item["region_window_size"] = list(v["region_window_size"])
                 items.append(item)
-            data = {"items": items}
-            tmp_path = f"{MANIFEST_PATH}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, MANIFEST_PATH)
+            _atomic_write_json(MANIFEST_PATH, {"items": items})
 
     def add(self, image_bgr, name, threshold=DEFAULT_THRESHOLD):
         with self._lock:
             tid = self._next_id
-            self._next_id += 1
             filename = f"template_{tid}.png"
-            cv2.imwrite(os.path.join(TEMPLATES_DIR, filename), image_bgr)
-            self.items[tid] = {
-                "name": name,
+            path = self._safe_template_path(filename)
+            while tid in self.items or os.path.exists(path):
+                tid += 1
+                filename = f"template_{tid}.png"
+                path = self._safe_template_path(filename)
+            self._next_id = tid + 1
+            if not isinstance(image_bgr, np.ndarray) or image_bgr.size == 0:
+                raise ValueError("Template image is empty or invalid")
+            try:
+                numeric_threshold = float(threshold)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("Template threshold must be a finite number") from exc
+            if not math.isfinite(numeric_threshold):
+                raise ValueError("Template threshold must be a finite number")
+            numeric_threshold = min(1.0, max(0.0, numeric_threshold))
+            entry = {
+                "name": str(name).strip() or f"icon_{tid}",
                 "file": filename,
-                "threshold": threshold,
+                "threshold": numeric_threshold,
                 "region": None,
                 "region_mode": "screen",
                 "region_ratio": None,
@@ -538,40 +973,86 @@ class TemplateManager:
                 "image": image_bgr.copy(),
                 "variant_cache": {},
             }
-        self._save()
+            _atomic_write_png(path, image_bgr)
+            self.items[tid] = entry
+            try:
+                self._save()
+            except Exception:
+                self.items.pop(tid, None)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                raise
         return tid
 
     def remove(self, tid):
         with self._lock:
             entry = self.items.pop(tid, None)
-        if entry:
+            if entry is None:
+                return
             try:
-                os.remove(os.path.join(TEMPLATES_DIR, entry["file"]))
-            except OSError:
+                self._save()
+            except Exception:
+                self.items[tid] = entry
+                raise
+            try:
+                os.remove(self._safe_template_path(entry["file"]))
+            except (OSError, ValueError):
+                # The manifest is authoritative; a failed delete leaves only
+                # an unreferenced backup image, never a broken live entry.
                 pass
-            self._save()
 
     def set_threshold(self, tid, threshold, save=True):
-        with self._lock:
-            if tid in self.items:
-                self.items[tid]["threshold"] = threshold
-            else:
-                return
-        if save:
-            self._save()
-
-    def set_region(self, tid, region, region_mode="screen",
-                   region_ratio=None, region_window_size=None):
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(threshold):
+            return
+        threshold = min(1.0, max(0.0, threshold))
         with self._lock:
             if tid not in self.items:
                 return
-            self.items[tid]["region"] = tuple(region) if region is not None else None
+            previous = self.items[tid]["threshold"]
+            self.items[tid]["threshold"] = threshold
+            if save:
+                try:
+                    self._save()
+                except Exception:
+                    self.items[tid]["threshold"] = previous
+                    raise
+
+    def set_region(self, tid, region, region_mode="screen",
+                   region_ratio=None, region_window_size=None):
+        if region_mode not in ("screen", "window"):
+            raise ValueError("Region mode must be 'screen' or 'window'.")
+        parsed_region = self._valid_region(region)
+        if region is not None and parsed_region is None:
+            raise ValueError("Region must contain four whole numbers with positive size.")
+        parsed_ratio = self._valid_ratio(region_ratio)
+        parsed_window_size = self._valid_window_size(region_window_size)
+        if region_mode == "window" and parsed_region is not None:
+            if (parsed_ratio is None) != (parsed_window_size is None):
+                raise ValueError("Window regions need both ratio and base window size.")
+        elif region_mode == "screen" and (region_ratio is not None or region_window_size is not None):
+            raise ValueError("Screen regions cannot contain window resize metadata.")
+        with self._lock:
+            if tid not in self.items:
+                return
+            previous = {
+                key: self.items[tid].get(key)
+                for key in ("region", "region_mode", "region_ratio", "region_window_size")
+            }
+            self.items[tid]["region"] = parsed_region
             self.items[tid]["region_mode"] = region_mode
-            self.items[tid]["region_ratio"] = tuple(region_ratio) if region_ratio is not None else None
-            self.items[tid]["region_window_size"] = (
-                tuple(region_window_size) if region_window_size is not None else None
-            )
-            self._save()
+            self.items[tid]["region_ratio"] = parsed_ratio
+            self.items[tid]["region_window_size"] = parsed_window_size
+            try:
+                self._save()
+            except Exception:
+                self.items[tid].update(previous)
+                raise
 
     def clear_region(self, tid):
         self.set_region(tid, None, "screen", None, None)
@@ -642,25 +1123,93 @@ class WatcherThread(threading.Thread):
         self.debug = debug
         self.cooldown_sec = cooldown_sec
         self._stop_flag = threading.Event()
+        self._wake_flag = threading.Event()
+        self._config_lock = threading.RLock()
         self.states = {}  # tid -> TemplateState
 
     def stop(self):
         self._stop_flag.set()
+        self._wake_flag.set()
+
+    def update_config(self, *, monitor_filter=None, scan_region=None,
+                      scan_region_mode="screen", scan_region_ratio=None,
+                      scan_region_window_size=None, target_window_title="",
+                      use_grayscale=True, debug=False,
+                      cooldown_sec=DEFAULT_COOLDOWN_SEC):
+        with self._config_lock:
+            self.monitor_filter = monitor_filter
+            self.scan_region = scan_region
+            self.scan_region_mode = scan_region_mode
+            self.scan_region_ratio = scan_region_ratio
+            self.scan_region_window_size = scan_region_window_size
+            self.target_window_title = target_window_title.strip()
+            self.use_grayscale = bool(use_grayscale)
+            self.debug = bool(debug)
+            cooldown = float(cooldown_sec)
+            if not math.isfinite(cooldown):
+                cooldown = DEFAULT_COOLDOWN_SEC
+            self.cooldown_sec = max(0.0, cooldown)
+            self._target_window_missing_logged = False
+        self._wake_flag.set()
+
+    def _config_snapshot(self):
+        with self._config_lock:
+            return {
+                "monitor_filter": self.monitor_filter,
+                "scan_region": self.scan_region,
+                "scan_region_mode": self.scan_region_mode,
+                "scan_region_ratio": self.scan_region_ratio,
+                "scan_region_window_size": self.scan_region_window_size,
+                "target_window_title": self.target_window_title,
+                "use_grayscale": self.use_grayscale,
+                "debug": self.debug,
+                "cooldown_sec": self.cooldown_sec,
+            }
+
+    def _wait_for_next_cycle(self):
+        self._wake_flag.wait(POLL_INTERVAL_SEC)
+        self._wake_flag.clear()
 
     def _report_fatal_error(self, exc):
         msg = f"Watcher error: {exc}"
         self.log_queue.put(msg)
-        self.event_queue.put({"type": "watcher_stopped", "error": str(exc)})
+        self.event_queue.put({"type": "watcher_error", "error": str(exc), "watcher": self})
 
-    def _sync_states(self, items):
+    def _sync_states(self, items, cooldown_sec=None):
+        if cooldown_sec is None:
+            cooldown_sec = self.cooldown_sec
         active_ids = {item["id"] for item in items}
         for tid in list(self.states):
             if tid not in active_ids:
                 del self.states[tid]
         for item in items:
             tid = item["id"]
-            if tid not in self.states or self.states[tid].threshold != item["threshold"]:
-                self.states[tid] = TemplateState(item["threshold"], cooldown_sec=self.cooldown_sec)
+            if tid not in self.states:
+                self.states[tid] = TemplateState(
+                    item["threshold"],
+                    cooldown_sec=cooldown_sec,
+                )
+            else:
+                self.states[tid].threshold = item["threshold"]
+                self.states[tid].cooldown_sec = cooldown_sec
+
+    def _emit_aggregated_matches(self, items, best_scores, now, complete_ids=None):
+        if complete_ids is None:
+            complete_ids = {item["id"] for item in items}
+        for entry in items:
+            tid = entry["id"]
+            score, monitor = best_scores.get(tid, (-1.0, None))
+            # A partial scan may safely activate a positive detection, but it
+            # must never disarm a template based on monitors that were not read.
+            if tid not in complete_ids and score < self.states[tid].threshold:
+                continue
+            if self.states[tid].update(score, now=now) and monitor is not None:
+                self.event_queue.put({
+                    "id": tid,
+                    "name": entry["name"],
+                    "monitor": monitor,
+                    "score": score,
+                })
 
     def _local_region_for_monitor(self, mon, absolute_region):
         if absolute_region is None:
@@ -674,35 +1223,43 @@ class WatcherThread(threading.Thread):
             return None
         return (left - mon["left"], top - mon["top"], right - left, bottom - top)
 
-    def _resolve_absolute_scan_region(self):
-        if self.scan_region_mode == "window" or self.target_window_title:
-            rect = self.window_rect_provider(self.target_window_title)
+    def _resolve_absolute_scan_region(self, config=None):
+        if config is None:
+            config = self._config_snapshot()
+        if config["scan_region_mode"] == "window" or config["target_window_title"]:
+            rect = self.window_rect_provider(config["target_window_title"])
             if not rect:
                 if not self._target_window_missing_logged:
-                    self.log_queue.put(f"Target window not found: '{self.target_window_title}'")
+                    self.log_queue.put(
+                        f"Target window not found: '{config['target_window_title']}'"
+                    )
                     self._target_window_missing_logged = True
                 return REGION_UNAVAILABLE
             self._target_window_missing_logged = False
-            if self.scan_region is None:
+            if config["scan_region"] is None:
                 return rect
             return resolve_window_region(
-                self.scan_region,
+                config["scan_region"],
                 rect,
-                self.scan_region_ratio,
-                self.scan_region_window_size,
+                config["scan_region_ratio"],
+                config["scan_region_window_size"],
             )
-        return self.scan_region
+        return config["scan_region"]
 
-    def _resolve_item_scan_region(self, item, global_region):
+    def _resolve_item_scan_region(self, item, global_region, config=None):
+        if config is None:
+            config = self._config_snapshot()
         result = resolve_item_absolute_region(
             item,
             global_region,
-            self.target_window_title,
+            config["target_window_title"],
             self.window_rect_provider,
         )
         if result is REGION_UNAVAILABLE:
             if not self._target_window_missing_logged:
-                self.log_queue.put(f"Target window not found: '{self.target_window_title}'")
+                self.log_queue.put(
+                    f"Target window not found: '{config['target_window_title']}'"
+                )
                 self._target_window_missing_logged = True
         else:
             self._target_window_missing_logged = False
@@ -713,41 +1270,80 @@ class WatcherThread(threading.Thread):
             with mss.MSS() as sct:
                 # monitors[0] is the combined virtual screen; skip it here,
                 # we want each physical monitor captured separately.
-                monitors = list(enumerate(sct.monitors[1:], start=1))
-                if self.monitor_filter is not None:
-                    monitors = [
-                        (idx, mon) for idx, mon in monitors
-                        if idx == self.monitor_filter
-                    ]
-                self.log_queue.put(f"Watching {len(monitors)} monitor(s).")
+                last_monitor_status = None
+                last_capture_error = {}
                 last_debug_log = 0.0
                 while not self._stop_flag.is_set():
-                    items = self.tm.snapshot(use_grayscale=self.use_grayscale)
-                    self._sync_states(items)
+                    config = self._config_snapshot()
+                    monitor_filter = config["monitor_filter"]
+                    all_monitors = list(enumerate(sct.monitors[1:], start=1))
+                    monitors = all_monitors
+                    if monitor_filter is not None:
+                        monitors = [
+                            (idx, mon) for idx, mon in all_monitors
+                            if idx == monitor_filter
+                        ]
+                    signature = tuple(
+                        (
+                            idx,
+                            mon["left"],
+                            mon["top"],
+                            mon["width"],
+                            mon["height"],
+                        )
+                        for idx, mon in all_monitors
+                    )
+                    monitor_status = (monitor_filter, signature)
+                    if monitor_status != last_monitor_status:
+                        if monitor_filter is not None and not monitors:
+                            self.log_queue.put(
+                                f"Monitor {monitor_filter} is unavailable; no screen will be scanned."
+                            )
+                        else:
+                            self.log_queue.put(f"Watching {len(monitors)} monitor(s).")
+                        last_monitor_status = monitor_status
+                    items = self.tm.snapshot(use_grayscale=config["use_grayscale"])
+                    self._sync_states(items, config["cooldown_sec"])
                     if not items:
-                        time.sleep(POLL_INTERVAL_SEC)
+                        self._wait_for_next_cycle()
                         continue
                     debug_lines = []
                     now = time.monotonic()
-                    absolute_scan_region = self._resolve_absolute_scan_region()
+                    absolute_scan_region = self._resolve_absolute_scan_region(config)
                     if absolute_scan_region is REGION_UNAVAILABLE:
-                        time.sleep(POLL_INTERVAL_SEC)
+                        self._wait_for_next_cycle()
                         continue
+                    best_scores: dict[int, tuple[float, Optional[int]]] = {
+                        item["id"]: (-1.0, None) for item in items
+                    }
+                    complete_ids = {item["id"] for item in items} if monitors else set()
                     for mon_index, mon in monitors:
                         if self._stop_flag.is_set():
                             break
                         try:
                             shot = sct.grab(mon)
                         except Exception as exc:
-                            self.log_queue.put(
-                                f"Monitor {mon_index} capture failed this cycle: {exc}"
-                            )
+                            last_error_at = last_capture_error.get(mon_index)
+                            if last_error_at is None or now - last_error_at >= 10.0:
+                                self.log_queue.put(
+                                    f"Monitor {mon_index} capture failed: {exc}"
+                                )
+                                last_capture_error[mon_index] = now
+                            complete_ids.clear()
                             continue
+                        last_capture_error.pop(mon_index, None)
                         screen_bgr = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)
                         for entry in items:
+                            if self._stop_flag.is_set():
+                                break
                             tid = entry["id"]
-                            item_region = self._resolve_item_scan_region(entry, absolute_scan_region)
+                            item_region = self._resolve_item_scan_region(
+                                entry,
+                                absolute_scan_region,
+                                config,
+                            )
                             if item_region is REGION_UNAVAILABLE:
+                                complete_ids.discard(tid)
                                 continue
                             region = self._local_region_for_monitor(mon, item_region)
                             if item_region is not None and region is None:
@@ -755,36 +1351,43 @@ class WatcherThread(threading.Thread):
                             score, loc, scale = match_template_multiscale(
                                 screen_bgr,
                                 entry["image"],
-                                use_grayscale=self.use_grayscale,
+                                use_grayscale=config["use_grayscale"],
                                 region=region,
                                 variants=entry.get("variants"),
-                                early_exit_score=0.999,
+                                early_exit_score=entry["threshold"],
+                                cancel_event=self._stop_flag,
                             )
-                            if self.debug:
+                            if self._stop_flag.is_set():
+                                break
+                            if config["debug"]:
                                 debug_lines.append(
                                     f"{entry['name']} m{mon_index}: {score:.2f} "
                                     f"(th {entry['threshold']:.2f})"
                                 )
-                            triggered = self.states[tid].update(score, now=now)
-                            if triggered:
-                                self.event_queue.put({
-                                    "id": tid,
-                                    "name": entry["name"],
-                                    "monitor": mon_index,
-                                    "score": score,
-                                })
-                    if self.debug and debug_lines and now - last_debug_log >= 5.0:
+                            if score > best_scores[tid][0]:
+                                best_scores[tid] = (score, mon_index)
+                    if self._stop_flag.is_set():
+                        break
+                    self._emit_aggregated_matches(
+                        items, best_scores, now, complete_ids=complete_ids
+                    )
+                    if config["debug"] and debug_lines and now - last_debug_log >= 5.0:
                         self.log_queue.put("Debug scores: " + "; ".join(debug_lines))
                         last_debug_log = now
-                    time.sleep(POLL_INTERVAL_SEC)
+                    self._wait_for_next_cycle()
         except Exception as e:
             self._report_fatal_error(e)
+        finally:
+            self.event_queue.put({"type": "watcher_finished", "watcher": self})
 
 
 def _clamp_alert_volume(volume):
     try:
-        return min(1.0, max(0.0, float(volume)))
-    except (TypeError, ValueError):
+        value = float(volume)
+        if not math.isfinite(value):
+            return DEFAULT_ALERT_VOLUME
+        return min(1.0, max(0.0, value))
+    except (TypeError, ValueError, OverflowError):
         return DEFAULT_ALERT_VOLUME
 
 
@@ -816,24 +1419,48 @@ def _play_winsound_alert():
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
 
+def _play_alert_once(volume):
+    if HAVE_PYGAME:
+        try:
+            _play_pygame_alert(volume)
+            return
+        except Exception:
+            pass
+    if HAVE_WINSOUND:
+        _play_winsound_alert()
+    else:
+        print("\a", end="", flush=True)
+
+
+def _sound_worker():
+    global _PENDING_SOUND_VOLUME, _SOUND_THREAD
+    while True:
+        with _SOUND_QUEUE_LOCK:
+            volume = _PENDING_SOUND_VOLUME
+            _PENDING_SOUND_VOLUME = None
+            if volume is None:
+                _SOUND_THREAD = None
+                return
+        try:
+            _play_alert_once(volume)
+        except Exception:
+            # A failed audio backend must not permanently wedge the single worker.
+            pass
+
+
 def play_alert_sound(volume=DEFAULT_ALERT_VOLUME):
+    """Play on one worker, keeping at most one coalesced follow-up alert."""
+    global _PENDING_SOUND_VOLUME, _SOUND_THREAD
     volume = _clamp_alert_volume(volume)
     if volume <= 0.0:
         return
-
-    def _beep():
-        if HAVE_PYGAME:
-            try:
-                _play_pygame_alert(volume)
-                return
-            except Exception:
-                pass
-        if HAVE_WINSOUND:
-            _play_winsound_alert()
-        else:
-            print("\a", end="", flush=True)
-
-    threading.Thread(target=_beep, daemon=True).start()
+    with _SOUND_QUEUE_LOCK:
+        _PENDING_SOUND_VOLUME = volume
+        if _SOUND_THREAD is not None:
+            return
+        _SOUND_THREAD = threading.Thread(target=_sound_worker, daemon=True)
+        worker = _SOUND_THREAD
+    worker.start()
 
 
 # --------------------------------------------------------------------------
@@ -896,8 +1523,13 @@ class ScreenRegionPicker(tk.Toplevel):
     def _on_release(self, event):
         if self.start_x is None or self.start_y is None:
             return
-        x0, y0 = min(self.start_x, event.x), min(self.start_y, event.y)
-        x1, y1 = max(self.start_x, event.x), max(self.start_y, event.y)
+        width, height = self.full_img.size
+        end_x = min(max(event.x, 0), width)
+        end_y = min(max(event.y, 0), height)
+        start_x = min(max(self.start_x, 0), width)
+        start_y = min(max(self.start_y, 0), height)
+        x0, y0 = min(start_x, end_x), min(start_y, end_y)
+        x1, y1 = max(start_x, end_x), max(start_y, end_y)
         if x1 - x0 < 4 or y1 - y0 < 4:
             self._cancel()
             return
@@ -1048,10 +1680,16 @@ class AlertWatcherFrame(ttk.Frame):
         self._log_line_count = 0
         self._settings_save_after_id = None
         self._template_save_after_id = None
+        self._screenshot_test_running = False
+        self._close_when_stopped = False
+        self._destroy_scheduled = False
+        self._errored_watcher = None
 
         self._build_ui()
         self._refresh_list()
         self._apply_loaded_settings()
+        for warning in self.tm.load_warnings:
+            self._append_log(warning)
         self._setup_hotkeys()
         if not self.embedded:
             self._setup_tray()
@@ -1063,7 +1701,7 @@ class AlertWatcherFrame(ttk.Frame):
     def deiconify(self):
         self.winfo_toplevel().deiconify()
 
-    def lift(self):
+    def _lift_window(self) -> None:
         self.winfo_toplevel().lift()
 
     def focus_force(self):
@@ -1250,7 +1888,12 @@ class AlertWatcherFrame(ttk.Frame):
         self.region_label.pack(anchor="w", pady=(3, 5))
         ttk.Button(right, text="Set region", command=self._set_scan_region).pack(fill="x", pady=2)
         ttk.Button(right, text="Clear region", command=self._clear_scan_region).pack(fill="x", pady=2)
-        ttk.Button(right, text="Test screenshot", command=self._test_screenshot).pack(fill="x", pady=(8, 2))
+        self.test_screenshot_btn = ttk.Button(
+            right,
+            text="Test screenshot",
+            command=self._test_screenshot,
+        )
+        self.test_screenshot_btn.pack(fill="x", pady=(8, 2))
 
         ttk.Separator(right).pack(fill="x", pady=(8, 6))
         self.tray_var = tk.BooleanVar(value=self.settings.minimize_to_tray)
@@ -1331,8 +1974,21 @@ class AlertWatcherFrame(ttk.Frame):
         self.settings = self._current_settings()
         try:
             save_settings(SETTINGS_PATH, self.settings)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             self._append_log(f"Could not save settings: {exc}")
+        watcher = self.watcher
+        if watcher is not None and watcher.is_alive():
+            watcher.update_config(
+                monitor_filter=self._selected_monitor_filter(),
+                scan_region=self.scan_region,
+                scan_region_mode=self.scan_region_mode,
+                scan_region_ratio=self.scan_region_ratio,
+                scan_region_window_size=self.scan_region_window_size,
+                target_window_title=self.target_window_var.get().strip(),
+                use_grayscale=self.grayscale_var.get(),
+                debug=self.debug_var.get(),
+                cooldown_sec=self._cooldown_seconds(),
+            )
 
     def _schedule_settings_save(self):
         if self._settings_save_after_id is not None:
@@ -1393,10 +2049,10 @@ class AlertWatcherFrame(ttk.Frame):
         self.hotkey_handles = []
 
     def _toggle_watching_from_hotkey(self):
-        self.after(0, self._toggle_watching)
+        self.event_queue.put({"type": "ui_command", "command": "toggle"})
 
     def _test_alert_from_hotkey(self):
-        self.after(0, self._test_alert)
+        self.event_queue.put({"type": "ui_command", "command": "test_alert"})
 
     def _toggle_watching(self):
         if self.watcher and self.watcher.is_alive():
@@ -1416,18 +2072,23 @@ class AlertWatcherFrame(ttk.Frame):
             return
 
         def show_window(_icon=None, _item=None):
-            self.after(0, self._show_from_tray)
+            self.event_queue.put({"type": "ui_command", "command": "show"})
 
         def toggle_monitoring(_icon=None, _item=None):
-            self.after(0, self._toggle_watching)
+            self.event_queue.put({"type": "ui_command", "command": "toggle"})
 
         def quit_app(_icon=None, _item=None):
-            self.after(0, self._quit_from_tray)
+            self.event_queue.put({"type": "ui_command", "command": "quit"})
 
         menu = pystray.Menu(
             pystray.MenuItem("Show", show_window),
             pystray.MenuItem("Start/Stop Monitoring", toggle_monitoring),
-            pystray.MenuItem("Test Alert", lambda _icon, _item: self.after(0, self._test_alert)),
+            pystray.MenuItem(
+                "Test Alert",
+                lambda _icon, _item: self.event_queue.put(
+                    {"type": "ui_command", "command": "test_alert"}
+                ),
+            ),
             pystray.MenuItem("Quit", quit_app),
         )
         self.tray_icon = pystray.Icon(
@@ -1441,15 +2102,11 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _show_from_tray(self):
         self.deiconify()
-        self.lift()
+        self._lift_window()
         self.focus_force()
 
     def _quit_from_tray(self):
-        self._save_settings()
-        self._cleanup_tray()
-        self._cleanup_hotkeys()
-        self._stop_watching()
-        self.destroy()
+        self._request_app_quit()
 
     def _cleanup_tray(self):
         if self.tray_icon is not None:
@@ -1528,7 +2185,22 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _flush_template_save(self):
         self._template_save_after_id = None
-        self.tm._save()
+        try:
+            self.tm._save()
+        except (OSError, TypeError, ValueError) as exc:
+            self._append_log(f"Could not save template settings: {exc}")
+
+    def _open_region_picker(self, on_picked):
+        self.withdraw()
+
+        def launch():
+            try:
+                ScreenRegionPicker(self, on_picked, on_cancel=self.deiconify)
+            except Exception as exc:
+                self.deiconify()
+                messagebox.showerror("Screen capture failed", str(exc), parent=self)
+
+        self.after(200, launch)
 
     # ---------------- add / remove ----------------
     def _add_from_file(self):
@@ -1545,12 +2217,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._prompt_name_and_add(img)
 
     def _add_from_screen(self):
-        self.withdraw()
-        self.after(200, lambda: ScreenRegionPicker(
-            self,
-            self._on_region_picked,
-            on_cancel=self.deiconify,
-        ))
+        self._open_region_picker(self._on_region_picked)
 
     def _on_region_picked(self, image_bgr, _abs_box):
         self.deiconify()
@@ -1558,9 +2225,17 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _prompt_name_and_add(self, image_bgr):
         name = simpledialog.askstring("Name this icon", "Give this icon a short name:", parent=self)
+        if name is None:
+            self._append_log("Adding template cancelled.")
+            return
+        name = name.strip()
         if not name:
             name = f"icon_{len(self.tm.snapshot()) + 1}"
-        self.tm.add(image_bgr, name, DEFAULT_THRESHOLD)
+        try:
+            self.tm.add(image_bgr, name, DEFAULT_THRESHOLD)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Could not add icon", str(exc), parent=self)
+            return
         self._refresh_list()
         self._append_log(f"Added template '{name}'.")
 
@@ -1573,7 +2248,11 @@ class AlertWatcherFrame(ttk.Frame):
             return
         name = entry["name"]
         if messagebox.askyesno("Remove", f"Remove '{name}' from watch list?"):
-            self.tm.remove(tid)
+            try:
+                self.tm.remove(tid)
+            except (OSError, TypeError, ValueError) as exc:
+                messagebox.showerror("Could not remove icon", str(exc), parent=self)
+                return
             self._refresh_list()
             self._append_log(f"Removed template '{name}'.")
 
@@ -1601,16 +2280,13 @@ class AlertWatcherFrame(ttk.Frame):
         if tid is None:
             messagebox.showinfo("No icon selected", "Select an icon first.")
             return
-        self.withdraw()
-        self.after(200, lambda: ScreenRegionPicker(
-            self,
+        self._open_region_picker(
             lambda image_bgr, abs_box, selected_tid=tid: self._on_icon_region_picked(
                 image_bgr,
                 abs_box,
                 selected_tid,
-            ),
-            on_cancel=self.deiconify,
-        ))
+            )
+        )
 
     def _on_icon_region_picked(self, _image_bgr, abs_box, tid):
         self.deiconify()
@@ -1619,13 +2295,17 @@ class AlertWatcherFrame(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("Window lookup failed", str(exc), parent=self)
             return
-        self.tm.set_region(
-            tid,
-            meta["region"],
-            meta["region_mode"],
-            meta["region_ratio"],
-            meta["region_window_size"],
-        )
+        try:
+            self.tm.set_region(
+                tid,
+                meta["region"],
+                meta["region_mode"],
+                meta["region_ratio"],
+                meta["region_window_size"],
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            messagebox.showerror("Could not save icon region", str(exc), parent=self)
+            return
         entry = self.tm.get(tid)
         self._refresh_list(selected_tid=tid)
         self._update_icon_region_label(entry)
@@ -1639,7 +2319,11 @@ class AlertWatcherFrame(ttk.Frame):
             return
         entry = self.tm.get(tid)
         name = entry["name"] if entry else "selected icon"
-        self.tm.clear_region(tid)
+        try:
+            self.tm.clear_region(tid)
+        except (OSError, TypeError, ValueError) as exc:
+            messagebox.showerror("Could not clear icon region", str(exc), parent=self)
+            return
         self._refresh_list(selected_tid=tid)
         self._update_icon_region_label()
         self._append_log(f"Icon region cleared for '{name}'.")
@@ -1701,12 +2385,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._append_log(f"Showing scan region for '{entry['name']}'.")
 
     def _set_scan_region(self):
-        self.withdraw()
-        self.after(200, lambda: ScreenRegionPicker(
-            self,
-            self._on_scan_region_picked,
-            on_cancel=self.deiconify,
-        ))
+        self._open_region_picker(self._on_scan_region_picked)
 
     def _on_scan_region_picked(self, _image_bgr, abs_box):
         self.deiconify()
@@ -1745,14 +2424,16 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _cooldown_seconds(self):
         try:
-            return max(0.0, float(self.cooldown_var.get()))
-        except (tk.TclError, ValueError):
+            value = float(self.cooldown_var.get())
+            return max(0.0, value) if math.isfinite(value) else DEFAULT_COOLDOWN_SEC
+        except (tk.TclError, TypeError, ValueError, OverflowError):
             return DEFAULT_COOLDOWN_SEC
 
     def _alert_volume(self):
         try:
-            return min(1.0, max(0.0, float(self.volume_var.get()) / 100.0))
-        except (tk.TclError, ValueError):
+            value = float(self.volume_var.get()) / 100.0
+            return min(1.0, max(0.0, value)) if math.isfinite(value) else DEFAULT_ALERT_VOLUME
+        except (tk.TclError, TypeError, ValueError, OverflowError):
             return DEFAULT_ALERT_VOLUME
 
     # ---------------- monitoring control ----------------
@@ -1760,9 +2441,13 @@ class AlertWatcherFrame(ttk.Frame):
         if not self.tm.snapshot():
             messagebox.showinfo("No icons", "Add at least one icon to watch first.")
             return
-        if self.watcher and self.watcher.is_alive():
-            return
+        if self.watcher is not None:
+            if self.watcher.is_alive():
+                self._append_log("Watcher is already running or still stopping.")
+                return
+            self.watcher = None
         self._save_settings()
+        self._errored_watcher = None
         self.watcher = WatcherThread(
             self.tm,
             self.event_queue,
@@ -1783,15 +2468,40 @@ class AlertWatcherFrame(ttk.Frame):
         self.status_label.config(text="Watching", style="Watching.Status.TLabel")
 
     def _stop_watching(self):
-        if self.watcher:
-            watcher = self.watcher
-            watcher.stop()
-            if watcher is not threading.current_thread():
-                watcher.join(timeout=2.0)
-            self.watcher = None
+        watcher = self.watcher
+        if watcher is None:
+            self._set_idle_controls()
+            return True
+        watcher.stop()
+        if watcher is not threading.current_thread():
+            watcher.join(timeout=2.0)
+        if watcher.is_alive():
+            self.start_btn.config(state="disabled")
+            self.stop_btn.config(state="disabled")
+            self.status_label.config(text="Stopping…", style="Idle.Status.TLabel")
+            self._append_log("Stopping watcher; waiting for the current match operation to finish.")
+            return False
+        self._watcher_finished(watcher)
+        return True
+
+    def _set_idle_controls(self):
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.status_label.config(text="Idle", style="Idle.Status.TLabel")
+
+    def _watcher_finished(self, watcher):
+        if watcher is not self.watcher:
+            return
+        errored = watcher is self._errored_watcher
+        self.watcher = None
+        if errored:
+            self.start_btn.config(state="normal")
+            self.stop_btn.config(state="disabled")
+            self.status_label.config(text="Watcher stopped", style="Error.Status.TLabel")
+        else:
+            self._set_idle_controls()
+        if self._close_when_stopped:
+            self._finish_app_quit()
 
     def _test_alert(self):
         tid = self._selected_id()
@@ -1806,6 +2516,9 @@ class AlertWatcherFrame(ttk.Frame):
         AlertPopup(self, name, monitor="-", thumb_img=thumb)
 
     def _test_screenshot(self):
+        if self._screenshot_test_running:
+            self._append_log("A screenshot test is already running.")
+            return
         if not self.tm.snapshot():
             messagebox.showinfo("No icons", "Add at least one icon to watch first.")
             return
@@ -1816,22 +2529,35 @@ class AlertWatcherFrame(ttk.Frame):
         if not path:
             return
         try:
-            results = test_detection_on_screenshot(
-                path,
-                self.tm.snapshot(),
-                use_grayscale=self.grayscale_var.get(),
-            )
-        except ValueError as exc:
-            messagebox.showerror("Error", str(exc))
+            global_region = self._resolve_global_scan_region_for_display()
+            monitor_box = self._selected_monitor_box()
+        except Exception as exc:
+            messagebox.showerror("Could not resolve scan region", str(exc), parent=self)
             return
+        use_grayscale = bool(self.grayscale_var.get())
+        template_items = self.tm.snapshot(use_grayscale=use_grayscale)
+        target_window_title = self.target_window_var.get().strip()
+        origin = (monitor_box[0], monitor_box[1])
+        self._screenshot_test_running = True
+        self.test_screenshot_btn.config(state="disabled", text="Testing…")
+        self._append_log("Screenshot test started in the background.")
 
-        lines = [
-            f"{result['name']}: {result['score']:.2f} / {result['threshold']:.2f}"
-            f" {'MATCH' if result['matched'] else 'no match'}"
-            for result in results
-        ]
-        messagebox.showinfo("Screenshot test", "\n".join(lines))
-        self._append_log("Screenshot test: " + "; ".join(lines))
+        def _worker():
+            try:
+                results = test_detection_on_screenshot(
+                    path,
+                    template_items,
+                    use_grayscale=use_grayscale,
+                    region=global_region,
+                    region_origin=origin,
+                    target_window_title=target_window_title,
+                )
+                event = {"type": "screenshot_test_complete", "results": results}
+            except Exception as exc:
+                event = {"type": "screenshot_test_error", "error": str(exc)}
+            self.event_queue.put(event)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ---------------- queue polling ----------------
     def _append_log(self, msg):
@@ -1849,15 +2575,50 @@ class AlertWatcherFrame(ttk.Frame):
         for msg in _drain_queue(self.log_queue):
             self._append_log(msg)
         for ev in _drain_queue(self.event_queue):
-            if ev.get("type") == "watcher_stopped":
-                self.watcher = None
-                self.start_btn.config(state="normal")
-                self.stop_btn.config(state="disabled")
+            event_type = ev.get("type")
+            if event_type == "ui_command":
+                command = ev.get("command")
+                callbacks = {
+                    "show": self._show_from_tray,
+                    "toggle": self._toggle_watching,
+                    "test_alert": self._test_alert,
+                    "quit": self._quit_from_tray,
+                }
+                callback = callbacks.get(command)
+                if callback is not None:
+                    callback()
+                continue
+            if event_type in ("watcher_error", "watcher_stopped"):
+                if ev.get("watcher") not in (None, self.watcher):
+                    continue
+                self._errored_watcher = ev.get("watcher", self.watcher)
                 self.status_label.config(text="Watcher stopped", style="Error.Status.TLabel")
-                messagebox.showwarning(
-                    "Monitoring stopped",
-                    f"The watcher stopped because of an error:\n{ev.get('error', 'Unknown error')}"
-                )
+                if not self._close_when_stopped:
+                    messagebox.showwarning(
+                        "Monitoring stopped",
+                        f"The watcher stopped because of an error:\n{ev.get('error', 'Unknown error')}"
+                    )
+                continue
+            if event_type == "watcher_finished":
+                self._watcher_finished(ev.get("watcher"))
+                continue
+            if event_type == "screenshot_test_error":
+                self._screenshot_test_running = False
+                self.test_screenshot_btn.config(state="normal", text="Test screenshot")
+                messagebox.showerror("Screenshot test failed", ev.get("error", "Unknown error"))
+                continue
+            if event_type == "screenshot_test_complete":
+                self._screenshot_test_running = False
+                self.test_screenshot_btn.config(state="normal", text="Test screenshot")
+                lines = [
+                    f"{result['name']}: unavailable"
+                    if result.get("unavailable") else
+                    f"{result['name']}: {result['score']:.2f} / {result['threshold']:.2f}"
+                    f" {'MATCH' if result['matched'] else 'no match'}"
+                    for result in ev.get("results", [])
+                ]
+                messagebox.showinfo("Screenshot test", "\n".join(lines) or "No templates tested.")
+                self._append_log("Screenshot test: " + "; ".join(lines))
                 continue
             entry = self.tm.get(ev["id"])
             thumb = None
@@ -1869,6 +2630,19 @@ class AlertWatcherFrame(ttk.Frame):
             AlertPopup(self, ev["name"], ev["monitor"], thumb)
             self._append_log(f"ALERT: '{ev['name']}' seen on monitor {ev['monitor']} (score {ev['score']:.2f})")
         self.after(150, self._poll_queues)
+
+    def _finish_app_quit(self):
+        if self._destroy_scheduled:
+            return
+        if self.watcher is not None and self.watcher.is_alive():
+            return
+        self._destroy_scheduled = True
+        self.after_idle(self.winfo_toplevel().destroy)
+
+    def _request_app_quit(self):
+        self._close_when_stopped = True
+        self.shutdown()
+        self._finish_app_quit()
 
     def shutdown(self):
         if self._settings_save_after_id is not None:
@@ -1894,9 +2668,10 @@ class AlertWatcherFrame(ttk.Frame):
             self.withdraw()
             self._append_log("Window hidden to system tray.")
             return
-        self.shutdown()
         if not self.embedded:
-            self.winfo_toplevel().destroy()
+            self._request_app_quit()
+        else:
+            self.shutdown()
 
 
 class App(tk.Tk):
@@ -1906,11 +2681,11 @@ class App(tk.Tk):
         self.geometry("1040x760")
         self.minsize(900, 680)
         configure_theme(self)
-        self.frame = AlertWatcherFrame(self, embedded=False)
-        self.frame.pack(fill="both", expand=True)
+        self.content = AlertWatcherFrame(self, embedded=False)
+        self.content.pack(fill="both", expand=True)
 
     def on_close(self):
-        self.frame.on_close()
+        self.content.on_close()
 
 
 if __name__ == "__main__":

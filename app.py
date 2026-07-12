@@ -6,11 +6,16 @@ must/must-not be on screen) and Actions (click / key / wait / enable
 or disable another step). Run it, watch the log, stop with the button
 or your kill-switch key.
 """
+import copy
+import json
+import math
 import os
 import queue
 import tkinter as tk
+import traceback
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox, simpledialog
+from typing import Any, Optional
 import keyboard
 import mss
 from PIL import ImageDraw, ImageTk
@@ -18,7 +23,7 @@ from PIL import ImageDraw, ImageTk
 from models import (
     Scenario, Step, ImageCondition, Action,
     list_scenarios, load_scenario, save_scenario, delete_scenario,
-    portable_project_path, validate_scenario_name,
+    portable_project_path, validate_scenario, validate_scenario_name,
 )
 from capture_tool import capture_template, select_region
 from engine import MacroEngine, _WINDOW_UNAVAILABLE
@@ -37,8 +42,16 @@ from window_locator import (
     resolve_window_region,
     visible_window_titles,
 )
-from alert_watcher import AlertWatcherFrame
-from app_helpers import duplicate_scenario, duplicate_step, duplicate_template_file
+from alert_watcher import AlertWatcherFrame, SingleInstanceLock
+from runtime_paths import LOG_DIR, STARTUP_ERROR_LOG
+from app_helpers import (
+    duplicate_scenario,
+    duplicate_step,
+    duplicate_template_file,
+    find_case_insensitive_name,
+    remap_condition_references,
+    rewrite_step_references,
+)
 from ui_components import (
     COLORS,
     CollapsibleSection,
@@ -55,8 +68,14 @@ from ui_components import (
 def _monitor_box(monitor_index=1):
     with mss.MSS() as sct:
         monitors = sct.monitors
-        index = monitor_index if 0 <= monitor_index < len(monitors) else 1
-        mon = monitors[index]
+        if isinstance(monitor_index, bool) or not isinstance(monitor_index, int):
+            raise ValueError("Monitor must be a whole number.")
+        if monitor_index < 1 or monitor_index >= len(monitors):
+            available = max(0, len(monitors) - 1)
+            raise ValueError(
+                f"Monitor {monitor_index} is unavailable. Choose 1 through {available}."
+            )
+        mon = monitors[monitor_index]
         return (mon["left"], mon["top"], mon["width"], mon["height"])
 
 
@@ -107,6 +126,7 @@ def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", 
 
     if cond.region:
         if cond.region_mode == "window":
+            assert window_rect is not None
             return resolve_window_region(
                 cond.region,
                 window_rect,
@@ -181,14 +201,14 @@ class MultiRegionOverlay(tk.Toplevel):
 # Condition editor dialog
 # ----------------------------------------------------------------------
 
-def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
+def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_index=1,
                      target_window_title=""):
     win = tk.Toplevel(parent)
     win.title("Edit Condition" if cond else "Add Condition")
     win.grab_set()
     win.resizable(False, False)
     win.configure(background=COLORS["surface"])
-    result = {"value": None}
+    result: dict[str, Optional[ImageCondition]] = {"value": None}
 
     template_var = tk.StringVar(value=cond.template_path if cond else "")
     confidence_var = tk.DoubleVar(value=cond.confidence if cond else 0.85)
@@ -210,7 +230,7 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
 
     region_var = tk.StringVar(value=format_region_label())
 
-    pad = {"padx": 6, "pady": 4}
+    pad: dict[str, Any] = {"padx": 6, "pady": 4}
 
     ttk.Label(win, text="Template", style="Surface.TLabel").grid(row=0, column=0, sticky="w", **pad)
     template_entry = ttk.Entry(win, textvariable=template_var, width=42)
@@ -222,7 +242,11 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
             template_var.set(portable_project_path(path))
 
     def capture():
-        path = capture_template(parent, monitor_index=monitor_index)
+        try:
+            path = capture_template(win, monitor_index=monitor_index)
+        except Exception as exc:
+            messagebox.showerror("Capture failed", str(exc), parent=win)
+            return
         if path:
             template_var.set(portable_project_path(path))
 
@@ -294,7 +318,11 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
     ttk.Label(win, textvariable=region_var, style="Muted.TLabel").grid(row=5, column=1, sticky="w", **pad)
 
     def pick_region():
-        region, _ = select_region(parent, monitor_index=monitor_index)
+        try:
+            region, _ = select_region(win, monitor_index=monitor_index)
+        except Exception as exc:
+            messagebox.showerror("Region capture failed", str(exc), parent=win)
+            return
         if region:
             title = target_window_title.strip()
             if title:
@@ -310,7 +338,20 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
                         parent=win,
                     )
                     return
-                region_ratio_holder["ratio"] = list(proportional_region_from_window(region, window_rect))
+                ratio = proportional_region_from_window(region, window_rect)
+                if (
+                    ratio[0] < 0.0
+                    or ratio[1] < 0.0
+                    or ratio[0] + ratio[2] > 1.001
+                    or ratio[1] + ratio[3] > 1.001
+                ):
+                    messagebox.showerror(
+                        "Region outside target window",
+                        "Pick a region completely inside the selected target window.",
+                        parent=win,
+                    )
+                    return
+                region_ratio_holder["ratio"] = list(ratio)
                 region_window_size_holder["size"] = [window_rect[2], window_rect[3]]
                 region = relative_region_from_window(region, window_rect)
                 region_mode_holder["mode"] = "window"
@@ -328,11 +369,13 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         region_window_size_holder["size"] = None
         region_var.set(format_region_label())
 
-    def show_region():
-        temp_cond = ImageCondition(
-            template_path=template_var.get(),
+    def current_condition():
+        candidate = ImageCondition(
+            template_path=portable_project_path(template_var.get().strip()),
             confidence=round(confidence_var.get(), 2),
-            comparison_template_path=comparison_template_var.get(),
+            comparison_template_path=portable_project_path(
+                comparison_template_var.get().strip()
+            ),
             comparison_margin=round(comparison_margin_var.get(), 2),
             region=region_holder["region"],
             region_mode=region_mode_holder["mode"],
@@ -340,7 +383,18 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
             region_window_size=region_window_size_holder["size"],
             negate=negate_var.get(),
         )
+        validate_scenario(
+            Scenario(
+                name="Condition preview",
+                target_window_title=target_window_title.strip(),
+                steps=[Step(name="Condition", conditions=[candidate])],
+            )
+        )
+        return candidate
+
+    def show_region():
         try:
+            temp_cond = current_condition()
             box = resolve_condition_preview_box(temp_cond, target_window_title, monitor_index)
         except Exception as e:
             messagebox.showerror("Show region failed", str(e), parent=win)
@@ -355,27 +409,19 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
         label = os.path.basename(template_var.get()) if template_var.get() else "Search region"
         if negate_var.get():
             label = f"NOT {label}"
-        MultiRegionOverlay(parent, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
+        MultiRegionOverlay(win, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
 
     ttk.Button(win, text="Show", command=show_region).grid(row=6, column=0, sticky="we", **pad)
     ttk.Button(win, text="Pick region", command=pick_region).grid(row=6, column=1, sticky="we", **pad)
     ttk.Button(win, text="Clear", command=clear_region).grid(row=6, column=2, sticky="we", **pad)
 
     def on_ok():
-        if not template_var.get():
-            messagebox.showerror("Missing template", "Choose or capture a template image first.", parent=win)
+        try:
+            condition = current_condition()
+        except (TypeError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Invalid condition", str(exc), parent=win)
             return
-        result["value"] = ImageCondition(
-            template_path=portable_project_path(template_var.get()),
-            confidence=round(confidence_var.get(), 2),
-            comparison_template_path=portable_project_path(comparison_template_var.get()),
-            comparison_margin=round(comparison_margin_var.get(), 2),
-            region=region_holder["region"],
-            region_mode=region_mode_holder["mode"],
-            region_ratio=region_ratio_holder["ratio"],
-            region_window_size=region_window_size_holder["size"],
-            negate=negate_var.get(),
-        )
+        result["value"] = condition
         win.destroy()
 
     btns = ttk.Frame(win, style="Surface.TFrame")
@@ -391,13 +437,19 @@ def condition_dialog(parent, cond: ImageCondition = None, monitor_index=1,
 # Action editor dialog
 # ----------------------------------------------------------------------
 
-def action_dialog(parent, action: Action = None, step_names=None, num_conditions=0, conditions=None):
+def action_dialog(
+    parent,
+    action: Optional[Action] = None,
+    step_names=None,
+    num_conditions=0,
+    conditions=None,
+):
     win = tk.Toplevel(parent)
     win.title("Edit Action" if action else "Add Action")
     win.grab_set()
     win.resizable(False, False)
     win.configure(background=COLORS["surface"])
-    result = {"value": None}
+    result: dict[str, Optional[Action]] = {"value": None}
     a = action or Action(type="click")
     step_names = step_names or []
     conditions = list(conditions or [])
@@ -647,6 +699,24 @@ def action_dialog(parent, action: Action = None, step_names=None, num_conditions
                 )
                 new_action.x = _parse_optional_int(x_var.get(), "Fixed x")
                 new_action.y = _parse_optional_int(y_var.get(), "Fixed y")
+                if (new_action.x is None) != (new_action.y is None):
+                    raise ValueError("Fixed click coordinates require both x and y.")
+                if (
+                    new_action.on_condition_index is not None
+                    and new_action.x is not None
+                ):
+                    raise ValueError(
+                        "Choose either a condition target or a fixed point, not both."
+                    )
+                if (
+                    new_action.on_condition_index is None
+                    and new_action.x is None
+                    and not conditions
+                ):
+                    raise ValueError(
+                        "This step has no condition to use as an automatic click target; "
+                        "enter a fixed point."
+                    )
                 new_action.offset_x = offx_var.get()
                 new_action.offset_y = offy_var.get()
                 new_action.button = button_var.get()
@@ -709,7 +779,10 @@ def action_dialog(parent, action: Action = None, step_names=None, num_conditions
                     return
                 new_action.step_name = step_name_var.get().strip()
                 new_action.set_enabled = set_enabled_var.get()
-        except ValueError as exc:
+            # Re-parse through the model to enforce finite/non-negative values
+            # before the dialog closes instead of deferring errors until Run.
+            new_action = Action.from_dict(new_action.to_dict())
+        except (ValueError, tk.TclError) as exc:
             messagebox.showerror("Invalid number", str(exc), parent=win)
             return
         result["value"] = new_action
@@ -728,22 +801,23 @@ def action_dialog(parent, action: Action = None, step_names=None, num_conditions
 # Step editor dialog
 # ----------------------------------------------------------------------
 
-def step_dialog(parent, step: Step = None, existing_names=None, all_step_names=None,
+def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_step_names=None,
                 monitor_index=1, target_window_title=""):
     win = tk.Toplevel(parent)
     win.title("Edit Step" if step else "Add Step")
     win.grab_set()
     win.resizable(False, False)
     win.configure(background=COLORS["surface"])
-    result = {"value": None}
+    result: dict[str, Optional[Step]] = {"value": None}
 
     s = step or Step(name="")
-    conditions = list(s.conditions)
-    actions = list(s.actions)
+    # Work on independent copies so Cancel never leaks edits into the scenario.
+    conditions = copy.deepcopy(s.conditions)
+    actions = copy.deepcopy(s.actions)
     existing_names = existing_names or set()
     all_step_names = all_step_names or []
 
-    pad = {"padx": 6, "pady": 4}
+    pad: dict[str, Any] = {"padx": 6, "pady": 4}
 
     name_var = tk.StringVar(value=s.name)
     enabled_var = tk.BooleanVar(value=s.enabled)
@@ -829,8 +903,40 @@ def step_dialog(parent, step: Step = None, existing_names=None, all_step_names=N
     def remove_condition():
         sel = cond_listbox.curselection()
         if sel:
-            del conditions[sel[0]]
+            removed_index = sel[0]
+            users = []
+            for action_index, action in enumerate(actions):
+                fields = [
+                    field_name
+                    for field_name in (
+                        "on_condition_index",
+                        "match_condition_index",
+                        "no_match_condition_index",
+                    )
+                    if getattr(action, field_name, None) == removed_index
+                ]
+                if fields:
+                    users.append(action_index + 1)
+            if users:
+                messagebox.showerror(
+                    "Condition is in use",
+                    "This condition is referenced by action(s) "
+                    + ", ".join(str(index) for index in users)
+                    + ". Edit or remove those actions before deleting the condition.",
+                    parent=win,
+                )
+                return
+            del conditions[removed_index]
+            changes = remap_condition_references(actions, removed_index)
             refresh_conditions()
+            refresh_actions()
+            if changes["cleared"]:
+                messagebox.showwarning(
+                    "Action target removed",
+                    f"Cleared {changes['cleared']} action reference(s) that targeted the "
+                    "removed condition. Edit those actions before running this step.",
+                    parent=win,
+                )
 
     def duplicate_condition_template():
         sel = cond_listbox.curselection()
@@ -944,13 +1050,32 @@ def step_dialog(parent, step: Step = None, existing_names=None, all_step_names=N
         if not nm:
             messagebox.showerror("Missing name", "Enter a step name.", parent=win)
             return
-        if nm in existing_names and nm != s.name:
-            messagebox.showerror("Duplicate name", "A step with this name already exists.", parent=win)
+        collision = find_case_insensitive_name(existing_names, nm, exclude_name=s.name)
+        if collision is not None:
+            messagebox.showerror(
+                "Duplicate name",
+                f"A step named '{collision}' already exists (names are case-insensitive).",
+                parent=win,
+            )
+            return
+        try:
+            cooldown = float(cooldown_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showerror(
+                "Invalid cooldown", "Cooldown must be a number.", parent=win
+            )
+            return
+        if not math.isfinite(cooldown) or cooldown < 0.0:
+            messagebox.showerror(
+                "Invalid cooldown",
+                "Cooldown must be a non-negative finite number.",
+                parent=win,
+            )
             return
         result["value"] = Step(
             name=nm, conditions=conditions, actions=actions,
             condition_operator=operator_var.get(), enabled=enabled_var.get(),
-            cooldown=cooldown_var.get(), repeatable=repeatable_var.get(),
+            cooldown=cooldown, repeatable=repeatable_var.get(),
         )
         win.destroy()
 
@@ -972,12 +1097,14 @@ class App:
         self._configure_style()
 
         self.scenario = Scenario(name="untitled")
-        self.engine = None
+        self.engine: Optional[MacroEngine] = None
+        self._clean_scenario_snapshot = None
+        self._loaded_scenario_name = None
+        self._engine_ui_active = False
         self.log_queue = queue.Queue()
         self.control_queue = queue.Queue()
         self._start_hotkey_handle = None
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        self.log_dir = os.path.join(app_dir, "logs")
+        self.log_dir = LOG_DIR
         self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
         self.log_max_bytes = DEFAULT_MAX_LOG_BYTES
         self.log_backups = DEFAULT_LOG_BACKUPS
@@ -1000,6 +1127,7 @@ class App:
         self._build_ui()
         self._refresh_scenario_list()
         self._refresh_steps()
+        self._mark_scenario_clean()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._register_start_hotkey()
         self.root.after(150, self._poll_log_queue)
@@ -1213,6 +1341,68 @@ class App:
         self._activity_visible = True
 
     # ---- scenario management ----
+    def _scenario_snapshot(self):
+        self._sync_scenario_settings()
+        return json.dumps(
+            self.scenario.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    def _mark_scenario_clean(self, loaded_name=None):
+        self._clean_scenario_snapshot = self._scenario_snapshot()
+        if loaded_name is not None:
+            self._loaded_scenario_name = loaded_name
+
+    def _has_unsaved_changes(self):
+        try:
+            return self._scenario_snapshot() != getattr(self, "_clean_scenario_snapshot", None)
+        except (TypeError, ValueError, tk.TclError):
+            # Invalid text in a Tk variable is still an unsaved edit and must
+            # not be discarded silently.
+            return True
+
+    def _confirm_save_before(self, action):
+        if not self._has_unsaved_changes():
+            return True
+        choice = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"Save changes to '{self.scenario.name}' before {action}?",
+            parent=self.root,
+        )
+        if choice is None:
+            return False
+        if choice:
+            return self._save_scenario()
+        return True
+
+    def _require_stopped_for_scenario_change(self):
+        engine = getattr(self, "engine", None)
+        if engine is None or not engine.is_running:
+            return True
+        messagebox.showwarning(
+            "Macro running",
+            "Stop the macro before changing, loading, duplicating, or deleting a scenario.",
+            parent=self.root,
+        )
+        return False
+
+    def _apply_scenario_to_ui(self, scenario, loaded_name=None, clean=True):
+        self.scenario = scenario
+        self.scenario_var.set(scenario.name)
+        self.poll_var.set(scenario.poll_interval)
+        self.monitor_var.set(scenario.monitor_index)
+        self.kill_var.set(scenario.kill_switch)
+        self.target_window_var.set(scenario.target_window_title)
+        self._loaded_scenario_name = loaded_name
+        self._refresh_steps()
+        if clean:
+            self._mark_scenario_clean(loaded_name=loaded_name)
+        else:
+            # A newly-created scenario has never been saved, even when empty.
+            self._clean_scenario_snapshot = None
+
     def _refresh_scenario_list(self):
         names = list_scenarios()
         self.scenario_combo["values"] = names
@@ -1227,20 +1417,35 @@ class App:
 
     def _on_scenario_selected(self, event=None):
         name = self.scenario_var.get()
+        current_name = self.scenario.name
+        if not name or name == current_name:
+            return
+        if not self._require_stopped_for_scenario_change():
+            self.scenario_var.set(current_name)
+            return
+        if not self._confirm_save_before(f"switching to '{name}'"):
+            self.scenario_var.set(current_name)
+            return
         try:
-            self.scenario = load_scenario(name)
+            scenario = load_scenario(name)
         except Exception as e:
             messagebox.showerror("Load failed", str(e))
+            self.scenario_var.set(current_name)
             return
-        self.poll_var.set(self.scenario.poll_interval)
-        self.monitor_var.set(self.scenario.monitor_index)
-        self.kill_var.set(self.scenario.kill_switch)
-        self.target_window_var.set(self.scenario.target_window_title)
-        self._refresh_steps()
+        self._apply_scenario_to_ui(scenario, loaded_name=name, clean=True)
 
     def _sync_scenario_settings(self):
-        self.scenario.poll_interval = self.poll_var.get()
-        self.scenario.monitor_index = self.monitor_var.get()
+        try:
+            poll_interval = float(self.poll_var.get())
+            monitor_index = int(self.monitor_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("Poll interval and monitor must be valid numbers.") from exc
+        if not math.isfinite(poll_interval) or poll_interval < 0.01:
+            raise ValueError("Poll interval must be a finite number of at least 0.01 seconds.")
+        if monitor_index < 1:
+            raise ValueError("Monitor must be 1 or greater.")
+        self.scenario.poll_interval = poll_interval
+        self.scenario.monitor_index = monitor_index
         self.scenario.kill_switch = self.kill_var.get().strip() or "f12"
         self.scenario.target_window_title = self.target_window_var.get().strip()
 
@@ -1275,8 +1480,20 @@ class App:
             except (tk.TclError, ValueError):
                 messagebox.showerror("Invalid settings", "Poll interval and monitor must be numbers.", parent=win)
                 return
-            if poll <= 0:
-                messagebox.showerror("Invalid settings", "Poll interval must be greater than zero.", parent=win)
+            if not math.isfinite(poll) or poll < 0.01:
+                messagebox.showerror(
+                    "Invalid settings",
+                    "Poll interval must be a finite number of at least 0.01 seconds.",
+                    parent=win,
+                )
+                return
+            if monitor < 1:
+                messagebox.showerror("Invalid settings", "Monitor must be 1 or greater.", parent=win)
+                return
+            try:
+                _monitor_box(monitor)
+            except (RuntimeError, ValueError, OSError) as exc:
+                messagebox.showerror("Invalid settings", str(exc), parent=win)
                 return
             self.poll_var.set(poll)
             self.monitor_var.set(monitor)
@@ -1303,27 +1520,62 @@ class App:
             return None
 
     def _new_scenario(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         name = simpledialog.askstring("New scenario", "Scenario name:", parent=self.root)
         if not name:
             return
         name = self._validate_scenario_name_for_ui(name)
         if name is None:
             return
-        self.scenario = Scenario(name=name)
-        self.scenario_var.set(name)
-        self.poll_var.set(self.scenario.poll_interval)
-        self.monitor_var.set(self.scenario.monitor_index)
-        self.kill_var.set(self.scenario.kill_switch)
-        self.target_window_var.set(self.scenario.target_window_title)
-        self._refresh_steps()
+        collision = find_case_insensitive_name(list_scenarios(), name)
+        if collision is not None:
+            messagebox.showerror(
+                "Duplicate name",
+                f"A scenario named '{collision}' already exists (names are case-insensitive).",
+                parent=self.root,
+            )
+            return
+        if not self._confirm_save_before("creating a new scenario"):
+            return
+        self._apply_scenario_to_ui(Scenario(name=name), loaded_name=None, clean=False)
 
     def _save_scenario(self):
-        self._sync_scenario_settings()
-        path = save_scenario(self.scenario)
+        try:
+            self._sync_scenario_settings()
+            self.scenario.name = validate_scenario_name(self.scenario.name)
+            validate_scenario(self.scenario)
+        except (TypeError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Save failed", str(exc), parent=self.root)
+            return False
+
+        loaded_name = getattr(self, "_loaded_scenario_name", None)
+        collision = find_case_insensitive_name(
+            list_scenarios(),
+            self.scenario.name,
+            exclude_name=loaded_name,
+        )
+        if collision is not None:
+            messagebox.showerror(
+                "Scenario already exists",
+                f"Saving would overwrite '{collision}'. Use a different name.",
+                parent=self.root,
+            )
+            return False
+        try:
+            path = save_scenario(self.scenario)
+        except Exception as exc:
+            messagebox.showerror("Save failed", str(exc), parent=self.root)
+            return False
+        self._loaded_scenario_name = self.scenario.name
+        self._mark_scenario_clean(loaded_name=self.scenario.name)
         self._refresh_scenario_list()
         self._log(f"Saved to {path}")
+        return True
 
     def _save_scenario_as(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         name = simpledialog.askstring("Save as", "New scenario name:",
                                        initialvalue=self.scenario.name, parent=self.root)
         if not name:
@@ -1331,15 +1583,43 @@ class App:
         name = self._validate_scenario_name_for_ui(name)
         if name is None:
             return
-        if name != self.scenario.name and name in list_scenarios():
-            messagebox.showerror("Duplicate name", "A scenario with that name already exists.")
+        if name == self.scenario.name:
+            self._save_scenario()
             return
+        if name.casefold() == self.scenario.name.casefold():
+            messagebox.showerror(
+                "Duplicate name",
+                "The new name differs only by letter case. Choose a distinct name.",
+                parent=self.root,
+            )
+            return
+        collision = find_case_insensitive_name(list_scenarios(), name)
+        if collision is not None:
+            messagebox.showerror(
+                "Duplicate name",
+                f"A scenario named '{collision}' already exists (names are case-insensitive).",
+                parent=self.root,
+            )
+            return
+        old_name = self.scenario.name
+        old_loaded_name = getattr(self, "_loaded_scenario_name", None)
         self.scenario.name = name
         self.scenario_var.set(name)
-        self._save_scenario()
+        self._loaded_scenario_name = None
+        if not self._save_scenario():
+            self.scenario.name = old_name
+            self.scenario_var.set(old_name)
+            self._loaded_scenario_name = old_loaded_name
 
     def _duplicate_scenario(self):
-        self._sync_scenario_settings()
+        if not self._require_stopped_for_scenario_change():
+            return
+        try:
+            self._sync_scenario_settings()
+            validate_scenario(self.scenario)
+        except (TypeError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Duplicate failed", str(exc), parent=self.root)
+            return
         name = simpledialog.askstring(
             "Duplicate scenario",
             "Name for duplicated scenario:",
@@ -1351,32 +1631,41 @@ class App:
         name = self._validate_scenario_name_for_ui(name)
         if name is None:
             return
-        if name in list_scenarios():
-            messagebox.showerror("Duplicate name", "A scenario with that name already exists.")
+        collision = find_case_insensitive_name(list_scenarios(), name)
+        if collision is not None:
+            messagebox.showerror(
+                "Duplicate name",
+                f"A scenario named '{collision}' already exists (names are case-insensitive).",
+                parent=self.root,
+            )
             return
         try:
-            self.scenario = duplicate_scenario(self.scenario, name)
-            path = save_scenario(self.scenario)
+            duplicated = duplicate_scenario(self.scenario, name)
+            path = save_scenario(duplicated, overwrite=False)
         except Exception as e:
             messagebox.showerror("Duplicate failed", str(e))
             return
-        self.scenario_var.set(self.scenario.name)
+        self._apply_scenario_to_ui(duplicated, loaded_name=duplicated.name, clean=True)
         self._refresh_scenario_list()
-        self._refresh_steps()
         self._log(f"Duplicated scenario to {path}")
 
     def _delete_scenario(self):
-        name = self.scenario_var.get()
-        if name and messagebox.askyesno("Delete", f"Delete scenario '{name}'?"):
-            delete_scenario(name)
-            self.scenario = Scenario(name="untitled")
-            self.scenario_var.set(self.scenario.name)
-            self.poll_var.set(self.scenario.poll_interval)
-            self.monitor_var.set(self.scenario.monitor_index)
-            self.kill_var.set(self.scenario.kill_switch)
-            self.target_window_var.set(self.scenario.target_window_title)
+        if not self._require_stopped_for_scenario_change():
+            return
+        name = self.scenario.name
+        if not name:
+            return
+        warning = f"Permanently delete scenario '{name}'?"
+        if self._has_unsaved_changes():
+            warning += "\n\nIts unsaved changes will also be discarded."
+        if messagebox.askyesno("Delete", warning, parent=getattr(self, "root", None)):
+            try:
+                delete_scenario(name)
+            except Exception as exc:
+                messagebox.showerror("Delete failed", str(exc), parent=getattr(self, "root", None))
+                return
+            self._apply_scenario_to_ui(Scenario(name="untitled"), loaded_name=None, clean=True)
             self._refresh_scenario_list()
-            self._refresh_steps()
 
     # ---- step management ----
     def _selected_step_index(self):
@@ -1507,6 +1796,7 @@ class App:
         idx = self._selected_step_index()
         if idx is None:
             return
+        old_name = self.scenario.steps[idx].name
         existing = {s.name for s in self.scenario.steps}
         all_names = [s.name for s in self.scenario.steps]
         s = step_dialog(self.root, step=self.scenario.steps[idx], existing_names=existing,
@@ -1514,13 +1804,23 @@ class App:
                          target_window_title=self.target_window_var.get().strip())
         if s:
             self.scenario.steps[idx] = s
+            if s.name != old_name:
+                rewrite_step_references(self.scenario.steps, old_name, s.name)
             self._refresh_steps()
 
     def _remove_step(self):
         index = self._selected_step_index()
         if index is not None and messagebox.askyesno("Remove step", "Remove the selected step?"):
+            removed_name = self.scenario.steps[index].name
             del self.scenario.steps[index]
+            changes = rewrite_step_references(self.scenario.steps, removed_name, None)
             self._refresh_steps()
+            removed_refs = changes["removed_actions"] + changes["removed_list_entries"]
+            if removed_refs:
+                self._log(
+                    f"Removed {removed_refs} action reference(s) to deleted step "
+                    f"'{removed_name}'."
+                )
 
     def _duplicate_step(self):
         index = self._selected_step_index()
@@ -1540,17 +1840,24 @@ class App:
         if index is None:
             messagebox.showinfo("No step selected", "Select a step to test first.")
             return
-        self._sync_scenario_settings()
+        try:
+            self._sync_scenario_settings()
+            validate_scenario(self.scenario, require_files=True)
+        except (TypeError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Test failed", str(exc), parent=self.root)
+            return
         step = self.scenario.steps[index]
 
-        engine = MacroEngine(self.scenario, log=self._queue_log)
+        engine = None
         try:
+            engine = MacroEngine(self.scenario, log=self._queue_log)
             preview = engine.preview_step(step)
         except Exception as e:
             messagebox.showerror("Test failed", str(e))
             return
         finally:
-            engine.stop()
+            if engine is not None:
+                engine.stop()
 
         self._show_step_preview(step, preview)
 
@@ -1559,7 +1866,11 @@ class App:
         if index is None:
             messagebox.showinfo("No step selected", "Select a step first.")
             return
-        self._sync_scenario_settings()
+        try:
+            self._sync_scenario_settings()
+        except (TypeError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Show regions failed", str(exc), parent=self.root)
+            return
         step = self.scenario.steps[index]
 
         boxes = []
@@ -1682,29 +1993,54 @@ class App:
             self.steps_tree.selection_set(str(new_idx))
 
     # ---- engine control ----
+    def _set_engine_stopped_ui(self):
+        self._engine_ui_active = False
+        self.run_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+        self.status_label.config(text="Stopped", style="Stopped.Status.TLabel")
+
     def _start_engine(self):
         if self.engine and self.engine.is_running:
             return
         if not self.scenario.steps:
             messagebox.showwarning("No steps", "Add at least one step before running.")
             return
-        self._sync_scenario_settings()
-        self.engine = MacroEngine(self.scenario, log=self._queue_log)
+        engine = None
         try:
-            self.engine.start()
+            self._sync_scenario_settings()
+            validate_scenario(self.scenario, require_files=True)
+            engine = MacroEngine(self.scenario, log=self._queue_log)
+            engine.start()
         except Exception as e:
+            if engine is not None:
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+            self.engine = None
+            self._set_engine_stopped_ui()
             messagebox.showerror("Failed to start", str(e))
             return
+        self.engine = engine
+        self._engine_ui_active = True
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.status_label.config(text="Running", style="Running.Status.TLabel")
 
     def _stop_engine(self):
         if self.engine:
-            self.engine.stop()
-        self.run_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        self.status_label.config(text="Stopped", style="Stopped.Status.TLabel")
+            try:
+                self.engine.stop()
+            except Exception as exc:
+                self._queue_log(f"[error] failed to stop engine cleanly: {exc}")
+        if self.engine and self.engine.is_running:
+            self._engine_ui_active = True
+            self.run_btn.config(state="disabled")
+            self.stop_btn.config(state="disabled")
+            self.status_label.config(text="Stopping...", style="Running.Status.TLabel")
+            return False
+        self._set_engine_stopped_ui()
+        return True
 
     def _register_start_hotkey(self):
         try:
@@ -1719,6 +2055,13 @@ class App:
 
     def _start_engine_from_hotkey(self):
         if self.engine and self.engine.is_running:
+            return
+        root = getattr(self, "root", None)
+        try:
+            if root is not None and root.grab_current() is not None:
+                self._queue_log("[safety] F11 ignored while a dialog is open")
+                return
+        except tk.TclError:
             return
         self._start_engine()
 
@@ -1749,8 +2092,10 @@ class App:
                 self._log(self.log_queue.get_nowait())
         except queue.Empty:
             pass
-        if self.engine and not self.engine.is_running and self.stop_btn["state"] == "normal":
-            self._stop_engine()
+        if getattr(self, "_engine_ui_active", False) and (
+            self.engine is None or not self.engine.is_running
+        ):
+            self._set_engine_stopped_ui()
         self.root.after(150, self._poll_log_queue)
 
     def _log(self, msg):
@@ -1807,20 +2152,74 @@ class App:
         self._log_file_handle = None
 
     def _on_close(self):
+        if not self._confirm_save_before("closing"):
+            return
         self._remove_start_hotkey()
-        if self.engine and self.engine.is_running:
-            self.engine.stop()
-        if hasattr(self, "alert_tab"):
-            self.alert_tab.shutdown()
-        self._close_log_file()
-        self.root.destroy()
+        try:
+            if self.engine and self.engine.is_running:
+                self.engine.stop()
+            if hasattr(self, "alert_tab"):
+                self.alert_tab.shutdown()
+        finally:
+            self._close_log_file()
+            self.root.destroy()
 
 
 def main():
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    instance_lock = SingleInstanceLock()
+    lock_error: Optional[Exception]
+    try:
+        acquired = instance_lock.acquire()
+    except Exception as exc:
+        acquired = False
+        lock_error = exc
+    else:
+        lock_error = None
+
+    if not acquired:
+        notice = tk.Tk()
+        notice.withdraw()
+        detail = f"\n\nLock error: {lock_error}" if lock_error is not None else ""
+        messagebox.showwarning(
+            "PC Macro Builder already running",
+            "Another copy of PC Macro Builder or Icon Alert Watcher is already running."
+            + detail,
+            parent=notice,
+        )
+        notice.destroy()
+        return 1
+
+    root = None
+    try:
+        root = tk.Tk()
+        try:
+            App(root)
+        except Exception as exc:
+            try:
+                os.makedirs(os.path.dirname(STARTUP_ERROR_LOG), exist_ok=True)
+                with open(STARTUP_ERROR_LOG, "a", encoding="utf-8") as handle:
+                    handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n")
+                    handle.write(traceback.format_exc())
+            except OSError:
+                pass
+            root.withdraw()
+            messagebox.showerror(
+                "PC Macro Builder could not start",
+                f"{type(exc).__name__}: {exc}\n\nDetails were written to:\n{STARTUP_ERROR_LOG}",
+                parent=root,
+            )
+            return 1
+        root.mainloop()
+        return 0
+    finally:
+        if root is not None:
+            try:
+                if root.winfo_exists():
+                    root.destroy()
+            except tk.TclError:
+                pass
+        instance_lock.release()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

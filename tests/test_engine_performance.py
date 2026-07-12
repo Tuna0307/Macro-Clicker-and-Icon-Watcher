@@ -196,8 +196,18 @@ class EnginePerformanceTests(unittest.TestCase):
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="perf")
         engine._resolve_capture_region = lambda cond: (10, 20, 40, 40)
-        engine._grab = lambda region=None: (np.zeros((40, 40, 3), dtype=np.uint8), 10, 20)
-        engine._load_template = lambda path: np.zeros((3, 3, 3), dtype=np.uint8)
+        template = np.array(
+            [
+                [[0, 0, 0], [255, 255, 255], [0, 0, 0]],
+                [[255, 255, 255], [0, 0, 0], [255, 255, 255]],
+                [[0, 0, 0], [255, 255, 255], [0, 0, 0]],
+            ],
+            dtype=np.uint8,
+        )
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        frame[12:15, 18:21] = template
+        engine._grab = lambda region=None: (frame, 10, 20)
+        engine._load_template = lambda path: template
 
         def fail_if_collecting_all_matches(*args, **kwargs):
             raise AssertionError("simple click conditions should not collect every match")

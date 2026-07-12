@@ -6,6 +6,10 @@ Rect = Tuple[int, int, int, int]
 
 def _safe_window_snapshot(win):
     try:
+        if getattr(win, "isVisible", True) is False:
+            return None
+        if getattr(win, "isMinimized", False) is True:
+            return None
         title = (getattr(win, "title", "") or "").strip()
         left = int(getattr(win, "left", 0) or 0)
         top = int(getattr(win, "top", 0) or 0)
@@ -82,7 +86,7 @@ def find_window_rect(title_contains: str, window_provider: Optional[Callable] = 
 
     The returned rectangle is (left, top, width, height) in screen coordinates.
     """
-    title_contains = title_contains.strip().lower()
+    title_contains = title_contains.strip().casefold()
     if not title_contains:
         return None
 
@@ -96,14 +100,19 @@ def find_window_rect(title_contains: str, window_provider: Optional[Callable] = 
             ) from exc
         window_provider = gw.getAllWindows
 
-    for win in window_provider():
+    candidates = []
+    for order, win in enumerate(window_provider()):
         snapshot = _safe_window_snapshot(win)
         if snapshot is None:
             continue
         title, rect = snapshot
-        if title_contains in title.lower():
-            return rect
-    return None
+        if title_contains in title.casefold():
+            # Prefer an exact title, then the shortest containing title. This
+            # avoids attaching to an unrelated window that merely happens to
+            # contain the same short text and was enumerated first.
+            folded_title = title.casefold()
+            candidates.append((folded_title != title_contains, len(title), order, rect))
+    return min(candidates)[-1] if candidates else None
 
 
 def visible_window_titles(window_provider: Optional[Callable] = None):
@@ -124,8 +133,9 @@ def visible_window_titles(window_provider: Optional[Callable] = None):
         if snapshot is None:
             continue
         title, _rect = snapshot
-        if title in seen:
+        folded_title = title.casefold()
+        if folded_title in seen:
             continue
-        seen.add(title)
+        seen.add(folded_title)
         titles.append(title)
     return titles

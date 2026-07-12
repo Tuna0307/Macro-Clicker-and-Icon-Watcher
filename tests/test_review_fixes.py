@@ -47,7 +47,7 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertEqual(reader._extract_level("Lv.151"), 151)
         self.assertEqual(reader._extract_level("Lv.170"), 170)
-        self.assertEqual(reader._extract_level("LV250"), 25)
+        self.assertEqual(reader._extract_level("LV250"), 250)
         self.assertEqual(reader._extract_level("LV-407"), 40)
         self.assertEqual(reader._extract_level("L.500"), 50)
 
@@ -62,9 +62,14 @@ class ReviewFixTests(unittest.TestCase):
                     patch.object(capture_tool.simpledialog, "askstring", return_value="Rally"):
                 path = capture_tool.capture_template(None, save_dir=tmp)
 
+            self.assertTrue(os.path.isfile(path))
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"png")
+            self.assertEqual(os.path.dirname(crop.saved_path), tmp)
+            self.assertNotEqual(crop.saved_path, path)
+
         self.assertEqual(os.path.basename(path), "Rally_1.png")
         self.assertEqual(os.path.dirname(path), tmp)
-        self.assertEqual(crop.saved_path, path)
 
     def test_engine_stop_closes_capture_without_spurious_log_when_never_started(self):
         logs = []
@@ -136,12 +141,12 @@ class ReviewFixTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             app._parse_optional_int("abc", "Condition")
 
-    def test_models_accept_missing_names_in_malformed_json(self):
+    def test_models_reject_missing_scenario_name_in_malformed_json(self):
         step = Step.from_dict({})
-        scenario = Scenario.from_dict({})
 
         self.assertEqual(step.name, "")
-        self.assertEqual(scenario.name, "untitled")
+        with self.assertRaisesRegex(ValueError, "scenario name"):
+            Scenario.from_dict({})
 
     def test_alert_watcher_drains_queues_without_empty_get_race(self):
         q = queue.Queue()

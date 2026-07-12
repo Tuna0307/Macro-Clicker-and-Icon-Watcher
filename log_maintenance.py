@@ -33,15 +33,19 @@ def rotate_log_file(path, max_bytes=DEFAULT_MAX_LOG_BYTES, backups=DEFAULT_LOG_B
 
 
 def cleanup_directory(path, max_files=DEFAULT_DEBUG_MAX_FILES,
-                      max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS, now=None):
+                      max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS, now=None,
+                      preserve_names=None):
     if not os.path.isdir(path):
         return 0
     now = time.time() if now is None else now
     cutoff = now - (max_age_days * 86400) if max_age_days is not None and max_age_days >= 0 else None
     removed = 0
     files = []
+    preserved = {str(name).casefold() for name in (preserve_names or ())}
 
     for name in os.listdir(path):
+        if name.casefold() in preserved:
+            continue
         full_path = os.path.join(path, name)
         if not os.path.isfile(full_path):
             continue
@@ -79,4 +83,5 @@ def maintain_logs(log_dir, main_log_path=None, max_log_bytes=DEFAULT_MAX_LOG_BYT
             os.path.join(log_dir, folder),
             max_files=debug_max_files,
             max_age_days=debug_max_age_days,
+            preserve_names={"labels.json"},
         )

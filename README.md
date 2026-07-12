@@ -7,9 +7,29 @@ enable/disable other steps), then run the scenario.
 
 ## Setup
 
+Using a project virtual environment is recommended so OCR and image-processing
+packages do not conflict with packages installed for other programs:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python app.py
 ```
-pip install -r requirements.txt
-python app.py
+
+The dependency ranges are bounded to compatible major versions. On Windows,
+`Run PC Macro Builder.bat` starts the GUI without a console and automatically
+uses `.venv` when it exists. Startup failures
+are shown in a dialog and recorded under
+`%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs`. Set
+`MACRO_CLICKER_DATA_DIR` to use a different runtime-log location.
+
+For development checks:
+
+```powershell
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python -m pytest -q
+.\.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m mypy app.py app_helpers.py alert_watcher.py capture_tool.py engine.py level_ocr.py models.py window_locator.py log_maintenance.py level_debug_tester.py runtime_paths.py
 ```
 
 On Windows, run your terminal as Administrator if your game runs
@@ -88,28 +108,16 @@ bottom.
   *absent* instead). Multiple conditions on one step are combined
   with AND or OR. Use "Capture from screen..." to drag-select the
   icon directly instead of cropping screenshots by hand.
-- **Action** -- `click`, `key`, `wait`, or `set_step` (enable/disable
-  another step). Actions run top to bottom once a step's conditions
-  are met.
+- **Action** -- `click`, `click_matching_row`, `key`, `wait`, or `set_step`
+  (enable/disable another step). Actions run top to bottom once a step's
+  conditions are met.
 
-## Building a sequence (step 1, then step 2, skip if not there)
+## Included scenario
 
-This is what `set_step` actions are for. Load
-`scenarios/example_loot_loop.json` to see it in action:
-
-1. `step1_open_chest` starts enabled. When the chest image is found,
-   it clicks it, disables itself, and enables `step2_collect_loot`.
-2. `step2_collect_loot` starts **disabled** -- it's skipped entirely
-   until step 1 turns it on. Once active, if the loot button isn't on
-   screen yet, its condition just fails and it's re-checked next
-   cycle. When it fires, it disables itself and re-enables step 1,
-   looping back.
-3. `dialogue_skip` stays enabled throughout and can interrupt at any
-   time, independent of the chest/loot sequence.
-
-Before running it for real, replace the three placeholder images in
-`templates/` with actual captures from your game (use "Capture from
-screen..." inside the condition editor).
+The repository keeps the `Rally Gold Mob` scenario. It uses `set_step`
+actions to move between rally detection, joining, confirmation, and safe
+back-out states. Its template paths are project-relative, so the folder can be
+moved to another computer without rewriting the scenario JSON.
 
 ## Tips
 
@@ -121,5 +129,6 @@ screen..." inside the condition editor).
   size changes.
 - Use `click_matching_row` when one condition identifies the row and
   another condition is the button to click in that same row.
-- The kill-switch key (default F12) stops the scenario instantly from
-  anywhere, even while the game has focus.
+- The kill-switch key (default F12) is required before a scenario starts and
+  is checked between captures, matches, and every action, even while the game
+  has focus.

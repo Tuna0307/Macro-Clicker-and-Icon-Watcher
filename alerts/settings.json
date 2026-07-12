@@ -2,8 +2,8 @@
   "monitor_choice": "Monitor 1",
   "grayscale": true,
   "debug": false,
-  "cooldown_sec": 1.0,
-  "alert_volume": 0.2,
+  "cooldown_sec": 0.5,
+  "alert_volume": 0.045454545454545456,
   "scan_region": [
     5,
     769,

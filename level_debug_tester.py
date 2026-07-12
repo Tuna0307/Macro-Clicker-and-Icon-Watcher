@@ -1,17 +1,23 @@
 import argparse
 import json
+import math
+import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import cv2
 
 from engine import MacroEngine
+from models import TEMPLATES_DIR
+from runtime_paths import LEVEL_DEBUG_DIR
 
 
-DEFAULT_CROP_DIR = Path("logs") / "level_debug"
+DEFAULT_CROP_DIR = Path(LEVEL_DEBUG_DIR)
 DEFAULT_LABELS = DEFAULT_CROP_DIR / "labels.json"
-DEFAULT_DIGIT_DIR = Path("templates") / "level_digits"
+DEFAULT_DIGIT_DIR = Path(TEMPLATES_DIR) / "level_digits"
 DEFAULT_THRESHOLDS = [0.52, 0.58, 0.62, 0.66, 0.70, 0.74]
 DEFAULT_MARGINS = [0.0, 0.04, 0.08, 0.12]
 
@@ -20,7 +26,7 @@ DEFAULT_MARGINS = [0.0, 0.04, 0.08, 0.12]
 class TuneCase:
     crop: str
     expected: int
-    predicted: int | None
+    predicted: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -45,7 +51,10 @@ def parse_float_list(value):
     if not value:
         return []
     parts = value.replace(",", " ").split()
-    return [float(part) for part in parts]
+    result = [float(part) for part in parts]
+    if not all(math.isfinite(part) for part in result):
+        raise ValueError("values must be finite numbers")
+    return result
 
 
 def load_labels(path=DEFAULT_LABELS):
@@ -54,15 +63,30 @@ def load_labels(path=DEFAULT_LABELS):
         return {}
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError("labels file must contain a JSON object")
     return {str(key): int(value) for key, value in data.items()}
 
 
 def save_labels(path, labels):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(dict(sorted(labels.items())), handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(sorted(labels.items())), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def set_label(labels, crop_path, level):
@@ -218,7 +242,10 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not 1 <= args.min_digits <= 4:
+        parser.error("--min-digits must be between 1 and 4")
     crop_dir = Path(args.crop_dir)
     labels_path = Path(args.labels)
     labels = load_labels(labels_path)
@@ -251,6 +278,10 @@ def main(argv=None):
     if args.command == "tune":
         thresholds = parse_float_list(args.thresholds)
         margins = parse_float_list(args.margins)
+        if not thresholds or not all(0.0 <= value <= 1.0 for value in thresholds):
+            parser.error("--thresholds must contain values between 0 and 1")
+        if not margins or not all(0.0 <= value <= 1.0 for value in margins):
+            parser.error("--margins must contain values between 0 and 1")
         results = evaluate_grid(crops, labels, predictor, thresholds, margins)
         print_tune_results(results, args.limit)
         return 0

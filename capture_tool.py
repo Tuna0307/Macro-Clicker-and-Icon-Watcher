@@ -9,9 +9,11 @@ rectangle over it. Used for two things:
                       condition, to restrict matching to a small area)
 """
 import os
+import tempfile
 import time
 import tkinter as tk
 from tkinter import simpledialog
+from typing import Optional
 
 import mss
 from PIL import Image, ImageTk
@@ -19,12 +21,56 @@ from PIL import Image, ImageTk
 from models import TEMPLATES_DIR
 
 
+def _validated_monitor(monitors, monitor_index):
+    if isinstance(monitor_index, bool) or not isinstance(monitor_index, int):
+        raise ValueError("Monitor must be a whole number.")
+    physical_count = max(0, len(monitors) - 1)
+    if monitor_index < 1 or monitor_index >= len(monitors):
+        raise ValueError(
+            f"Monitor {monitor_index} is unavailable. Choose 1 through {physical_count}."
+        )
+    monitor = monitors[monitor_index]
+    if int(monitor.get("width", 0)) <= 0 or int(monitor.get("height", 0)) <= 0:
+        raise ValueError(f"Monitor {monitor_index} has invalid dimensions.")
+    return monitor
+
+
 def _grab_full_screenshot(monitor_index=1):
     with mss.MSS() as sct:
-        monitor = sct.monitors[monitor_index]
+        monitor = _validated_monitor(sct.monitors, monitor_index)
         raw = sct.grab(monitor)
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         return img, monitor["left"], monitor["top"]
+
+
+def _hide_window(window):
+    if window is None:
+        return None, False
+    try:
+        previous_state = window.state()
+    except (AttributeError, tk.TclError):
+        previous_state = "normal"
+    try:
+        had_grab = window.grab_current() == window
+    except (AttributeError, tk.TclError):
+        had_grab = False
+    window.withdraw()
+    window.update_idletasks()
+    return previous_state, had_grab
+
+
+def _restore_window(window, previous_state, had_grab):
+    if window is None or previous_state == "withdrawn":
+        return
+    try:
+        window.deiconify()
+        if previous_state in {"iconic", "zoomed"}:
+            window.state(previous_state)
+        window.lift()
+        if had_grab:
+            window.grab_set()
+    except (AttributeError, tk.TclError):
+        pass
 
 
 def select_region(root, monitor_index=1):
@@ -35,70 +81,90 @@ def select_region(root, monitor_index=1):
     is a PIL Image of that area. Returns (None, None) if cancelled
     (Escape key).
     """
-    if root is not None:
-        root.withdraw()
-        root.update_idletasks()
-    time.sleep(0.2)  # give the main window time to actually disappear before we screenshot
-    screenshot, mon_left, mon_top = _grab_full_screenshot(monitor_index)
+    # Validate before hiding anything so an invalid monitor cannot strand the
+    # active dialog off-screen.
+    with mss.MSS() as sct:
+        _validated_monitor(sct.monitors, monitor_index)
 
-    result = {"region": None}
-
-    overlay = tk.Toplevel(root)
-    overlay.attributes("-fullscreen", True)
-    overlay.attributes("-topmost", True)
-    overlay.configure(cursor="cross")
-
-    photo = ImageTk.PhotoImage(screenshot)
-    canvas = tk.Canvas(overlay, width=screenshot.width, height=screenshot.height,
-                        highlightthickness=0, cursor="cross")
-    canvas.pack(fill="both", expand=True)
-    canvas.create_image(0, 0, anchor="nw", image=photo)
-    canvas.image = photo  # keep a reference so it isn't garbage collected
-
-    hint = canvas.create_text(
-        screenshot.width // 2, 30,
-        text="Drag a box around the icon. Esc to cancel.",
-        fill="#00ff00", font=("Segoe UI", 14, "bold"),
-    )
-
-    start = {}
-    rect_id = {"id": None}
-
-    def on_press(event):
-        start["x"], start["y"] = event.x, event.y
-        if rect_id["id"]:
-            canvas.delete(rect_id["id"])
-        rect_id["id"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
-                                                 outline="#00ff00", width=2)
-
-    def on_drag(event):
-        if rect_id["id"]:
-            canvas.coords(rect_id["id"], start["x"], start["y"], event.x, event.y)
-
-    def on_release(event):
-        x0, y0 = start.get("x", event.x), start.get("y", event.y)
-        x1, y1 = event.x, event.y
-        left, right = sorted((x0, x1))
-        top, bottom = sorted((y0, y1))
-        if right - left > 3 and bottom - top > 3:
-            result["region"] = (mon_left + left, mon_top + top, right - left, bottom - top)
-        overlay.destroy()
-
-    def on_escape(event=None):
-        result["region"] = None
-        overlay.destroy()
-
-    canvas.bind("<ButtonPress-1>", on_press)
-    canvas.bind("<B1-Motion>", on_drag)
-    canvas.bind("<ButtonRelease-1>", on_release)
-    overlay.bind("<Escape>", on_escape)
-
+    previous_state, had_grab = "normal", False
+    overlay = None
     try:
+        previous_state, had_grab = _hide_window(root)
+        time.sleep(0.2)  # let the active window disappear before taking the screenshot
+        screenshot, mon_left, mon_top = _grab_full_screenshot(monitor_index)
+
+        result: dict[str, Optional[tuple[int, int, int, int]]] = {"region": None}
+
+        overlay = tk.Toplevel(root)
+        overlay.overrideredirect(True)
+        overlay.geometry(
+            f"{screenshot.width}x{screenshot.height}{mon_left:+d}{mon_top:+d}"
+        )
+        overlay.attributes("-topmost", True)
+        overlay.configure(cursor="cross")
+
+        photo = ImageTk.PhotoImage(screenshot)
+        canvas = tk.Canvas(overlay, width=screenshot.width, height=screenshot.height,
+                           highlightthickness=0, cursor="cross")
+        canvas.pack(fill="both", expand=True)
+        canvas.create_image(0, 0, anchor="nw", image=photo)
+        canvas.image = photo  # keep a reference so it isn't garbage collected
+
+        canvas.create_text(
+            screenshot.width // 2, 30,
+            text="Drag a box around the icon. Esc to cancel.",
+            fill="#00ff00", font=("Segoe UI", 14, "bold"),
+        )
+
+        start: dict[str, int] = {}
+        rect_id: dict[str, Optional[int]] = {"id": None}
+
+        def on_press(event):
+            start["x"], start["y"] = event.x, event.y
+            if rect_id["id"]:
+                canvas.delete(rect_id["id"])
+            rect_id["id"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
+                                                     outline="#00ff00", width=2)
+
+        def on_drag(event):
+            if rect_id["id"] and "x" in start and "y" in start:
+                canvas.coords(rect_id["id"], start["x"], start["y"], event.x, event.y)
+
+        def on_release(event):
+            if "x" not in start or "y" not in start:
+                return
+            x0, y0 = start["x"], start["y"]
+            x1 = min(max(event.x, 0), screenshot.width)
+            y1 = min(max(event.y, 0), screenshot.height)
+            x0 = min(max(x0, 0), screenshot.width)
+            y0 = min(max(y0, 0), screenshot.height)
+            left, right = sorted((x0, x1))
+            top, bottom = sorted((y0, y1))
+            if right - left > 3 and bottom - top > 3:
+                result["region"] = (mon_left + left, mon_top + top, right - left, bottom - top)
+            overlay.destroy()
+
+        def on_escape(event=None):
+            result["region"] = None
+            overlay.destroy()
+
+        canvas.bind("<ButtonPress-1>", on_press)
+        canvas.bind("<B1-Motion>", on_drag)
+        canvas.bind("<ButtonRelease-1>", on_release)
+        overlay.bind("<Escape>", on_escape)
+        overlay.protocol("WM_DELETE_WINDOW", on_escape)
+
         overlay.grab_set()
+        overlay.focus_force()
         overlay.wait_window()
     finally:
-        if root is not None:
-            root.deiconify()
+        if overlay is not None:
+            try:
+                if overlay.winfo_exists():
+                    overlay.destroy()
+            except tk.TclError:
+                pass
+        _restore_window(root, previous_state, had_grab)
 
     if result["region"] is None:
         return None, None
@@ -135,5 +201,16 @@ def capture_template(root, save_dir=TEMPLATES_DIR, monitor_index=1):
         path = f"{base_root}_{counter}{base_ext}"
         counter += 1
 
-    crop.save(path)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{safe_name}.", suffix=".png", dir=save_dir)
+    os.close(fd)
+    try:
+        crop.save(tmp_path)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
     return path

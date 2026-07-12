@@ -7,6 +7,7 @@ from window_locator import (
     absolute_region_from_window,
     absolute_region_from_window_ratio,
     proportional_region_from_window,
+    find_window_rect,
     resolve_window_region,
     visible_window_titles,
 )
@@ -41,7 +42,6 @@ class WindowRegionTests(unittest.TestCase):
         )
 
     def test_resolve_window_region_uses_pixels_until_window_size_changes(self):
-        original_window = (100, 200, 800, 600)
         moved_window = (300, 400, 800, 600)
         resized_window = (300, 400, 1600, 1200)
         relative_region = [80, 120, 200, 120]
@@ -169,6 +169,42 @@ class WindowRegionTests(unittest.TestCase):
         ]
 
         self.assertEqual(visible_window_titles(lambda: windows), ["Discord", "Game"])
+
+    def test_minimized_and_hidden_windows_are_not_targeted(self):
+        class FakeWindow:
+            def __init__(self, title, *, visible=True, minimized=False):
+                self.title = title
+                self.left = 1
+                self.top = 2
+                self.width = 100
+                self.height = 80
+                self.isVisible = visible
+                self.isMinimized = minimized
+
+        windows = [
+            FakeWindow("Game hidden", visible=False),
+            FakeWindow("Game minimized", minimized=True),
+            FakeWindow("Game ready"),
+        ]
+
+        self.assertEqual(
+            find_window_rect("Game", lambda: windows),
+            (1, 2, 100, 80),
+        )
+        self.assertEqual(visible_window_titles(lambda: windows), ["Game ready"])
+
+    def test_exact_window_title_beats_an_earlier_substring_match(self):
+        class FakeWindow:
+            def __init__(self, title, left):
+                self.title = title
+                self.left = left
+                self.top = 0
+                self.width = 100
+                self.height = 80
+
+        windows = [FakeWindow("Game launcher", 10), FakeWindow("Game", 20)]
+
+        self.assertEqual(find_window_rect("Game", lambda: windows), (20, 0, 100, 80))
 
 
 if __name__ == "__main__":

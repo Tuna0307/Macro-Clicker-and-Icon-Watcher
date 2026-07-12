@@ -301,7 +301,7 @@
           "target_choice": "leftmost",
           "min_level": null,
           "max_level": null,
-          "level_digit_template_dir": "C:\\Users\\chimw\\OneDrive\\Desktop\\GitHub\\Macro-Clicker-and-Icon-Watcher\\templates\\level_digits",
+          "level_digit_template_dir": "templates/level_digits",
           "level_roi": null,
           "level_min_digits": 1,
           "no_match_condition_index": null,
@@ -387,7 +387,7 @@
       "conditions": [
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/Attack.png",
+          "template_path": "templates/Attack.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,
@@ -439,7 +439,7 @@
       "actions": [
         {
           "type": "click",
-          "on_condition_index": null,
+          "on_condition_index": 0,
           "match_condition_index": null,
           "row_tolerance": 60,
           "row_mode": "first",
@@ -573,7 +573,7 @@
         },
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/GoldMob.png",
+          "template_path": "templates/GoldMob.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,
@@ -598,7 +598,7 @@
         },
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/BackButton.png",
+          "template_path": "templates/BackButton.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,
@@ -734,7 +734,7 @@
       "conditions": [
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/RallyPage.png",
+          "template_path": "templates/RallyPage.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,
@@ -759,7 +759,7 @@
         },
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/Join.png",
+          "template_path": "templates/Join.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,
@@ -784,7 +784,7 @@
         },
         {
           "condition_type": "template",
-          "template_path": "C:/Users/chimw/OneDrive/Desktop/GitHub/Macro-Clicker-and-Icon-Watcher/templates/BackButton.png",
+          "template_path": "templates/BackButton.png",
           "confidence": 0.85,
           "comparison_template_path": "",
           "comparison_margin": 0.03,

@@ -116,22 +116,45 @@
       ]
     },
     {
-      "id": 13,
-      "name": "Resources Collecter",
-      "file": "template_13.png",
+      "id": 14,
+      "name": "Resources Dig Icon",
+      "file": "template_14.png",
       "threshold": 0.85,
       "region": [
-        137,
-        1041,
-        444,
-        31
+        149,
+        810,
+        85,
+        72
       ],
       "region_mode": "window",
       "region_ratio": [
-        0.07135416666666666,
-        0.9638888888888889,
-        0.23125,
-        0.028703703703703703
+        0.07760416666666667,
+        0.75,
+        0.044270833333333336,
+        0.06666666666666667
+      ],
+      "region_window_size": [
+        1920,
+        1080
+      ]
+    },
+    {
+      "id": 15,
+      "name": "#2212",
+      "file": "template_15.png",
+      "threshold": 0.75,
+      "region": [
+        139,
+        986,
+        580,
+        93
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.07239583333333334,
+        0.912962962962963,
+        0.3020833333333333,
+        0.08611111111111111
       ],
       "region_window_size": [
         1920,
