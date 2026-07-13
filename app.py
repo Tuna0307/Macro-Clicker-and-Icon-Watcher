@@ -20,6 +20,14 @@ import keyboard
 import mss
 from PIL import ImageDraw, ImageTk
 
+from detection_core import (
+    LEGACY_MACRO_MATCH_MODE,
+    MATCH_MODE_BY_LABEL,
+    MATCH_MODE_LABELS,
+    MATCH_MODE_LIST_TAGS,
+    monitor_rect,
+    physical_monitor_index,
+)
 from models import (
     Scenario, Step, ImageCondition, Action,
     list_scenarios, load_scenario, save_scenario, delete_scenario,
@@ -39,7 +47,7 @@ from window_locator import (
     find_window_rect,
     proportional_region_from_window,
     relative_region_from_window,
-    resolve_window_region,
+    resolve_saved_capture_region,
     visible_window_titles,
 )
 from alert_watcher import AlertWatcherFrame, SingleInstanceLock
@@ -65,18 +73,25 @@ from ui_components import (
 )
 
 
+START_MACRO_HOTKEY = "f8"
+
+
 def _monitor_box(monitor_index=1):
     with mss.MSS() as sct:
         monitors = sct.monitors
+        resolved_index = physical_monitor_index(
+            monitors,
+            monitor_index,
+            use_fallback=False,
+        )
         if isinstance(monitor_index, bool) or not isinstance(monitor_index, int):
             raise ValueError("Monitor must be a whole number.")
-        if monitor_index < 1 or monitor_index >= len(monitors):
+        if resolved_index is None:
             available = max(0, len(monitors) - 1)
             raise ValueError(
                 f"Monitor {monitor_index} is unavailable. Choose 1 through {available}."
             )
-        mon = monitors[monitor_index]
-        return (mon["left"], mon["top"], mon["width"], mon["height"])
+        return monitor_rect(monitors[resolved_index])
 
 
 def _parse_optional_int(value, field_name):
@@ -124,20 +139,19 @@ def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", 
         if not window_rect:
             return _WINDOW_UNAVAILABLE
 
-    if cond.region:
-        if cond.region_mode == "window":
-            assert window_rect is not None
-            return resolve_window_region(
-                cond.region,
-                window_rect,
-                cond.region_ratio,
-                cond.region_window_size,
-            )
-        return tuple(cond.region)
-
-    if title:
-        return window_rect
-    return _monitor_box(monitor_index)
+    monitor_box = (
+        _monitor_box(monitor_index)
+        if window_rect is None or cond.region_mode == "monitor"
+        else None
+    )
+    return resolve_saved_capture_region(
+        cond.region,
+        cond.region_mode,
+        cond.region_ratio,
+        cond.region_window_size,
+        window_rect=window_rect,
+        monitor_rect=monitor_box,
+    )
 
 
 class MultiRegionOverlay(tk.Toplevel):
@@ -214,6 +228,42 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     confidence_var = tk.DoubleVar(value=cond.confidence if cond else 0.85)
     comparison_template_var = tk.StringVar(value=cond.comparison_template_path if cond else "")
     comparison_margin_var = tk.DoubleVar(value=cond.comparison_margin if cond else 0.03)
+    comparison_reference = (
+        cond.comparison_template_reference_size
+        if cond and cond.comparison_template_reference_size
+        else None
+    )
+    comparison_ref_width_var = tk.StringVar(
+        value=str(comparison_reference[0]) if comparison_reference else ""
+    )
+    comparison_ref_height_var = tk.StringVar(
+        value=str(comparison_reference[1]) if comparison_reference else ""
+    )
+    original_comparison_path = comparison_template_var.get().strip()
+
+    def clear_stale_comparison_reference(*_args):
+        if comparison_template_var.get().strip() != original_comparison_path:
+            comparison_ref_width_var.set("")
+            comparison_ref_height_var.set("")
+
+    comparison_template_var.trace_add("write", clear_stale_comparison_reference)
+    match_mode = cond.match_mode if cond else LEGACY_MACRO_MATCH_MODE
+    match_mode_var = tk.StringVar(value=MATCH_MODE_LABELS[match_mode])
+    grayscale_var = tk.BooleanVar(value=cond.use_grayscale if cond else False)
+    template_reference_size_holder = {
+        "size": (
+            list(cond.template_reference_size)
+            if cond and cond.template_reference_size
+            else None
+        )
+    }
+    original_template_path = template_var.get().strip()
+
+    def clear_stale_template_reference(*_args):
+        if template_var.get().strip() != original_template_path:
+            template_reference_size_holder["size"] = None
+
+    template_var.trace_add("write", clear_stale_template_reference)
     negate_var = tk.BooleanVar(value=cond.negate if cond else False)
     region_holder = {"region": list(cond.region) if (cond and cond.region) else None}
     region_mode_holder = {"mode": cond.region_mode if cond else "screen"}
@@ -225,7 +275,10 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     def format_region_label():
         if not region_holder["region"]:
             return "Target window" if target_window_title else "Full screen"
-        scope = "window-relative" if region_mode_holder["mode"] == "window" else "screen"
+        scope = {
+            "window": "window-relative",
+            "monitor": "monitor-relative",
+        }.get(region_mode_holder["mode"], "screen")
         return f"{region_holder['region']} ({scope})"
 
     region_var = tk.StringVar(value=format_region_label())
@@ -240,6 +293,7 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
         path = filedialog.askopenfilename(filetypes=[("PNG images", "*.png")], initialdir="templates", parent=win)
         if path:
             template_var.set(portable_project_path(path))
+            template_reference_size_holder["size"] = None
 
     def capture():
         try:
@@ -249,6 +303,19 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
             return
         if path:
             template_var.set(portable_project_path(path))
+            title = target_window_title.strip()
+            window_rect = find_window_rect(title) if title else None
+            if window_rect:
+                template_reference_size_holder["size"] = [
+                    window_rect[2],
+                    window_rect[3],
+                ]
+            else:
+                monitor_box = _monitor_box(monitor_index)
+                template_reference_size_holder["size"] = [
+                    monitor_box[2],
+                    monitor_box[3],
+                ]
 
     template_browse_btn = ttk.Button(win, text="Browse", command=browse)
     template_browse_btn.grid(row=1, column=1, sticky="we", **pad)
@@ -275,30 +342,51 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     advanced_matching = CollapsibleSection(
         win,
         "Advanced matching",
-        expanded=bool(comparison_template_var.get()),
+        expanded=bool(
+            comparison_template_var.get()
+            or match_mode != LEGACY_MACRO_MATCH_MODE
+            or grayscale_var.get()
+        ),
     )
     advanced_matching.grid(row=3, column=0, columnspan=3, sticky="ew", padx=6, pady=(4, 2))
     advanced_matching.content.columnconfigure(1, weight=1)
     ttk.Label(
         advanced_matching.content,
-        text="Compare against",
+        text="Detection type",
         style="Surface.TLabel",
     ).grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Combobox(
+        advanced_matching.content,
+        textvariable=match_mode_var,
+        values=list(MATCH_MODE_LABELS.values()),
+        state="readonly",
+        width=25,
+    ).grid(row=0, column=1, columnspan=2, sticky="ew", pady=4)
+    ttk.Checkbutton(
+        advanced_matching.content,
+        text="Grayscale pictures",
+        variable=grayscale_var,
+    ).grid(row=1, column=1, columnspan=2, sticky="w", pady=4)
+    ttk.Label(
+        advanced_matching.content,
+        text="Compare against",
+        style="Surface.TLabel",
+    ).grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
     ttk.Entry(
         advanced_matching.content,
         textvariable=comparison_template_var,
         width=34,
-    ).grid(row=0, column=1, sticky="ew", pady=4)
+    ).grid(row=2, column=1, sticky="ew", pady=4)
     ttk.Button(
         advanced_matching.content,
         text="Browse",
         command=browse_comparison,
-    ).grid(row=0, column=2, padx=(6, 0), pady=4)
+    ).grid(row=2, column=2, padx=(6, 0), pady=4)
     ttk.Label(
         advanced_matching.content,
         text="Required score lead",
         style="Surface.TLabel",
-    ).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
+    ).grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
     ttk.Spinbox(
         advanced_matching.content,
         textvariable=comparison_margin_var,
@@ -306,7 +394,22 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
         to=0.25,
         increment=0.01,
         width=8,
-    ).grid(row=1, column=1, sticky="w", pady=4)
+    ).grid(row=3, column=1, sticky="w", pady=4)
+    ttk.Label(
+        advanced_matching.content,
+        text="Rival reference w / h",
+        style="Surface.TLabel",
+    ).grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Entry(
+        advanced_matching.content,
+        textvariable=comparison_ref_width_var,
+        width=8,
+    ).grid(row=4, column=1, sticky="w", pady=4)
+    ttk.Entry(
+        advanced_matching.content,
+        textvariable=comparison_ref_height_var,
+        width=8,
+    ).grid(row=4, column=2, sticky="w", padx=(6, 0), pady=4)
 
     ttk.Checkbutton(
         win,
@@ -356,9 +459,27 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
                 region = relative_region_from_window(region, window_rect)
                 region_mode_holder["mode"] = "window"
             else:
-                region_mode_holder["mode"] = "screen"
-                region_ratio_holder["ratio"] = None
-                region_window_size_holder["size"] = None
+                monitor_box = _monitor_box(monitor_index)
+                ratio = proportional_region_from_window(region, monitor_box)
+                if (
+                    ratio[0] < 0.0
+                    or ratio[1] < 0.0
+                    or ratio[0] + ratio[2] > 1.001
+                    or ratio[1] + ratio[3] > 1.001
+                ):
+                    messagebox.showerror(
+                        "Region outside monitor",
+                        "Pick a region completely inside the selected monitor.",
+                        parent=win,
+                    )
+                    return
+                region_ratio_holder["ratio"] = list(ratio)
+                region_window_size_holder["size"] = [
+                    monitor_box[2],
+                    monitor_box[3],
+                ]
+                region = relative_region_from_window(region, monitor_box)
+                region_mode_holder["mode"] = "monitor"
             region_holder["region"] = list(region)
             region_var.set(format_region_label())
 
@@ -370,6 +491,24 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
         region_var.set(format_region_label())
 
     def current_condition():
+        comparison_ref_width = _parse_optional_int(
+            comparison_ref_width_var.get(),
+            "Rival reference width",
+        )
+        comparison_ref_height = _parse_optional_int(
+            comparison_ref_height_var.get(),
+            "Rival reference height",
+        )
+        if (comparison_ref_width is None) != (comparison_ref_height is None):
+            raise ValueError("Rival reference size requires both width and height.")
+        comparison_reference_size = None
+        if comparison_ref_width is not None and comparison_ref_height is not None:
+            if comparison_ref_width <= 0 or comparison_ref_height <= 0:
+                raise ValueError("Rival reference width and height must be positive.")
+            comparison_reference_size = [
+                comparison_ref_width,
+                comparison_ref_height,
+            ]
         candidate = ImageCondition(
             template_path=portable_project_path(template_var.get().strip()),
             confidence=round(confidence_var.get(), 2),
@@ -377,6 +516,10 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
                 comparison_template_var.get().strip()
             ),
             comparison_margin=round(comparison_margin_var.get(), 2),
+            comparison_template_reference_size=comparison_reference_size,
+            match_mode=MATCH_MODE_BY_LABEL[match_mode_var.get()],
+            use_grayscale=grayscale_var.get(),
+            template_reference_size=template_reference_size_holder["size"],
             region=region_holder["region"],
             region_mode=region_mode_holder["mode"],
             region_ratio=region_ratio_holder["ratio"],
@@ -863,15 +1006,19 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
             if not c.region:
                 region_txt = "target window" if target_window_title else "full screen"
             else:
-                scope = "window" if c.region_mode == "window" else "screen"
+                scope = {
+                    "window": "window-relative",
+                    "monitor": "monitor-relative",
+                }.get(c.region_mode, "absolute screen")
                 region_txt = f"{scope} region {tuple(c.region)}"
             comparison_txt = ""
             if c.comparison_template_path:
                 rival = os.path.basename(c.comparison_template_path)
                 comparison_txt = f", beats {rival} by {c.comparison_margin:.2f}"
+            mode_txt = MATCH_MODE_LIST_TAGS.get(c.match_mode, "Static")
             cond_listbox.insert(
                 tk.END,
-                f"[{i}] {tag}{subject}  "
+                f"[{i}] {tag}{subject} [{mode_txt}]  "
                 f"(conf {c.confidence}{comparison_txt}, {region_txt})",
             )
     refresh_conditions()
@@ -1188,7 +1335,10 @@ class App:
         self.run_btn.grid(row=0, column=8, padx=3)
         self.stop_btn = ttk.Button(top, text="Stop", style="Danger.TButton", state="disabled", command=self._stop_engine)
         self.stop_btn.grid(row=0, column=9, padx=3)
-        Tooltip(self.run_btn, "Start the selected scenario (F11)")
+        Tooltip(
+            self.run_btn,
+            f"Start the selected scenario ({START_MACRO_HOTKEY.upper()})",
+        )
         Tooltip(self.stop_btn, "Stop the running scenario")
 
         config = ttk.Frame(self.macro_tab, style="Surface.TFrame", padding=(14, 9))
@@ -1722,6 +1872,8 @@ class App:
         )
         for condition_index, condition in enumerate(step.conditions):
             name = os.path.basename(condition.template_path) or "Unnamed condition"
+            mode = MATCH_MODE_LIST_TAGS.get(condition.match_mode, "Static")
+            name = f"{name} [{mode}]"
             if condition.negate:
                 rule = "Absent"
             elif condition.comparison_template_path:
@@ -1729,7 +1881,10 @@ class App:
             else:
                 rule = f"{condition.confidence:.2f}+"
             if condition.region:
-                scope = "Window" if condition.region_mode == "window" else "Screen"
+                scope = {
+                    "window": "Window-relative",
+                    "monitor": "Monitor-relative",
+                }.get(condition.region_mode, "Absolute screen")
             else:
                 scope = "Target" if self.scenario.target_window_title else "Full screen"
             self.condition_tree.insert("", "end", iid=str(condition_index), text=name, values=(rule, scope))
@@ -2045,10 +2200,13 @@ class App:
     def _register_start_hotkey(self):
         try:
             self._start_hotkey_handle = keyboard.add_hotkey(
-                "f11", self._request_start_from_hotkey
+                START_MACRO_HOTKEY, self._request_start_from_hotkey
             )
         except Exception as exc:
-            self._queue_log(f"[warn] could not register start hotkey F11: {exc}")
+            self._queue_log(
+                f"[warn] could not register start hotkey "
+                f"{START_MACRO_HOTKEY.upper()}: {exc}"
+            )
 
     def _request_start_from_hotkey(self):
         self.control_queue.put("start")
@@ -2059,7 +2217,9 @@ class App:
         root = getattr(self, "root", None)
         try:
             if root is not None and root.grab_current() is not None:
-                self._queue_log("[safety] F11 ignored while a dialog is open")
+                self._queue_log(
+                    f"[safety] {START_MACRO_HOTKEY.upper()} ignored while a dialog is open"
+                )
                 return
         except tk.TclError:
             return

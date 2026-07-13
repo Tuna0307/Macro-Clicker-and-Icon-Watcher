@@ -103,6 +103,28 @@ class EnginePerformanceTests(unittest.TestCase):
         self.assertEqual(grabbed[0], engine.sct.monitors[1])
         self.assertEqual(len(logs), 1)
 
+    def test_monitor_fallback_uses_the_same_resolution_for_template_scaling(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="fallback", monitor_index=9)
+        engine.log = lambda _message: None
+        engine._monitor_index_warning_logged = None
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 2560, "height": 1440},
+                {"left": 0, "top": 0, "width": 2560, "height": 1440},
+            ]
+
+        engine.sct = FakeCapture()
+        condition = ImageCondition(
+            template_path="templates/a.png",
+            template_reference_size=[1920, 1080],
+        )
+
+        kwargs = engine._condition_matching_kwargs(condition)
+
+        self.assertEqual(kwargs["current_size"], (2560, 1440))
+
     def test_cycle_uses_monotonic_time_for_cooldowns(self):
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="clock")

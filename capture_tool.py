@@ -18,6 +18,7 @@ from typing import Optional
 import mss
 from PIL import Image, ImageTk
 
+from detection_core import capture_bgr, monitor_rect
 from models import TEMPLATES_DIR
 
 
@@ -38,9 +39,10 @@ def _validated_monitor(monitors, monitor_index):
 def _grab_full_screenshot(monitor_index=1):
     with mss.MSS() as sct:
         monitor = _validated_monitor(sct.monitors, monitor_index)
-        raw = sct.grab(monitor)
-        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-        return img, monitor["left"], monitor["top"]
+        frame = capture_bgr(sct, monitor)
+        img = Image.fromarray(frame[:, :, ::-1])
+        left, top, _width, _height = monitor_rect(monitor)
+        return img, left, top
 
 
 def _hide_window(window):

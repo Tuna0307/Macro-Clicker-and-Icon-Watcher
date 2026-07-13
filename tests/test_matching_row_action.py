@@ -10,6 +10,114 @@ from models import Action, ImageCondition, Scenario, Step
 
 
 class MatchingRowActionTests(unittest.TestCase):
+    def test_row_tolerance_scales_with_reference_match_geometry(self):
+        engine = object.__new__(MacroEngine)
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            row_tolerance=60,
+        )
+        reference = {
+            "center": (100, 100),
+            "scale_x": 4 / 3,
+            "scale_y": 4 / 3,
+        }
+        target = {
+            "center": (300, 167),
+            "scale_x": 4 / 3,
+            "scale_y": 4 / 3,
+        }
+
+        selected = engine._find_matching_row_targets(
+            action,
+            {0: [reference], 1: [target]},
+        )
+
+        self.assertEqual(selected, [target])
+
+    def test_rally_level_roi_and_retry_offsets_scale_to_1440p(self):
+        engine = object.__new__(MacroEngine)
+        action = Action(
+            type="click_matching_row",
+            level_roi=[-65, 25, 150, 45],
+        )
+        reference = {
+            "center": (1000, 500),
+            "scale_x": 4 / 3,
+            "scale_y": 4 / 3,
+        }
+
+        rects = engine._level_crop_rects(
+            action,
+            reference,
+            window_rect=(0, 0, 2560, 1440),
+        )
+
+        self.assertEqual(rects[0], (913, 533, 200, 60))
+        self.assertEqual(rects[1][1] - rects[0][1], 11)
+
+    def test_scaled_digit_templates_still_read_level_at_1440p(self):
+        engine = object.__new__(MacroEngine)
+        templates = {
+            "2": np.array(
+                [
+                    [0, 255, 255, 0],
+                    [255, 0, 0, 255],
+                    [0, 0, 255, 0],
+                    [0, 255, 0, 0],
+                    [255, 255, 255, 255],
+                ],
+                dtype=np.uint8,
+            ),
+            "7": np.array(
+                [
+                    [255, 255, 255, 255],
+                    [0, 0, 0, 255],
+                    [0, 0, 255, 0],
+                    [0, 255, 0, 0],
+                    [0, 255, 0, 0],
+                ],
+                dtype=np.uint8,
+            ),
+        }
+        reference = {"scale_x": 4 / 3, "scale_y": 4 / 3}
+        scaled = engine._scale_digit_templates_for_match(templates, reference)
+        frame = np.zeros((14, 22), dtype=np.uint8)
+        frame[3:3 + scaled["2"].shape[0], 2:2 + scaled["2"].shape[1]] = scaled["2"]
+        frame[3:3 + scaled["7"].shape[0], 13:13 + scaled["7"].shape[1]] = scaled["7"]
+
+        level = engine._read_level_from_frame(
+            frame,
+            scaled,
+            confidence=0.99,
+            min_digits=2,
+        )
+
+        self.assertEqual(level, 27)
+
+    def test_detected_click_offsets_scale_with_target_match(self):
+        clicked = []
+        engine = object.__new__(MacroEngine)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine.log = lambda _message: None
+        engine._click_point = lambda x, y, button: clicked.append((x, y, button))
+        action = Action(
+            type="click",
+            on_condition_index=0,
+            offset_x=3,
+            offset_y=6,
+        )
+
+        engine._run_action(
+            Step(name="scaled click"),
+            action,
+            {0: (100, 200)},
+            {0: [{"center": (100, 200), "scale_x": 4 / 3, "scale_y": 4 / 3}]},
+        )
+
+        self.assertEqual(clicked, [(104, 208, "left")])
+
     def test_matching_row_action_clicks_target_on_same_row_as_reference(self):
         clicked = []
         engine = object.__new__(MacroEngine)

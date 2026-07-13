@@ -73,6 +73,42 @@ def resolve_window_region(region: Sequence[int], window_rect: Rect,
     return absolute_region_from_window(region, window_rect)
 
 
+def resolve_saved_capture_region(
+    region: Optional[Sequence[int]],
+    region_mode: str,
+    region_ratio: Optional[Sequence[float]] = None,
+    region_reference_size: Optional[Sequence[int]] = None,
+    *,
+    window_rect: Optional[Rect] = None,
+    monitor_rect: Optional[Rect] = None,
+) -> Optional[Rect]:
+    """Resolve the same saved condition region for runtime and UI preview."""
+    if region is not None:
+        if region_mode == "window":
+            if window_rect is None:
+                return None
+            return resolve_window_region(
+                region,
+                window_rect,
+                region_ratio,
+                region_reference_size,
+            )
+        if region_mode == "monitor":
+            if monitor_rect is None:
+                return None
+            return resolve_window_region(
+                region,
+                monitor_rect,
+                region_ratio,
+                region_reference_size,
+            )
+        left, top, width, height = (int(value) for value in region)
+        return left, top, width, height
+    if window_rect is not None:
+        return window_rect
+    return monitor_rect
+
+
 def relative_region_from_window(region: Sequence[int], window_rect: Rect) -> Rect:
     """Convert an absolute screen region to coordinates relative to a window."""
     left, top, _, _ = window_rect

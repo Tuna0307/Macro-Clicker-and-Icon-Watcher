@@ -239,6 +239,34 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertEqual(matches[0][:2], (713, 421))
         self.assertAlmostEqual(matches[0][4], 1.0, places=5)
 
+    def test_condition_uses_exact_target_window_resolution_scale(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="resolution",
+            target_window_title="Game",
+        )
+        engine._window_rect_provider = lambda _title: (0, 0, 2560, 1440)
+        engine._window_rect_lookup_cache = {}
+        rng = np.random.default_rng(109)
+        template = rng.integers(0, 256, (24, 30, 3), dtype=np.uint8)
+        scaled = cv2.resize(template, (40, 32), interpolation=cv2.INTER_LINEAR)
+        frame = np.zeros((120, 220, 3), dtype=np.uint8)
+        frame[51:83, 107:147] = scaled
+        engine._load_template = lambda _path: template
+        condition = ImageCondition(
+            template_path="icon.png",
+            confidence=0.99,
+            template_reference_size=[1920, 1080],
+        )
+
+        ok, matches = engine._evaluate_template_condition(
+            0, condition, frame, 0, 0, collect_all=False
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(matches[0]["image_box"], (107, 51, 147, 83))
+        self.assertAlmostEqual(matches[0]["scale"], 4 / 3)
+
     def test_engine_refuses_to_start_without_required_kill_switch(self):
         class FakeCapture:
             def close(self):

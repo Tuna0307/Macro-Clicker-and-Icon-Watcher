@@ -120,6 +120,33 @@ class WindowRegionTests(unittest.TestCase):
 
         self.assertEqual(engine._resolve_capture_region(condition), (120, 240, 60, 80))
 
+    def test_engine_moves_and_scales_monitor_relative_region(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="game", monitor_index=2)
+        engine.log = lambda _message: None
+        engine._monitor_index_warning_logged = None
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 4480, "height": 1440},
+                {"left": 0, "top": 0, "width": 1920, "height": 1080},
+                {"left": 1920, "top": 0, "width": 2560, "height": 1440},
+            ]
+
+        engine.sct = FakeCapture()
+        condition = ImageCondition(
+            template_path="templates/icon.png",
+            region=[100, 50, 200, 100],
+            region_mode="monitor",
+            region_ratio=[100 / 1920, 50 / 1080, 200 / 1920, 100 / 1080],
+            region_window_size=[1920, 1080],
+        )
+
+        self.assertEqual(
+            engine._resolve_capture_region(condition),
+            (2053, 67, 267, 133),
+        )
+
     def test_engine_does_not_use_stale_window_rect_when_target_disappears(self):
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="game", target_window_title="My Offline Game")

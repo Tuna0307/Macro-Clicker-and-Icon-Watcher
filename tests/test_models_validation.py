@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from detection_core import MATCH_MODE_STATIC, MATCH_MODE_TEXT
 from models import (
     Action,
     ImageCondition,
@@ -16,6 +17,65 @@ from models import (
 
 
 class ModelValidationTests(unittest.TestCase):
+    def test_detection_profile_round_trips_and_legacy_defaults_remain_static(self):
+        condition = ImageCondition(
+            template_path="templates/chat.png",
+            comparison_template_path="templates/rival.png",
+            comparison_template_reference_size=[1608, 940],
+            match_mode=MATCH_MODE_TEXT,
+            use_grayscale=True,
+            template_reference_size=[1920, 1080],
+        )
+
+        restored = ImageCondition.from_dict(condition.to_dict())
+        legacy = ImageCondition.from_dict({"template_path": "templates/icon.png"})
+
+        self.assertEqual(restored, condition)
+        self.assertEqual(legacy.match_mode, MATCH_MODE_STATIC)
+        self.assertFalse(legacy.use_grayscale)
+        self.assertIsNone(legacy.template_reference_size)
+
+    def test_invalid_detection_profile_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "match_mode"):
+            ImageCondition.from_dict({
+                "template_path": "templates/icon.png",
+                "match_mode": "spinning_text",
+            })
+        with self.assertRaisesRegex(ValueError, "template_reference_size"):
+            ImageCondition.from_dict({
+                "template_path": "templates/icon.png",
+                "template_reference_size": [0, 1080],
+            })
+        with self.assertRaisesRegex(ValueError, "without a comparison template"):
+            validate_scenario(Scenario(
+                name="Invalid rival metadata",
+                steps=[Step(
+                    name="One",
+                    conditions=[ImageCondition(
+                        template_path="templates/icon.png",
+                        comparison_template_reference_size=[1920, 1080],
+                    )],
+                )],
+            ))
+
+    def test_monitor_relative_region_round_trips_and_validates(self):
+        condition = ImageCondition(
+            template_path="templates/icon.png",
+            region=[100, 50, 200, 100],
+            region_mode="monitor",
+            region_ratio=[100 / 1920, 50 / 1080, 200 / 1920, 100 / 1080],
+            region_window_size=[1920, 1080],
+        )
+        scenario = Scenario(
+            name="Portable monitor region",
+            steps=[Step(name="One", conditions=[condition])],
+        )
+
+        restored = Scenario.from_dict(scenario.to_dict())
+        validate_scenario(restored)
+
+        self.assertEqual(restored.steps[0].conditions[0], condition)
+
     def test_unknown_action_type_is_rejected_instead_of_becoming_a_click(self):
         with self.assertRaisesRegex(ValueError, "unsupported action type"):
             Action.from_dict({"type": "wa1t", "seconds": 1})

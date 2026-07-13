@@ -47,6 +47,33 @@ class StepPreviewTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["image_box"], (18, 15, 40, 37))
 
+    def test_negated_preview_shows_the_match_that_made_absence_fail(self):
+        engine = object.__new__(MacroEngine)
+        rng = np.random.default_rng(5)
+        template = rng.integers(0, 256, (12, 12, 3), dtype=np.uint8)
+        frame = np.zeros((40, 50, 3), dtype=np.uint8)
+        frame[16:28, 21:33] = template
+        engine._load_template = lambda _path: template
+        cond = ImageCondition(
+            template_path="templates/prohibited.png",
+            confidence=0.99,
+            negate=True,
+        )
+
+        ok, matches, _image = engine._preview_template_condition(
+            0,
+            cond,
+            frame,
+            0,
+            0,
+            None,
+            collect_all=False,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["image_box"], (21, 16, 33, 28))
+
     def test_competing_template_condition_accepts_only_the_better_template(self):
         engine = object.__new__(MacroEngine)
         rng = np.random.default_rng(7)

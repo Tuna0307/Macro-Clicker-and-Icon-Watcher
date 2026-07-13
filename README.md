@@ -29,7 +29,7 @@ For development checks:
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python -m pytest -q
 .\.venv\Scripts\python -m ruff check .
-.\.venv\Scripts\python -m mypy app.py app_helpers.py alert_watcher.py capture_tool.py engine.py level_ocr.py models.py window_locator.py log_maintenance.py level_debug_tester.py runtime_paths.py
+.\.venv\Scripts\python -m mypy detection_core.py app.py app_helpers.py alert_watcher.py capture_tool.py engine.py level_ocr.py models.py window_locator.py log_maintenance.py level_debug_tester.py runtime_paths.py
 ```
 
 On Windows, run your terminal as Administrator if your game runs
@@ -57,6 +57,43 @@ When a target window is set:
 
 Leave the field blank to use the old full-screen / absolute-region
 behavior.
+
+## Shared detection foundation
+
+Macro Builder and Icon Alerts use the same `detection_core.py` implementation
+for DPI-aware BGR screen captures, monitor selection, window/monitor-relative
+regions, template scaling, colored-text masking, rotations, low-variance
+safety, bounded variant preparation, coarse search, and match scoring.
+Workflow-specific behavior remains separate: Macro Builder turns matches into
+actions, while Icon Alerts applies confirmation, cooldown, sound, and popup
+policies.
+
+When a template has a reference window/monitor size, the matcher inserts the
+exact current width and height scales before its fallback scales. For example,
+moving a full-screen game from 1920x1080 to 2560x1440 adds an exact 1.333333x
+candidate. A change of aspect ratio also gets an exact independent x/y variant
+instead of being forced into one approximate scalar. New screen captures save
+their reference size. Legacy Macro conditions safely try the known historical
+window sizes in the scenario without rewriting its JSON; explicit new template
+metadata takes priority.
+
+The matching implementation is shared, while each workflow keeps its safe
+legacy fallback range: Icon Alerts retains its broad 0.50x-1.50x search and
+Macro Builder retains its faster 0.80x-1.20x fallback. Known monitor/window
+resolution changes are not limited by those ranges because their exact scale
+is inserted automatically.
+
+When a target window is configured, both workflows follow that window to the
+physical monitor it currently occupies. When no target window is used, newly
+picked regions are saved relative to the selected monitor, so changing from a
+1920x1080 monitor to a 2560x1440 monitor moves and scales the region. Existing
+legacy `screen` regions remain absolute to avoid silently changing saved
+behavior.
+
+Macro matches also carry their exact x/y scale into detected-target offsets,
+matching-row tolerance, level OCR regions, and digit-template fallback sizes.
+Legacy fixed `x`/`y` click actions remain absolute screen coordinates; use a
+detected condition target for portable cross-monitor actions.
 
 ## Matching a row
 
@@ -119,9 +156,9 @@ actions to move between rally detection, joining, confirmation, and safe
 back-out states. Its template paths are project-relative, so the folder can be
 moved to another computer without rewriting the scenario JSON.
 
-## Alert detection types
+## Detection types
 
-Each alert template has its own detection type:
+Alert templates and Macro Builder conditions use the same detection types:
 
 - **Text / colored text** isolates the foreground text color so translucent or
   changing backgrounds do not become part of the match. Text does not use
@@ -131,8 +168,9 @@ Each alert template has its own detection type:
 - **Animated/rotating picture** searches the configured scales at 0, ±5, and
   ±8 degrees for icons that visibly tilt or wobble.
 
-Changing the global **Grayscale pictures** option affects only the two picture
-modes. New templates default to **Static picture**. Older manifests without a
+The Icon Alerts **Grayscale pictures** option applies to its picture templates;
+Macro Builder stores the same choice per condition. New templates and old Macro
+conditions default to **Static picture**. Older alert manifests without a
 detection type retain the previous animated/rotating behavior.
 
 ## Tips

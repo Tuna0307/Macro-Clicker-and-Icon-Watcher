@@ -16,6 +16,7 @@ import tempfile
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
+from detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
 
 ACTION_TYPES = frozenset({"click", "click_matching_row", "key", "wait", "set_step"})
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -194,7 +195,7 @@ def _validate_ratio(region_ratio):
     return region_ratio
 
 
-def _validate_window_size(size):
+def _validate_window_size(size, label="region_window_size"):
     if size is None:
         return None
     if (
@@ -204,7 +205,7 @@ def _validate_window_size(size):
         or size[0] <= 0
         or size[1] <= 0
     ):
-        raise ValueError("region_window_size must contain a positive [width, height]")
+        raise ValueError(f"{label} must contain a positive [width, height]")
     return size
 
 
@@ -235,10 +236,14 @@ class ImageCondition:
     confidence: float = 0.85
     comparison_template_path: str = ""   # optional rival template that this template must outscore
     comparison_margin: float = 0.03       # minimum score lead over the rival template
-    region: Optional[List[int]] = None   # [left, top, width, height] screen coords, or None = full monitor
-    region_mode: str = "screen"          # "screen" = absolute coords, "window" = relative to target window
-    region_ratio: Optional[List[float]] = None  # proportional window region, used if target window resizes
-    region_window_size: Optional[List[int]] = None  # [width, height] of target window when region was picked
+    comparison_template_reference_size: Optional[List[int]] = None
+    match_mode: str = LEGACY_MACRO_MATCH_MODE
+    use_grayscale: bool = False
+    template_reference_size: Optional[List[int]] = None
+    region: Optional[List[int]] = None
+    region_mode: str = "screen"  # absolute screen, target-window, or selected-monitor relative
+    region_ratio: Optional[List[float]] = None
+    region_window_size: Optional[List[int]] = None  # reference window/monitor size for the region
     negate: bool = False                  # True = condition succeeds when the image is ABSENT
 
     def to_dict(self):
@@ -259,23 +264,45 @@ class ImageCondition:
         comparison_margin = _float_value(d.get("comparison_margin"), 0.03)
         if not 0.0 <= comparison_margin <= 1.0:
             raise ValueError("comparison margin must be between 0 and 1")
+        comparison_template_reference_size = _validate_window_size(
+            _optional_int_list_field(
+                d,
+                "comparison_template_reference_size",
+                "comparison_template_reference_size",
+            ),
+            "comparison_template_reference_size",
+        )
+        match_mode = d.get("match_mode", LEGACY_MACRO_MATCH_MODE)
+        if not isinstance(match_mode, str) or match_mode not in MATCH_MODE_VALUES:
+            raise ValueError("condition match_mode is invalid")
+        use_grayscale = _bool_value(d.get("use_grayscale"), False)
+        template_reference_size = _validate_window_size(
+            _optional_int_list_field(
+                d,
+                "template_reference_size",
+                "template_reference_size",
+            ),
+            "template_reference_size",
+        )
         region = _validate_region(_optional_int_list_field(d, "region", "region"))
         region_mode = str(d.get("region_mode", "screen") or "screen")
-        if region_mode not in {"screen", "window"}:
-            raise ValueError("region_mode must be 'screen' or 'window'")
+        if region_mode not in {"screen", "window", "monitor"}:
+            raise ValueError("region_mode must be 'screen', 'window', or 'monitor'")
         region_ratio = _validate_ratio(
             _optional_float_list_field(d, "region_ratio", "region_ratio")
         )
         region_window_size = _validate_window_size(
             _optional_int_list_field(d, "region_window_size", "region_window_size")
         )
-        if region_mode == "window" and region is not None:
+        if region_mode in {"window", "monitor"} and region is not None:
             if (region_ratio is None) != (region_window_size is None):
-                raise ValueError("window regions must provide both ratio and base window size, or neither")
+                raise ValueError(
+                    "relative regions must provide both ratio and base size, or neither"
+                )
         if region is None and (region_ratio is not None or region_window_size is not None):
             raise ValueError("region resize metadata requires a region")
         if region_mode == "screen" and (region_ratio is not None or region_window_size is not None):
-            raise ValueError("screen regions cannot contain window resize metadata")
+            raise ValueError("screen regions cannot contain resize metadata")
         template_path = d.get("template_path", "")
         comparison_template_path = d.get("comparison_template_path", "")
         if not isinstance(template_path, str) or not isinstance(comparison_template_path, str):
@@ -286,6 +313,10 @@ class ImageCondition:
             confidence=confidence,
             comparison_template_path=comparison_template_path,
             comparison_margin=comparison_margin,
+            comparison_template_reference_size=comparison_template_reference_size,
+            match_mode=match_mode,
+            use_grayscale=use_grayscale,
+            template_reference_size=template_reference_size,
             region=region,
             region_mode=region_mode,
             region_ratio=region_ratio,
@@ -650,23 +681,44 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or not 0.0 <= condition.comparison_margin <= 1.0
             ):
                 raise ValueError(f"{prefix} comparison margin must be between 0 and 1")
+            if condition.match_mode not in MATCH_MODE_VALUES:
+                raise ValueError(f"{prefix} has an invalid detection type")
+            if not isinstance(condition.use_grayscale, bool):
+                raise ValueError(f"{prefix} grayscale setting must be a boolean")
+            _validate_window_size(
+                condition.template_reference_size,
+                "template_reference_size",
+            )
+            _validate_window_size(
+                condition.comparison_template_reference_size,
+                "comparison_template_reference_size",
+            )
+            if (
+                condition.comparison_template_reference_size is not None
+                and not condition.comparison_template_path.strip()
+            ):
+                raise ValueError(
+                    f"{prefix} has comparison reference metadata without a comparison template"
+                )
             _validate_region(condition.region, f"{prefix} region")
-            if condition.region_mode not in {"screen", "window"}:
-                raise ValueError(f"{prefix} region mode must be screen or window")
+            if condition.region_mode not in {"screen", "window", "monitor"}:
+                raise ValueError(
+                    f"{prefix} region mode must be screen, window, or monitor"
+                )
             _validate_ratio(condition.region_ratio)
             _validate_window_size(condition.region_window_size)
             if condition.region_mode == "window" and not scenario.target_window_title.strip():
                 raise ValueError(f"{prefix} is window-relative but the scenario has no target window")
-            if condition.region_mode == "window" and condition.region is not None:
+            if condition.region_mode in {"window", "monitor"} and condition.region is not None:
                 if (condition.region_ratio is None) != (condition.region_window_size is None):
                     raise ValueError(
-                        f"{prefix} must provide both proportional region and base window size"
+                        f"{prefix} must provide both proportional region and base size"
                     )
                 if condition.region_window_size is not None:
                     left, top, width, height = condition.region
                     win_width, win_height = condition.region_window_size
                     if left < 0 or top < 0 or left + width > win_width or top + height > win_height:
-                        raise ValueError(f"{prefix} region must stay inside its base target window")
+                        raise ValueError(f"{prefix} region must stay inside its base area")
             if condition.region is None and (
                 condition.region_ratio is not None or condition.region_window_size is not None
             ):
@@ -674,7 +726,7 @@ def validate_scenario(scenario: Scenario, require_files=False):
             if condition.region_mode == "screen" and (
                 condition.region_ratio is not None or condition.region_window_size is not None
             ):
-                raise ValueError(f"{prefix} has window resize metadata in screen mode")
+                raise ValueError(f"{prefix} has resize metadata in screen mode")
             if condition.comparison_template_path:
                 target = os.path.normcase(os.path.abspath(project_path(condition.template_path)))
                 rival = os.path.normcase(

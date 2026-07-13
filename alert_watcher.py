@@ -38,15 +38,48 @@ import mss
 import numpy as np
 from PIL import Image, ImageTk
 
+from detection_core import (
+    DEFAULT_NEW_MATCH_MODE,
+    DEFAULT_ROTATIONS,
+    DEFAULT_SCALES,
+    DETECTION_UNAVAILABLE,
+    LEGACY_ALERT_MATCH_MODE as LEGACY_MATCH_MODE,
+    MATCH_MODE_ANIMATED,
+    MATCH_MODE_BY_LABEL,
+    MATCH_MODE_LABELS,
+    MATCH_MODE_LIST_TAGS,
+    MATCH_MODE_STATIC,
+    MATCH_MODE_TEXT,
+    MATCH_MODE_VALUES,
+    capture_bgr,
+    intersect_region_with_monitor,
+    match_template_multiscale,
+    monitor_index_for_rect,
+    monitor_indices_for_rect,
+    monitor_rect,
+    normalize_match_mode,
+    prepare_template_variants,
+)
 from runtime_paths import INSTANCE_LOCK_PATH
 from window_locator import (
     find_window_rect,
     proportional_region_from_window,
     relative_region_from_window,
+    resolve_saved_capture_region,
     resolve_window_region,
     visible_window_titles,
 )
 from ui_components import COLORS, CollapsibleSection, Tooltip, configure_theme
+
+__all__ = [
+    "DEFAULT_ROTATIONS",
+    "DEFAULT_SCALES",
+    "MATCH_MODE_ANIMATED",
+    "MATCH_MODE_STATIC",
+    "MATCH_MODE_TEXT",
+    "match_template_multiscale",
+    "prepare_template_variants",
+]
 
 try:
     import keyboard
@@ -77,13 +110,6 @@ try:
 except ImportError:
     HAVE_WINSOUND = False  # non-Windows: alerts will be popup-only
 
-# --- Make screen capture coordinates match real pixels on Windows ---------
-if sys.platform == "win32":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
-
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ALERTS_DIR = os.path.join(APP_DIR, "alerts")
 TEMPLATES_DIR = os.path.join(ALERTS_DIR, "templates")
@@ -92,38 +118,18 @@ SETTINGS_PATH = os.path.join(ALERTS_DIR, "settings.json")
 LOCK_PATH = INSTANCE_LOCK_PATH
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 
-DEFAULT_SCALES = [
-    0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95,
-    1.00, 1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50,
-]
-DEFAULT_ROTATIONS = [0, -5, 5, -8, 8]
 POLL_INTERVAL_SEC = 0.6
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_COOLDOWN_SEC = 5.0
 DEFAULT_ALERT_VOLUME = 1.0
-MATCH_MODE_TEXT = "colored_text"
-MATCH_MODE_STATIC = "static_picture"
-MATCH_MODE_ANIMATED = "animated_picture"
-MATCH_MODE_LABELS = {
-    MATCH_MODE_TEXT: "Text / colored text",
-    MATCH_MODE_STATIC: "Static picture",
-    MATCH_MODE_ANIMATED: "Animated/rotating picture",
-}
-MATCH_MODE_BY_LABEL = {label: mode for mode, label in MATCH_MODE_LABELS.items()}
-MATCH_MODE_LIST_TAGS = {
-    MATCH_MODE_TEXT: "Text",
-    MATCH_MODE_STATIC: "Static",
-    MATCH_MODE_ANIMATED: "Animated",
-}
-MATCH_MODE_VALUES = frozenset(MATCH_MODE_LABELS)
-DEFAULT_NEW_MATCH_MODE = MATCH_MODE_STATIC
-LEGACY_MATCH_MODE = MATCH_MODE_ANIMATED
 TEXT_CONFIRMATION_DELAY_SEC = 0.10
 TEXT_IMMEDIATE_SCORE = 0.97
 DEFAULT_TEXT_THRESHOLD = 0.90
 DEFAULT_START_STOP_HOTKEY = "ctrl+shift+f8"
 DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
-REGION_UNAVAILABLE = object()
+REGION_UNAVAILABLE = DETECTION_UNAVAILABLE
+MONITOR_REGION_PENDING = object()
+_WINDOW_CONTEXT_UNSET = object()
 _SOUND_LOCK = threading.Lock()
 _SOUND_QUEUE_LOCK = threading.Lock()
 _SOUND_THREAD = None
@@ -246,7 +252,7 @@ def load_settings(path=SETTINGS_PATH):
         return result
 
     values["scan_region"] = _int_tuple(values["scan_region"], 4, positive_size_from=2)
-    if values["scan_region_mode"] not in ("screen", "window"):
+    if values["scan_region_mode"] not in ("screen", "window", "monitor"):
         values["scan_region_mode"] = "screen"
     ratio = _float_tuple(values["scan_region_ratio"], 4)
     if ratio is not None:
@@ -425,416 +431,38 @@ class SingleInstanceLock:
         self._locked = False
 
 
-def resolve_item_absolute_region(item, global_region, target_window_title="",
-                                 window_rect_provider=find_window_rect):
+def resolve_item_absolute_region(
+    item,
+    global_region,
+    target_window_title="",
+    window_rect_provider=find_window_rect,
+    monitor_box=None,
+):
     item_region = item.get("region")
     if item_region is None:
         return global_region
-    if item.get("region_mode", "screen") == "window":
+    region_mode = item.get("region_mode", "screen")
+    window_rect = None
+    if region_mode == "window":
         rect = window_rect_provider(target_window_title)
         if not rect:
             return REGION_UNAVAILABLE
-        return resolve_window_region(
-            item_region,
-            rect,
-            item.get("region_ratio"),
-            item.get("region_window_size"),
-        )
-    return item_region
+        window_rect = rect
+    resolved = resolve_saved_capture_region(
+        item_region,
+        region_mode,
+        item.get("region_ratio"),
+        item.get("region_window_size"),
+        window_rect=window_rect,
+        monitor_rect=monitor_box,
+    )
+    return REGION_UNAVAILABLE if resolved is None else resolved
 
 
 # --------------------------------------------------------------------------
 # Detection core
 # --------------------------------------------------------------------------
-def _crop_region(image, region):
-    if region is None:
-        return image, (0, 0)
-    x, y, w, h = [int(v) for v in region]
-    ih, iw = image.shape[:2]
-    x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(iw, x + max(0, w)), min(ih, y + max(0, h))
-    if x1 <= x0 or y1 <= y0:
-        return image[:0, :0], (x0, y0)
-    return image[y0:y1, x0:x1], (x0, y0)
 
-
-def _prepare_match_image(image_bgr, use_grayscale):
-    if not use_grayscale:
-        return image_bgr
-    return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-
-
-def normalize_match_mode(value, default=LEGACY_MATCH_MODE):
-    return value if value in MATCH_MODE_VALUES else default
-
-
-def _colored_text_profile(template_bgr):
-    """Infer the foreground text color from contrast with the template border."""
-    if template_bgr.ndim != 3 or template_bgr.shape[2] < 3 or template_bgr.size == 0:
-        return None
-    bgr = template_bgr[:, :, :3]
-    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    border = np.concatenate((lab[0], lab[-1], lab[:, 0], lab[:, -1]))
-    background = np.median(border, axis=0)
-    distance = np.linalg.norm(lab - background, axis=2)
-    maximum = float(distance.max())
-    if maximum <= 1e-6:
-        return None
-    normalized = np.clip(distance * (255.0 / maximum), 0, 255).astype(np.uint8)
-    _value, foreground = cv2.threshold(
-        normalized, 0.0, 255.0, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
-    coverage = float(np.count_nonzero(foreground)) / float(foreground.size)
-    if not 0.005 <= coverage <= 0.80:
-        return None
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    pixels = hsv[foreground > 0]
-    if pixels.size == 0:
-        return None
-    hue_angles = pixels[:, 0].astype(np.float64) * (2.0 * math.pi / 180.0)
-    hue_angle = math.atan2(float(np.sin(hue_angles).mean()), float(np.cos(hue_angles).mean()))
-    hue = (hue_angle % (2.0 * math.pi)) * (180.0 / (2.0 * math.pi))
-    saturation = float(np.median(pixels[:, 1]))
-    value = float(np.median(pixels[:, 2]))
-    return {
-        "hue": hue,
-        "saturation": saturation,
-        "value": value,
-        "colorful": bool(saturation >= 45.0),
-    }
-
-
-def _colored_text_mask(image_bgr, profile):
-    if image_bgr.ndim != 3 or image_bgr.shape[2] < 3 or image_bgr.size == 0:
-        return np.zeros(image_bgr.shape[:2], dtype=np.uint8)
-    hsv = cv2.cvtColor(image_bgr[:, :, :3], cv2.COLOR_BGR2HSV)
-    saturation = profile["saturation"]
-    value = profile["value"]
-    if profile["colorful"]:
-        hue = hsv[:, :, 0].astype(np.int16)
-        hue_distance = np.abs(hue - int(round(profile["hue"])))
-        hue_distance = np.minimum(hue_distance, 180 - hue_distance)
-        selected = (
-            (hue_distance <= 10)
-            & (hsv[:, :, 1] >= max(40.0, saturation * 0.50))
-            & (hsv[:, :, 2] >= max(70.0, value * 0.45))
-        )
-    else:
-        selected = (
-            (hsv[:, :, 2] >= max(140.0, value * 0.65))
-            & (hsv[:, :, 1] <= min(255.0, saturation + 60.0))
-        )
-    return selected.astype(np.uint8) * 255
-
-
-def _spatial_deviation(image):
-    if image.ndim == 3:
-        return float(np.max(np.std(image.astype(np.float32), axis=(0, 1))))
-    return float(np.std(image))
-
-
-def _text_shape_iou(screen, template, location):
-    x, y = location
-    height, width = template.shape[:2]
-    candidate = screen[y:y + height, x:x + width] > 127
-    expected = template > 127
-    intersection = int(np.count_nonzero(candidate & expected))
-    union = int(np.count_nonzero(candidate | expected))
-    return (intersection / union) if union else -1.0
-
-
-def _best_variant_match(screen, template, low_variance, text_shape=False):
-    if low_variance:
-        raw = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF)
-        channels = template.shape[2] if template.ndim == 3 else 1
-        height, width = template.shape[:2]
-        worst = float(width * height * channels * (255 ** 2))
-        scores = np.clip(1.0 - (raw / worst), 0.0, 1.0)
-    else:
-        raw = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-        scores = np.nan_to_num(raw, nan=-1.0, posinf=1.0, neginf=-1.0)
-    _, max_score, _, max_loc = cv2.minMaxLoc(scores)
-    if text_shape and scores.size:
-        candidate_count = min(8, scores.size)
-        flat_scores = scores.reshape(-1)
-        candidate_indices = np.argpartition(flat_scores, -candidate_count)[-candidate_count:]
-        best_shape_score = -1.0
-        best_shape_loc = max_loc
-        best_correlation = -1.0
-        for flat_index in candidate_indices:
-            y, x = np.unravel_index(int(flat_index), scores.shape)
-            location = (int(x), int(y))
-            shape_score = _text_shape_iou(screen, template, location)
-            correlation = float(scores[y, x])
-            if shape_score > best_shape_score or (
-                abs(shape_score - best_shape_score) <= 1e-9
-                and correlation > best_correlation
-            ):
-                best_shape_score = shape_score
-                best_shape_loc = location
-                best_correlation = correlation
-        return best_shape_score, best_shape_loc
-    if low_variance and scores.size > 1:
-        if float(max_score) - float(scores.min()) <= 1e-6:
-            return -1.0, None
-    return float(max_score), max_loc
-
-
-def _rotate_image(image, angle):
-    if angle == 0:
-        return image
-    h, w = image.shape[:2]
-    center = (w / 2, h / 2)
-    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    return cv2.warpAffine(
-        image,
-        matrix,
-        (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
-    )
-
-
-def prepare_template_variants(template_bgr, scales=DEFAULT_SCALES,
-                              rotations=DEFAULT_ROTATIONS, use_grayscale=False,
-                              match_mode=LEGACY_MATCH_MODE):
-    match_mode = normalize_match_mode(match_mode)
-    text_profile = None
-    if match_mode == MATCH_MODE_TEXT:
-        text_profile = _colored_text_profile(template_bgr)
-        if text_profile is not None:
-            template = _colored_text_mask(template_bgr, text_profile)
-        else:
-            template = _prepare_match_image(template_bgr, True)
-        rotations = (0,)
-    else:
-        template = _prepare_match_image(template_bgr, use_grayscale)
-        if match_mode == MATCH_MODE_STATIC:
-            rotations = (0,)
-    th0, tw0 = template.shape[:2]
-    variants = []
-    for angle in rotations:
-        rotated_template = _rotate_image(template, angle)
-        for scale in scales:
-            tw, th = max(1, int(tw0 * scale)), max(1, int(th0 * scale))
-            if match_mode == MATCH_MODE_TEXT and text_profile is not None:
-                interpolation = cv2.INTER_NEAREST
-            else:
-                interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-            resized = cv2.resize(
-                rotated_template, (tw, th), interpolation=interpolation
-            )
-            variants.append({
-                "image": resized,
-                "scale": scale,
-                "angle": angle,
-                "low_variance": _spatial_deviation(resized) < 1e-6,
-                "match_mode": match_mode,
-                "text_profile": text_profile,
-            })
-    return tuple(variants)
-
-
-def _coarse_multiscale_match(
-    screen, variants, early_exit_score=None, cancel_event=None, factor=0.5
-):
-    """Coarse-to-fine search for large captures, returning full-resolution coordinates."""
-    small_screen = cv2.resize(
-        screen, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA
-    )
-    zero_angle = [
-        variant
-        for variant in variants
-        if abs(float(variant.get("angle", 0))) < 1e-9
-    ]
-    initial = zero_angle or list(variants)
-    records = []
-
-    def evaluate_coarse(variant):
-        if cancel_event is not None and cancel_event.is_set():
-            return
-        template = variant["image"]
-        height, width = template.shape[:2]
-        small_width = max(1, round(width * factor))
-        small_height = max(1, round(height * factor))
-        if small_width > small_screen.shape[1] or small_height > small_screen.shape[0]:
-            return
-        small_template = cv2.resize(
-            template,
-            (small_width, small_height),
-            interpolation=cv2.INTER_AREA,
-        )
-        low_variance = _spatial_deviation(small_template) < 1e-6
-        score, loc = _best_variant_match(
-            small_screen,
-            small_template,
-            low_variance,
-            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
-        )
-        if loc is not None:
-            records.append((score, loc, variant))
-
-    for variant in initial:
-        evaluate_coarse(variant)
-    if not records or (cancel_event is not None and cancel_event.is_set()):
-        return -1.0, None, 1.0
-
-    best_base_scale = float(
-        max(records, key=lambda record: record[0])[2].get("scale", 1.0)
-    )
-    by_angle = {}
-    for variant in variants:
-        angle = float(variant.get("angle", 0))
-        if abs(angle) < 1e-9:
-            continue
-        by_angle.setdefault(angle, []).append(variant)
-    for angle_variants in by_angle.values():
-        nearest = sorted(
-            angle_variants,
-            key=lambda variant: abs(
-                float(variant.get("scale", 1.0)) - best_base_scale
-            ),
-        )[:4]
-        for variant in nearest:
-            evaluate_coarse(variant)
-
-    best_score, best_loc, best_scale = -1.0, None, 1.0
-    best_angle = 0.0
-    for _coarse_score, coarse_loc, variant in sorted(
-        records, key=lambda item: item[0], reverse=True
-    ):
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        template = variant["image"]
-        height, width = template.shape[:2]
-        expected_x = round(coarse_loc[0] / factor)
-        expected_y = round(coarse_loc[1] / factor)
-        margin = max(8, round(max(width, height) * 0.35))
-        left = max(0, expected_x - margin)
-        top = max(0, expected_y - margin)
-        right = min(screen.shape[1], expected_x + width + margin)
-        bottom = min(screen.shape[0], expected_y + height + margin)
-        local = screen[top:bottom, left:right]
-        if local.shape[0] < height or local.shape[1] < width:
-            continue
-        low_variance = bool(
-            variant.get("low_variance", _spatial_deviation(template) < 1e-6)
-        )
-        score, local_loc = _best_variant_match(
-            local,
-            template,
-            low_variance,
-            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
-        )
-        if local_loc is None:
-            continue
-        scale = float(variant.get("scale", 1.0))
-        angle = float(variant.get("angle", 0))
-        tied = abs(score - best_score) <= 1e-9
-        if (
-            score > best_score + 1e-9
-            or (tied and abs(scale - 1.0) < abs(best_scale - 1.0))
-            or (
-                tied
-                and abs(scale - best_scale) <= 1e-9
-                and abs(angle) < abs(best_angle)
-            )
-        ):
-            best_score = score
-            best_loc = (left + local_loc[0], top + local_loc[1])
-            best_scale = scale
-            best_angle = angle
-            if early_exit_score is not None and best_score >= early_exit_score:
-                break
-    return best_score, best_loc, best_scale
-
-
-def match_template_multiscale(screen_bgr, template_bgr, scales=DEFAULT_SCALES,
-                              use_grayscale=False, region=None,
-                              rotations=DEFAULT_ROTATIONS, variants=None,
-                              early_exit_score=None, cancel_event=None,
-                              match_mode=LEGACY_MATCH_MODE):
-    best_score, best_loc, best_scale = -1.0, None, 1.0
-    best_angle = 0
-    screen_bgr, offset = _crop_region(screen_bgr, region)
-    if screen_bgr.size == 0:
-        return best_score, best_loc, best_scale
-
-    match_mode = normalize_match_mode(match_mode)
-    if variants is None:
-        variants = prepare_template_variants(
-            template_bgr,
-            scales=scales,
-            rotations=rotations,
-            use_grayscale=use_grayscale,
-            match_mode=match_mode,
-        )
-    variants = tuple(variants)
-    if variants:
-        match_mode = normalize_match_mode(
-            variants[0].get("match_mode", match_mode), default=match_mode
-        )
-    if match_mode == MATCH_MODE_TEXT:
-        text_profile = variants[0].get("text_profile") if variants else None
-        screen = (
-            _colored_text_mask(screen_bgr, text_profile)
-            if text_profile is not None
-            else _prepare_match_image(screen_bgr, True)
-        )
-    else:
-        screen = _prepare_match_image(screen_bgr, use_grayscale)
-    sh, sw = screen.shape[:2]
-    if (
-        screen.shape[0] * screen.shape[1] >= 500_000
-        and min(template_bgr.shape[:2]) >= 20
-        and len(variants) > 8
-    ):
-        coarse_score, coarse_loc, coarse_scale = _coarse_multiscale_match(
-            screen,
-            variants,
-            early_exit_score=early_exit_score,
-            cancel_event=cancel_event,
-            factor=0.5 if min(template_bgr.shape[:2]) >= 30 else 0.67,
-        )
-        if coarse_loc is not None:
-            coarse_loc = (coarse_loc[0] + offset[0], coarse_loc[1] + offset[1])
-        return coarse_score, coarse_loc, coarse_scale
-    for variant in variants:
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        resized = variant["image"]
-        th, tw = resized.shape[:2]
-        if tw > sw or th > sh:
-            continue
-        score, loc = _best_variant_match(
-            screen,
-            resized,
-            variant["low_variance"],
-            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
-        )
-        if loc is None:
-            continue
-        scale = variant["scale"]
-        angle = variant["angle"]
-        score_epsilon = 1e-6 if variant["low_variance"] else 1e-9
-        is_better = score > best_score + score_epsilon
-        is_scale_tie = (
-            abs(score - best_score) <= score_epsilon
-            and abs(scale - 1.0) < abs(best_scale - 1.0)
-        )
-        is_angle_tie = (
-            abs(score - best_score) <= score_epsilon
-            and abs(scale - best_scale) <= 1e-9
-            and abs(angle) < abs(best_angle)
-        )
-        if is_better or is_scale_tie or is_angle_tie:
-            best_score = score
-            best_loc = (loc[0] + offset[0], loc[1] + offset[1])
-            best_scale = scale
-            best_angle = angle
-            if early_exit_score is not None and best_score >= early_exit_score:
-                break
-    return best_score, best_loc, best_scale
 
 
 def _region_relative_to_origin(region, origin):
@@ -846,19 +474,30 @@ def _region_relative_to_origin(region, origin):
 
 def test_detection_on_screenshot(path, template_items, use_grayscale=False, region=None,
                                  region_origin=(0, 0), target_window_title="",
-                                 window_rect_provider=find_window_rect):
+                                 window_rect_provider=find_window_rect,
+                                 monitor_box=None,
+                                 apply_saved_regions=True):
     screenshot = cv2.imread(path)
     if screenshot is None:
         raise ValueError(f"Could not read screenshot: {path}")
 
     results = []
+    screenshot_monitor_box = monitor_box or (
+        int(region_origin[0]),
+        int(region_origin[1]),
+        int(screenshot.shape[1]),
+        int(screenshot.shape[0]),
+    )
     for item in template_items:
-        item_region = resolve_item_absolute_region(
-            item,
-            region,
-            target_window_title,
-            window_rect_provider,
-        )
+        item_region = None
+        if apply_saved_regions:
+            item_region = resolve_item_absolute_region(
+                item,
+                region,
+                target_window_title,
+                window_rect_provider,
+                screenshot_monitor_box,
+            )
         if item_region is REGION_UNAVAILABLE:
             results.append({
                 "id": item.get("id"),
@@ -1066,11 +705,14 @@ class TemplateManager:
                     )
                 region = self._valid_region(entry.get("region"))
                 region_mode = entry.get("region_mode", "screen")
-                if region_mode not in ("screen", "window"):
+                if region_mode not in ("screen", "window", "monitor"):
                     region_mode = "screen"
                 region_ratio = self._valid_ratio(entry.get("region_ratio"))
                 region_window_size = self._valid_window_size(
                     entry.get("region_window_size")
+                )
+                template_reference_size = self._valid_window_size(
+                    entry.get("template_reference_size")
                 )
                 if (
                     region is None
@@ -1088,6 +730,7 @@ class TemplateManager:
                     "region_mode": region_mode,
                     "region_ratio": region_ratio,
                     "region_window_size": region_window_size,
+                    "template_reference_size": template_reference_size,
                     "image": img,
                     "variant_cache": {},
                 }
@@ -1110,11 +753,13 @@ class TemplateManager:
                     item["region_ratio"] = list(v["region_ratio"])
                 if v.get("region_window_size") is not None:
                     item["region_window_size"] = list(v["region_window_size"])
+                if v.get("template_reference_size") is not None:
+                    item["template_reference_size"] = list(v["template_reference_size"])
                 items.append(item)
             _atomic_write_json(MANIFEST_PATH, {"items": items})
 
     def add(self, image_bgr, name, threshold=DEFAULT_THRESHOLD,
-            match_mode=DEFAULT_NEW_MATCH_MODE):
+            match_mode=DEFAULT_NEW_MATCH_MODE, template_reference_size=None):
         with self._lock:
             tid = self._next_id
             filename = f"template_{tid}.png"
@@ -1136,6 +781,9 @@ class TemplateManager:
             parsed_match_mode = normalize_match_mode(match_mode, default="")
             if parsed_match_mode not in MATCH_MODE_VALUES:
                 raise ValueError("Unknown template detection type")
+            parsed_reference_size = self._valid_window_size(template_reference_size)
+            if template_reference_size is not None and parsed_reference_size is None:
+                raise ValueError("Template reference size must contain a positive width and height")
             entry = {
                 "name": str(name).strip() or f"icon_{tid}",
                 "file": filename,
@@ -1145,6 +793,7 @@ class TemplateManager:
                 "region_mode": "screen",
                 "region_ratio": None,
                 "region_window_size": None,
+                "template_reference_size": parsed_reference_size,
                 "image": image_bgr.copy(),
                 "variant_cache": {},
             }
@@ -1224,16 +873,16 @@ class TemplateManager:
 
     def set_region(self, tid, region, region_mode="screen",
                    region_ratio=None, region_window_size=None):
-        if region_mode not in ("screen", "window"):
-            raise ValueError("Region mode must be 'screen' or 'window'.")
+        if region_mode not in ("screen", "window", "monitor"):
+            raise ValueError("Region mode must be 'screen', 'window', or 'monitor'.")
         parsed_region = self._valid_region(region)
         if region is not None and parsed_region is None:
             raise ValueError("Region must contain four whole numbers with positive size.")
         parsed_ratio = self._valid_ratio(region_ratio)
         parsed_window_size = self._valid_window_size(region_window_size)
-        if region_mode == "window" and parsed_region is not None:
+        if region_mode in ("window", "monitor") and parsed_region is not None:
             if (parsed_ratio is None) != (parsed_window_size is None):
-                raise ValueError("Window regions need both ratio and base window size.")
+                raise ValueError("Relative regions need both ratio and base size.")
         elif region_mode == "screen" and (region_ratio is not None or region_window_size is not None):
             raise ValueError("Screen regions cannot contain window resize metadata.")
         with self._lock:
@@ -1266,20 +915,49 @@ class TemplateManager:
             result.pop("variant_cache", None)
             return result
 
-    def _variants_for_entry(self, entry, use_grayscale):
+    def _variants_for_entry(
+        self,
+        entry,
+        use_grayscale,
+        current_window_size=None,
+        cancel_event=None,
+    ):
         cache = entry.setdefault("variant_cache", {})
         match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
         grayscale_key = bool(use_grayscale) if match_mode != MATCH_MODE_TEXT else False
-        key = (grayscale_key, match_mode)
+        reference_size = (
+            entry.get("template_reference_size")
+            or entry.get("region_window_size")
+        )
+        parsed_current_size = self._valid_window_size(current_window_size)
+        key = (
+            grayscale_key,
+            match_mode,
+            tuple(reference_size) if reference_size else None,
+            parsed_current_size,
+        )
         if key not in cache:
-            cache[key] = prepare_template_variants(
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            variants = prepare_template_variants(
                 entry["image"],
                 use_grayscale=grayscale_key,
                 match_mode=match_mode,
+                reference_size=reference_size,
+                current_size=parsed_current_size,
+                cancel_event=cancel_event,
             )
+            if cancel_event is not None and cancel_event.is_set():
+                return variants
+            cache[key] = variants
         return cache[key]
 
-    def snapshot(self, use_grayscale=None):
+    def snapshot(
+        self,
+        use_grayscale=None,
+        current_window_size=None,
+        cancel_event=None,
+    ):
         with self._lock:
             items = []
             for tid, entry in self.items.items():
@@ -1293,10 +971,16 @@ class TemplateManager:
                     "region_mode": entry.get("region_mode", "screen"),
                     "region_ratio": entry.get("region_ratio"),
                     "region_window_size": entry.get("region_window_size"),
+                    "template_reference_size": entry.get("template_reference_size"),
                     "image": entry["image"],
                 }
                 if use_grayscale is not None:
-                    item["variants"] = self._variants_for_entry(entry, use_grayscale)
+                    item["variants"] = self._variants_for_entry(
+                        entry,
+                        use_grayscale,
+                        current_window_size,
+                        cancel_event,
+                    )
                 items.append(item)
             return items
 
@@ -1396,6 +1080,31 @@ class WatcherThread(threading.Thread):
                 self.states[tid].threshold = item["threshold"]
                 self.states[tid].cooldown_sec = cooldown_sec
 
+    def _snapshot_items(self, use_grayscale=None, current_window_size=None):
+        try:
+            return self.tm.snapshot(
+                use_grayscale=use_grayscale,
+                current_window_size=current_window_size,
+                cancel_event=(
+                    self._stop_flag if use_grayscale is not None else None
+                ),
+            )
+        except TypeError as exc:
+            if not any(
+                name in str(exc)
+                for name in ("current_window_size", "cancel_event")
+            ):
+                raise
+            try:
+                return self.tm.snapshot(
+                    use_grayscale=use_grayscale,
+                    current_window_size=current_window_size,
+                )
+            except TypeError as fallback_exc:
+                if "current_window_size" not in str(fallback_exc):
+                    raise
+                return self.tm.snapshot(use_grayscale=use_grayscale)
+
     def _emit_aggregated_matches(self, items, best_scores, now, complete_ids=None):
         if complete_ids is None:
             complete_ids = {item["id"] for item in items}
@@ -1415,16 +1124,7 @@ class WatcherThread(threading.Thread):
                 })
 
     def _local_region_for_monitor(self, mon, absolute_region):
-        if absolute_region is None:
-            return None
-        rx, ry, rw, rh = absolute_region
-        left = max(rx, mon["left"])
-        top = max(ry, mon["top"])
-        right = min(rx + rw, mon["left"] + mon["width"])
-        bottom = min(ry + rh, mon["top"] + mon["height"])
-        if right <= left or bottom <= top:
-            return None
-        return (left - mon["left"], top - mon["top"], right - left, bottom - top)
+        return intersect_region_with_monitor(mon, absolute_region)
 
     def _match_entry(self, screen_bgr, entry, config, region=None):
         match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
@@ -1445,7 +1145,7 @@ class WatcherThread(threading.Thread):
         )
 
     def _confirm_text_candidate(self, sct, mon, entry, config, initial_result,
-                                absolute_scan_region):
+                                absolute_scan_region, window_rect=_WINDOW_CONTEXT_UNSET):
         score, loc, scale = initial_result
         if entry.get("match_mode") != MATCH_MODE_TEXT or score < entry["threshold"]:
             return initial_result
@@ -1455,7 +1155,11 @@ class WatcherThread(threading.Thread):
             return None
 
         item_region = self._resolve_item_scan_region(
-            entry, absolute_scan_region, config
+            entry,
+            absolute_scan_region,
+            config,
+            window_rect=window_rect,
+            monitor_box=monitor_rect(mon),
         )
         if item_region is REGION_UNAVAILABLE:
             return None
@@ -1464,16 +1168,16 @@ class WatcherThread(threading.Thread):
             return None
         try:
             if local_region is None:
-                shot = sct.grab(mon)
+                capture_target = mon
             else:
                 x, y, width, height = local_region
-                shot = sct.grab({
+                capture_target = {
                     "left": mon["left"] + x,
                     "top": mon["top"] + y,
                     "width": width,
                     "height": height,
-                })
-            confirmation_bgr = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)
+                }
+            confirmation_bgr = capture_bgr(sct, capture_target)
         except Exception:
             return None
 
@@ -1487,9 +1191,10 @@ class WatcherThread(threading.Thread):
             return confirmed_score, None, scale
         return min(score, confirmed_score), loc, scale
 
-    def _resolve_absolute_scan_region(self, config=None):
+    def _resolve_scan_context(self, config=None):
         if config is None:
             config = self._config_snapshot()
+        window_rect = None
         if config["scan_region_mode"] == "window" or config["target_window_title"]:
             rect = self.window_rect_provider(config["target_window_title"])
             if not rect:
@@ -1498,26 +1203,51 @@ class WatcherThread(threading.Thread):
                         f"Target window not found: '{config['target_window_title']}'"
                     )
                     self._target_window_missing_logged = True
-                return REGION_UNAVAILABLE
+                return None, None, REGION_UNAVAILABLE
             self._target_window_missing_logged = False
+            window_rect = rect
             if config["scan_region"] is None:
-                return rect
-            return resolve_window_region(
+                return rect, (rect[2], rect[3]), rect
+        if config["scan_region_mode"] == "window":
+            assert window_rect is not None
+            region = resolve_window_region(
                 config["scan_region"],
-                rect,
+                window_rect,
                 config["scan_region_ratio"],
                 config["scan_region_window_size"],
             )
-        return config["scan_region"]
+            return window_rect, (window_rect[2], window_rect[3]), region
+        if config["scan_region_mode"] == "monitor" and config["scan_region"] is not None:
+            window_size = (
+                (window_rect[2], window_rect[3]) if window_rect else None
+            )
+            return window_rect, window_size, MONITOR_REGION_PENDING
+        window_size = (window_rect[2], window_rect[3]) if window_rect else None
+        return window_rect, window_size, config["scan_region"]
 
-    def _resolve_item_scan_region(self, item, global_region, config=None):
+    def _resolve_absolute_scan_region(self, config=None):
+        return self._resolve_scan_context(config)[2]
+
+    def _resolve_item_scan_region(
+        self,
+        item,
+        global_region,
+        config=None,
+        window_rect=_WINDOW_CONTEXT_UNSET,
+        monitor_box=None,
+    ):
         if config is None:
             config = self._config_snapshot()
+        provider = self.window_rect_provider
+        if window_rect is not _WINDOW_CONTEXT_UNSET:
+            def provider(_title):
+                return window_rect
         result = resolve_item_absolute_region(
             item,
             global_region,
             config["target_window_title"],
-            self.window_rect_provider,
+            provider,
+            monitor_box,
         )
         if result is REGION_UNAVAILABLE:
             if not self._target_window_missing_logged:
@@ -1541,12 +1271,37 @@ class WatcherThread(threading.Thread):
                     config = self._config_snapshot()
                     monitor_filter = config["monitor_filter"]
                     all_monitors = list(enumerate(sct.monitors[1:], start=1))
-                    monitors = all_monitors
-                    if monitor_filter is not None:
+                    items = self._snapshot_items()
+                    self._sync_states(items, config["cooldown_sec"])
+                    if not items:
+                        self._wait_for_next_cycle()
+                        continue
+                    debug_lines = []
+                    now = time.monotonic()
+                    window_rect, window_size, absolute_scan_region = (
+                        self._resolve_scan_context(config)
+                    )
+                    if absolute_scan_region is REGION_UNAVAILABLE:
+                        self._wait_for_next_cycle()
+                        continue
+                    if window_rect is not None:
+                        followed = set(
+                            monitor_indices_for_rect(sct.monitors, window_rect)
+                        )
                         monitors = [
-                            (idx, mon) for idx, mon in all_monitors
-                            if idx == monitor_filter
+                            (idx, mon)
+                            for idx, mon in all_monitors
+                            if idx in followed
                         ]
+                        monitor_scope = ("target", tuple(sorted(followed)))
+                    else:
+                        monitors = all_monitors
+                        if monitor_filter is not None:
+                            monitors = [
+                                (idx, mon) for idx, mon in all_monitors
+                                if idx == monitor_filter
+                            ]
+                        monitor_scope = ("selected", monitor_filter)
                     signature = tuple(
                         (
                             idx,
@@ -1557,26 +1312,25 @@ class WatcherThread(threading.Thread):
                         )
                         for idx, mon in all_monitors
                     )
-                    monitor_status = (monitor_filter, signature)
+                    monitor_status = (monitor_scope, signature)
                     if monitor_status != last_monitor_status:
-                        if monitor_filter is not None and not monitors:
+                        if window_rect is not None and monitors:
+                            labels = ", ".join(str(idx) for idx, _mon in monitors)
                             self.log_queue.put(
-                                f"Monitor {monitor_filter} is unavailable; no screen will be scanned."
+                                f"Following target window on monitor(s): {labels}."
+                            )
+                        elif window_rect is not None:
+                            self.log_queue.put(
+                                "Target window does not overlap an available monitor."
+                            )
+                        elif monitor_filter is not None and not monitors:
+                            self.log_queue.put(
+                                f"Monitor {monitor_filter} is unavailable; "
+                                "no screen will be scanned."
                             )
                         else:
                             self.log_queue.put(f"Watching {len(monitors)} monitor(s).")
                         last_monitor_status = monitor_status
-                    items = self.tm.snapshot(use_grayscale=config["use_grayscale"])
-                    self._sync_states(items, config["cooldown_sec"])
-                    if not items:
-                        self._wait_for_next_cycle()
-                        continue
-                    debug_lines = []
-                    now = time.monotonic()
-                    absolute_scan_region = self._resolve_absolute_scan_region(config)
-                    if absolute_scan_region is REGION_UNAVAILABLE:
-                        self._wait_for_next_cycle()
-                        continue
                     best_scores: dict[int, tuple[float, Optional[int]]] = {
                         item["id"]: (-1.0, None) for item in items
                     }
@@ -1585,7 +1339,7 @@ class WatcherThread(threading.Thread):
                         if self._stop_flag.is_set():
                             break
                         try:
-                            shot = sct.grab(mon)
+                            screen_bgr = capture_bgr(sct, mon)
                         except Exception as exc:
                             last_error_at = last_capture_error.get(mon_index)
                             if last_error_at is None or now - last_error_at >= 10.0:
@@ -1596,15 +1350,37 @@ class WatcherThread(threading.Thread):
                             complete_ids.clear()
                             continue
                         last_capture_error.pop(mon_index, None)
-                        screen_bgr = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)
-                        for entry in items:
+                        current_size = window_size or (
+                            int(mon["width"]), int(mon["height"])
+                        )
+                        monitor_box = monitor_rect(mon)
+                        monitor_scan_region = absolute_scan_region
+                        if absolute_scan_region is MONITOR_REGION_PENDING:
+                            monitor_scan_region = resolve_saved_capture_region(
+                                config["scan_region"],
+                                "monitor",
+                                config["scan_region_ratio"],
+                                config["scan_region_window_size"],
+                                monitor_rect=monitor_box,
+                            )
+                        scan_items = self._snapshot_items(
+                            use_grayscale=config["use_grayscale"],
+                            current_window_size=current_size,
+                        )
+                        for entry in scan_items:
                             if self._stop_flag.is_set():
                                 break
                             tid = entry["id"]
+                            # A template added after the cycle's state snapshot is
+                            # picked up safely on the next cycle.
+                            if tid not in best_scores:
+                                continue
                             item_region = self._resolve_item_scan_region(
                                 entry,
-                                absolute_scan_region,
+                                monitor_scan_region,
                                 config,
+                                window_rect=window_rect,
+                                monitor_box=monitor_box,
                             )
                             if item_region is REGION_UNAVAILABLE:
                                 complete_ids.discard(tid)
@@ -1621,7 +1397,8 @@ class WatcherThread(threading.Thread):
                                 entry,
                                 config,
                                 result,
-                                absolute_scan_region,
+                                monitor_scan_region,
+                                window_rect,
                             )
                             if confirmed is None:
                                 complete_ids.discard(tid)
@@ -1747,9 +1524,9 @@ class ScreenRegionPicker(tk.Toplevel):
 
         with mss.MSS() as sct:
             virtual = sct.monitors[0]
-            shot = sct.grab(virtual)
+            frame = capture_bgr(sct, virtual)
             self.origin_x, self.origin_y = virtual["left"], virtual["top"]
-            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            img = Image.fromarray(frame[:, :, ::-1])
             self.full_img = img
 
         self.geometry(f"{virtual['width']}x{virtual['height']}+{virtual['left']}+{virtual['top']}")
@@ -2313,7 +2090,10 @@ class AlertWatcherFrame(ttk.Frame):
                 self.region_label.config(text="Region: full screen")
             return
         x, y, w, h = self.scan_region
-        scope = "window" if self.scan_region_mode == "window" else "screen"
+        scope = {
+            "window": "window",
+            "monitor": "monitor",
+        }.get(self.scan_region_mode, "screen")
         self.region_label.config(text=f"Region: {w}x{h} at {x},{y} ({scope})")
 
     def _refresh_window_list(self):
@@ -2464,7 +2244,10 @@ class AlertWatcherFrame(ttk.Frame):
             self.icon_region_label.config(text="Icon region: global")
             return
         x, y, w, h = entry["region"]
-        scope = "window" if entry.get("region_mode") == "window" else "screen"
+        scope = {
+            "window": "window",
+            "monitor": "monitor",
+        }.get(entry.get("region_mode"), "screen")
         self.icon_region_label.config(text=f"Icon region: {w}x{h} ({scope})")
 
     def _show_preview(self, image_bgr):
@@ -2545,11 +2328,30 @@ class AlertWatcherFrame(ttk.Frame):
     def _add_from_screen(self):
         self._open_region_picker(self._on_region_picked)
 
-    def _on_region_picked(self, image_bgr, _abs_box):
+    def _on_region_picked(self, image_bgr, abs_box):
         self.deiconify()
-        self._prompt_name_and_add(image_bgr)
+        self._prompt_name_and_add(
+            image_bgr,
+            template_reference_size=self._reference_size_for_capture(abs_box),
+        )
 
-    def _prompt_name_and_add(self, image_bgr):
+    def _reference_size_for_capture(self, abs_box):
+        title = self.target_window_var.get().strip()
+        if title:
+            rect = find_window_rect(title)
+            if rect:
+                return rect[2], rect[3]
+        try:
+            with mss.MSS() as capture:
+                index = monitor_index_for_rect(capture.monitors, abs_box)
+                if index is not None:
+                    monitor = capture.monitors[index]
+                    return int(monitor["width"]), int(monitor["height"])
+        except Exception:
+            pass
+        return None
+
+    def _prompt_name_and_add(self, image_bgr, template_reference_size=None):
         name = simpledialog.askstring("Name this icon", "Give this icon a short name:", parent=self)
         if name is None:
             self._append_log("Adding template cancelled.")
@@ -2558,7 +2360,12 @@ class AlertWatcherFrame(ttk.Frame):
         if not name:
             name = f"icon_{len(self.tm.snapshot()) + 1}"
         try:
-            self.tm.add(image_bgr, name, DEFAULT_THRESHOLD)
+            self.tm.add(
+                image_bgr,
+                name,
+                DEFAULT_THRESHOLD,
+                template_reference_size=template_reference_size,
+            )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Could not add icon", str(exc), parent=self)
             return
@@ -2594,11 +2401,22 @@ class AlertWatcherFrame(ttk.Frame):
                 "region_ratio": proportional_region_from_window(abs_box, window_rect),
                 "region_window_size": (window_rect[2], window_rect[3]),
             }
+        with mss.MSS() as capture:
+            index = monitor_index_for_rect(capture.monitors, abs_box)
+            if index is None:
+                raise ValueError("The selected region is outside every monitor.")
+            selected_monitor = monitor_rect(capture.monitors[index])
         return {
-            "region": abs_box,
-            "region_mode": "screen",
-            "region_ratio": None,
-            "region_window_size": None,
+            "region": relative_region_from_window(abs_box, selected_monitor),
+            "region_mode": "monitor",
+            "region_ratio": proportional_region_from_window(
+                abs_box,
+                selected_monitor,
+            ),
+            "region_window_size": (
+                selected_monitor[2],
+                selected_monitor[3],
+            ),
         }
 
     def _set_selected_icon_region(self):
@@ -2654,30 +2472,55 @@ class AlertWatcherFrame(ttk.Frame):
         self._update_icon_region_label()
         self._append_log(f"Icon region cleared for '{name}'.")
 
-    def _selected_monitor_box(self):
+    def _selected_monitor_box(self, target_rect=None, screenshot_size=None):
         monitor_filter = self._selected_monitor_filter()
         with mss.MSS() as sct:
-            if monitor_filter is not None and monitor_filter < len(sct.monitors):
+            target_index = (
+                monitor_index_for_rect(sct.monitors, target_rect)
+                if target_rect is not None
+                else None
+            )
+            if target_index is not None:
+                mon = sct.monitors[target_index]
+            elif monitor_filter is not None and monitor_filter < len(sct.monitors):
                 mon = sct.monitors[monitor_filter]
+            elif screenshot_size is not None:
+                width, height = screenshot_size
+                matching = [
+                    candidate
+                    for candidate in sct.monitors[1:]
+                    if int(candidate["width"]) == int(width)
+                    and int(candidate["height"]) == int(height)
+                ]
+                mon = matching[0] if len(matching) == 1 else sct.monitors[0]
             else:
                 mon = sct.monitors[0]
         return (mon["left"], mon["top"], mon["width"], mon["height"])
 
     def _resolve_global_scan_region_for_display(self):
         title = self.target_window_var.get().strip()
-        if self.scan_region_mode == "window" or title:
-            if not title:
+        window_rect = find_window_rect(title) if title else None
+        if title and not window_rect:
+            raise ValueError(f"No visible window title contains: {title}")
+        if self.scan_region is None:
+            return window_rect
+        if self.scan_region_mode == "window":
+            if not title or window_rect is None:
                 raise ValueError("Select the target window before showing this region.")
-            window_rect = find_window_rect(title)
-            if not window_rect:
-                raise ValueError(f"No visible window title contains: {title}")
-            if self.scan_region is None:
-                return window_rect
             return resolve_window_region(
                 self.scan_region,
                 window_rect,
                 self.scan_region_ratio,
                 self.scan_region_window_size,
+            )
+        if self.scan_region_mode == "monitor" and self.scan_region is not None:
+            monitor_box = self._selected_monitor_box(target_rect=window_rect)
+            return resolve_saved_capture_region(
+                self.scan_region,
+                "monitor",
+                self.scan_region_ratio,
+                self.scan_region_window_size,
+                monitor_rect=monitor_box,
             )
         return self.scan_region
 
@@ -2696,6 +2539,7 @@ class AlertWatcherFrame(ttk.Frame):
                 global_region,
                 self.target_window_var.get().strip(),
                 find_window_rect,
+                self._selected_monitor_box(),
             )
             if region is REGION_UNAVAILABLE:
                 raise ValueError(
@@ -2726,13 +2570,18 @@ class AlertWatcherFrame(ttk.Frame):
         self.scan_region_window_size = meta["region_window_size"]
         self._update_region_label()
         x, y, w, h = self.scan_region
-        scope = "window-relative" if self.scan_region_mode == "window" else "screen"
+        scope = {
+            "window": "window-relative",
+            "monitor": "monitor-relative",
+        }.get(self.scan_region_mode, "screen")
         self._append_log(f"Scan region set to {w}x{h} at {x},{y} ({scope}).")
         self._save_settings()
 
     def _clear_scan_region(self):
         self.scan_region = None
-        self.scan_region_mode = "window" if self.target_window_var.get().strip() else "screen"
+        self.scan_region_mode = (
+            "window" if self.target_window_var.get().strip() else "monitor"
+        )
         self.scan_region_ratio = None
         self.scan_region_window_size = None
         self._update_region_label()
@@ -2856,14 +2705,49 @@ class AlertWatcherFrame(ttk.Frame):
             return
         try:
             global_region = self._resolve_global_scan_region_for_display()
-            monitor_box = self._selected_monitor_box()
+            target_window_title = self.target_window_var.get().strip()
+            target_rect = (
+                find_window_rect(target_window_title)
+                if target_window_title
+                else None
+            )
+            with Image.open(path) as screenshot_image:
+                screenshot_size = screenshot_image.size
+            monitor_box = self._selected_monitor_box(
+                target_rect=target_rect,
+                screenshot_size=screenshot_size,
+            )
         except Exception as exc:
             messagebox.showerror("Could not resolve scan region", str(exc), parent=self)
             return
         use_grayscale = bool(self.grayscale_var.get())
-        template_items = self.tm.snapshot(use_grayscale=use_grayscale)
-        target_window_title = self.target_window_var.get().strip()
-        origin = (monitor_box[0], monitor_box[1])
+        is_full_monitor_screenshot = screenshot_size == (
+            monitor_box[2],
+            monitor_box[3],
+        )
+        if target_rect:
+            current_size = (target_rect[2], target_rect[3])
+        elif is_full_monitor_screenshot or self._selected_monitor_filter() is not None:
+            current_size = (monitor_box[2], monitor_box[3])
+        else:
+            # A crop plus "All monitors" does not contain enough information
+            # to identify its source resolution. Legacy scales are safer than
+            # treating the virtual desktop as one enormous monitor.
+            current_size = None
+        template_items = self.tm.snapshot(
+            use_grayscale=use_grayscale,
+            current_window_size=current_size,
+        )
+        if is_full_monitor_screenshot:
+            test_region = global_region
+            origin = (monitor_box[0], monitor_box[1])
+        else:
+            test_region = None
+            origin = (0, 0)
+            self._append_log(
+                "Cropped screenshot detected; testing the entire image "
+                "without saved screen regions."
+            )
         self._screenshot_test_running = True
         self.test_screenshot_btn.config(state="disabled", text="Testing…")
         self._append_log("Screenshot test started in the background.")
@@ -2874,9 +2758,11 @@ class AlertWatcherFrame(ttk.Frame):
                     path,
                     template_items,
                     use_grayscale=use_grayscale,
-                    region=global_region,
+                    region=test_region,
                     region_origin=origin,
                     target_window_title=target_window_title,
+                    monitor_box=monitor_box,
+                    apply_saved_regions=is_full_monitor_screenshot,
                 )
                 event = {"type": "screenshot_test_complete", "results": results}
             except Exception as exc:

@@ -7,6 +7,7 @@ callback instead of print) so it plays nicely with a GUI.
 import os
 import re
 import inspect
+import math
 import threading
 import time
 from typing import Callable, Optional
@@ -18,13 +19,31 @@ import pyautogui
 import keyboard
 from PIL import Image
 
+from detection_core import (
+    DETECTION_UNAVAILABLE,
+    MACRO_DEFAULT_SCALES,
+    _best_variant_match,
+    _bounded_local_peaks,
+    _spatial_deviation,
+    box_iou,
+    capture_bgr,
+    find_template_matches,
+    monitor_rect,
+    physical_monitor_index,
+    prepare_template_variants,
+    resize_template,
+)
 from level_ocr import LevelOcrReader
 from models import Scenario, Step, ImageCondition, Action, project_path, validate_scenario
 from runtime_paths import LEVEL_DEBUG_DIR
-from window_locator import find_window_rect, resolve_window_region
+from window_locator import (
+    find_window_rect,
+    resolve_saved_capture_region,
+)
 
 
-_WINDOW_UNAVAILABLE = object()
+_WINDOW_UNAVAILABLE = DETECTION_UNAVAILABLE
+_REFERENCE_UNSET = object()
 
 
 class _StopRequested(Exception):
@@ -32,7 +51,7 @@ class _StopRequested(Exception):
 
 
 class MacroEngine:
-    TEMPLATE_SCALE_FACTORS = (1.0, 0.95, 1.05, 0.9, 1.1, 0.85, 1.15, 0.8, 1.2)
+    TEMPLATE_SCALE_FACTORS = MACRO_DEFAULT_SCALES
 
     def __init__(self, scenario: Scenario, log: Optional[Callable[[str], None]] = None):
         self.scenario = Scenario.from_dict(scenario.to_dict())
@@ -42,6 +61,7 @@ class MacroEngine:
         self._last_fired = {s.name: 0.0 for s in self.scenario.steps}
         self._template_cache = {}
         self._scaled_template_cache = {}
+        self._prepared_template_cache = {}
         self._digit_template_cache = {}
         self._missing_digit_template_warnings = set()
         self._level_ocr_reader: Optional[LevelOcrReader] = None
@@ -246,31 +266,36 @@ class MacroEngine:
         self._raise_if_stopped()
         return self._template_cache[cache_key]
 
+    def _selected_monitor(self):
+        monitors = self.sct.monitors
+        requested = self.scenario.monitor_index
+        monitor_index = physical_monitor_index(monitors, requested)
+        if monitor_index is None:
+            raise RuntimeError("No screen monitor is available")
+        if (
+            monitor_index != requested
+            and getattr(self, "_monitor_index_warning_logged", None) != requested
+        ):
+            self.log(
+                f"[warn] monitor #{requested} is unavailable; "
+                f"using monitor #{monitor_index}"
+            )
+            self._monitor_index_warning_logged = requested
+        return monitor_index, monitors[monitor_index]
+
     def _grab(self, region=None):
         self._raise_if_stopped()
         if region:
             left, top, width, height = region
             monitor = {"left": left, "top": top, "width": width, "height": height}
         else:
-            monitors = self.sct.monitors
-            requested = self.scenario.monitor_index
-            if 0 <= requested < len(monitors):
-                monitor_index = requested
-            else:
-                monitor_index = 1 if len(monitors) > 1 else 0
-                if getattr(self, "_monitor_index_warning_logged", None) != requested:
-                    self.log(
-                        f"[warn] monitor #{requested} is unavailable; "
-                        f"using monitor #{monitor_index}"
-                    )
-                    self._monitor_index_warning_logged = requested
-            monitor = monitors[monitor_index]
+            _monitor_index, monitor = self._selected_monitor()
         attempts = max(1, int(getattr(self, "capture_retry_attempts", 3)))
         backoff = max(0.0, float(getattr(self, "capture_retry_backoff", 0.05)))
         for attempt in range(attempts):
             self._raise_if_stopped()
             try:
-                raw = self.sct.grab(monitor)
+                frame = capture_bgr(self.sct, monitor)
                 break
             except Exception as exc:
                 self._raise_if_stopped()
@@ -283,7 +308,6 @@ class MacroEngine:
                 if self._sleep_until_stop(backoff * (2 ** attempt)):
                     raise _StopRequested() from exc
         self._raise_if_stopped()
-        frame = np.array(raw)[:, :, :3]
         return frame, monitor["left"], monitor["top"]
 
     def _get_target_window_rect(self):
@@ -334,21 +358,18 @@ class MacroEngine:
             if not window_rect:
                 return _WINDOW_UNAVAILABLE
 
-        if cond.region:
-            if cond.region_mode == "window":
-                assert window_rect is not None
-                return resolve_window_region(
-                    cond.region,
-                    window_rect,
-                    cond.region_ratio,
-                    cond.region_window_size,
-                )
-            return tuple(cond.region)
-
-        if self.scenario.target_window_title.strip():
-            return window_rect
-
-        return None
+        selected_monitor_rect = None
+        if window_rect is None or cond.region_mode == "monitor":
+            _monitor_index, monitor = self._selected_monitor()
+            selected_monitor_rect = monitor_rect(monitor)
+        return resolve_saved_capture_region(
+            cond.region,
+            cond.region_mode,
+            cond.region_ratio,
+            cond.region_window_size,
+            window_rect=window_rect,
+            monitor_rect=selected_monitor_rect,
+        )
 
     def preview_step(self, step: Step):
         results, matches = [], []
@@ -356,7 +377,11 @@ class MacroEngine:
         condition_previews = []
 
         previous_cache = getattr(self, "_window_rect_lookup_cache", None)
+        previous_all_matches = getattr(self, "_preview_all_match_indices", None)
         self._window_rect_lookup_cache = {}
+        self._preview_all_match_indices = self._condition_indices_needing_all_matches(
+            step
+        )
         try:
             for i, cond in enumerate(step.conditions):
                 self._raise_if_stopped()
@@ -376,6 +401,7 @@ class MacroEngine:
                 })
         finally:
             self._window_rect_lookup_cache = previous_cache
+            self._preview_all_match_indices = previous_all_matches
 
         met = True if not results else (any(results) if step.condition_operator == "OR" else all(results))
         return {
@@ -395,7 +421,17 @@ class MacroEngine:
         capture_box = None
         if image is not None:
             capture_box = (off_x, off_y, image.width, image.height)
-        ok, matches, image = self._preview_template_condition(index, cond, frame, off_x, off_y, image)
+        all_match_indices = getattr(self, "_preview_all_match_indices", None)
+        collect_all = True if all_match_indices is None else index in all_match_indices
+        ok, matches, image = self._preview_template_condition(
+            index,
+            cond,
+            frame,
+            off_x,
+            off_y,
+            image,
+            collect_all=collect_all,
+        )
         return ok, matches, image, capture_box
 
     def _evaluate_condition(self, index: int, cond: ImageCondition, frame_cache, collect_all=True):
@@ -418,7 +454,13 @@ class MacroEngine:
             )
 
         if collect_all and not cond.negate:
-            template_matches = self._find_template_matches_in_frame(frame, template, cond.confidence, collect_all=True)
+            template_matches = self._find_template_matches_in_frame(
+                frame,
+                template,
+                cond.confidence,
+                collect_all=True,
+                **self._condition_matching_kwargs(cond),
+            )
             found = bool(template_matches)
             ok = found
             return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
@@ -429,6 +471,8 @@ class MacroEngine:
             cond.confidence,
             collect_all=False,
             allow_coarse=not cond.negate,
+            early_exit_score=(cond.confidence if cond.negate else None),
+            **self._condition_matching_kwargs(cond),
         )
         found = bool(template_matches)
         ok = (not found) if cond.negate else found
@@ -438,7 +482,15 @@ class MacroEngine:
         return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
 
     def _evaluate_competing_template_condition(
-        self, index, cond, frame, template, off_x, off_y, collect_all=False
+        self,
+        index,
+        cond,
+        frame,
+        template,
+        off_x,
+        off_y,
+        collect_all=False,
+        include_negated_matches=False,
     ):
         rival_template = self._load_template(cond.comparison_template_path)
         margin = max(0.0, float(cond.comparison_margin or 0.0))
@@ -446,14 +498,19 @@ class MacroEngine:
         # Runtime and Preview deliberately use the same location-local comparison.
         # A strong rival elsewhere on screen must not disqualify a valid target.
         target_matches = self._find_template_matches_in_frame(
-            frame, template, cond.confidence, collect_all=True
+            frame,
+            template,
+            cond.confidence,
+            collect_all=True,
+            allow_coarse=not cond.negate,
+            **self._condition_matching_kwargs(cond),
         )
         accepted = []
         rival_scores = []
         for target_match in target_matches:
             self._raise_if_stopped()
             rival_match = self._find_best_template_match_near(
-                frame, rival_template, target_match
+                frame, rival_template, target_match, cond
             )
             rival_score = rival_match[4] if rival_match else -1.0
             if target_match[4] >= rival_score + margin:
@@ -462,7 +519,7 @@ class MacroEngine:
 
         found = bool(accepted)
         ok = (not found) if cond.negate else found
-        if not found or cond.negate:
+        if not found or (cond.negate and not include_negated_matches):
             return ok, []
 
         if not collect_all:
@@ -489,7 +546,7 @@ class MacroEngine:
                 f"{rival_score:.2f} by {score_margin:.2f}"
             )
 
-    def _find_best_template_match_near(self, frame, template, target_match):
+    def _find_best_template_match_near(self, frame, template, target_match, cond=None):
         self._raise_if_stopped()
         x, y, width, height = target_match[:4]
         padding = max(4, round(max(width, height) * 0.25))
@@ -499,21 +556,84 @@ class MacroEngine:
         right = min(frame_width, x + width + padding)
         bottom = min(frame_height, y + height + padding)
         local_match = self._find_best_template_match_in_frame(
-            frame[top:bottom, left:right], template
+            frame[top:bottom, left:right],
+            template,
+            cond,
+            template_path=(cond.comparison_template_path if cond else None),
+            explicit_reference_size=(
+                getattr(cond, "comparison_template_reference_size", None)
+                if cond
+                else _REFERENCE_UNSET
+            ),
         )
         if local_match is None:
             return None
         local_x, local_y, match_width, match_height, score, scale = local_match
         return (left + local_x, top + local_y, match_width, match_height, score, scale)
 
-    def _preview_template_condition(self, index, cond, frame, off_x, off_y, image):
+    def _preview_template_condition(
+        self,
+        index,
+        cond,
+        frame,
+        off_x,
+        off_y,
+        image,
+        collect_all=True,
+    ):
         template = self._load_template(cond.template_path)
         if cond.comparison_template_path:
             ok, matches = self._evaluate_competing_template_condition(
-                index, cond, frame, template, off_x, off_y, collect_all=True
+                index,
+                cond,
+                frame,
+                template,
+                off_x,
+                off_y,
+                collect_all=collect_all,
+                include_negated_matches=True,
             )
             return ok, matches, image
-        template_matches = self._find_template_matches_in_frame(frame, template, cond.confidence, collect_all=True)
+        if cond.negate:
+            template_matches = self._find_template_matches_in_frame(
+                frame,
+                template,
+                cond.confidence,
+                collect_all=False,
+                allow_coarse=False,
+                early_exit_score=cond.confidence,
+                **self._condition_matching_kwargs(cond),
+            )
+            found = bool(template_matches)
+            matches = (
+                self._template_matches_to_runtime_matches(
+                    index,
+                    cond,
+                    template_matches,
+                    off_x,
+                    off_y,
+                )
+                if found
+                else []
+            )
+            return not found, matches, image
+        if not collect_all:
+            ok, matches = self._evaluate_template_condition(
+                index,
+                cond,
+                frame,
+                off_x,
+                off_y,
+                collect_all=False,
+            )
+            return ok, matches, image
+        template_matches = self._find_template_matches_in_frame(
+            frame,
+            template,
+            cond.confidence,
+            collect_all=True,
+            **self._condition_matching_kwargs(cond),
+        )
         found = bool(template_matches)
         ok = (not found) if cond.negate else found
         if not found:
@@ -524,7 +644,10 @@ class MacroEngine:
 
     def _template_matches_to_runtime_matches(self, index, cond, template_matches, off_x, off_y):
         matches = []
-        for x, y, w, h, score, scale in template_matches:
+        for template_match in template_matches:
+            x, y, w, h, score, scale = template_match
+            scale_x = float(getattr(template_match, "scale_x", scale))
+            scale_y = float(getattr(template_match, "scale_y", scale))
             box = (off_x + x, off_y + y, off_x + x + w, off_y + y + h)
             image_box = (x, y, x + w, y + h)
             center = (box[0] + w // 2, box[1] + h // 2)
@@ -535,259 +658,173 @@ class MacroEngine:
                 "label": f"{cond.template_path} {score:.2f}{scale_label}",
                 "confidence": score,
                 "scale": scale,
+                "scale_x": scale_x,
+                "scale_y": scale_y,
+                "angle": float(getattr(template_match, "angle", 0.0)),
                 "box": box,
                 "image_box": image_box,
                 "center": center,
             })
         return matches
 
-    def _find_best_template_match_in_frame(self, frame, template):
+    def _find_best_template_match_in_frame(
+        self,
+        frame,
+        template,
+        cond=None,
+        template_path=None,
+        explicit_reference_size=_REFERENCE_UNSET,
+    ):
         matches = self._find_template_matches_in_frame(
-            frame, template, confidence=-1.0, collect_all=False
+            frame,
+            template,
+            confidence=-1.0,
+            collect_all=False,
+            **(
+                self._condition_matching_kwargs(
+                    cond,
+                    template_path=template_path,
+                    explicit_reference_size=explicit_reference_size,
+                )
+                if cond is not None
+                else {}
+            ),
         )
         return matches[0] if matches else None
 
     def _find_template_matches_in_frame(
-        self, frame, template, confidence, collect_all=True, allow_coarse=True
+        self,
+        frame,
+        template,
+        confidence,
+        collect_all=True,
+        allow_coarse=True,
+        match_mode="static_picture",
+        use_grayscale=False,
+        reference_size=None,
+        current_size=None,
+        reference_sizes=(),
+        early_exit_score=None,
     ):
-        if (
-            not collect_all
-            and allow_coarse
-            and frame.shape[0] * frame.shape[1] >= 500_000
-            and min(template.shape[:2]) >= 20
-        ):
-            return self._find_best_template_match_coarse(frame, template, confidence)
-        candidates = []
-        for scale in self.TEMPLATE_SCALE_FACTORS:
-            self._raise_if_stopped()
-            scaled_matches = self._find_template_matches_at_scale(frame, template, confidence, scale, collect_all)
-            candidates.extend(scaled_matches)
-
         self._raise_if_stopped()
-        if not collect_all:
-            if not candidates:
-                return []
-            best = max(
-                candidates,
-                key=lambda item: (item[4], -abs(item[5] - 1.0)),
+        cache = getattr(self, "_prepared_template_cache", None)
+        if cache is None:
+            cache = {}
+            self._prepared_template_cache = cache
+        reference_key = tuple(reference_size) if reference_size else None
+        reference_sizes_key = tuple(
+            tuple(size) for size in (reference_sizes or ())
+        )
+        current_key = tuple(current_size) if current_size else None
+        low_variance_threshold = float(
+            getattr(self, "low_variance_threshold", 1.0)
+        )
+        cache_key = (
+            id(template),
+            match_mode,
+            bool(use_grayscale),
+            reference_key,
+            reference_sizes_key,
+            current_key,
+            tuple(self.TEMPLATE_SCALE_FACTORS),
+            low_variance_threshold,
+        )
+        cached = cache.get(cache_key)
+        if cached is None or cached[0] is not template:
+            if len(cache) >= 32:
+                cache.pop(next(iter(cache)))
+            variants = prepare_template_variants(
+                template,
+                scales=self.TEMPLATE_SCALE_FACTORS,
+                use_grayscale=use_grayscale,
+                match_mode=match_mode,
+                reference_size=reference_size,
+                current_size=current_size,
+                reference_sizes=reference_sizes,
+                low_variance_threshold=low_variance_threshold,
+                stop_check=self._raise_if_stopped,
             )
-            return [best]
-
-        candidates.sort(key=lambda item: item[4], reverse=True)
-        candidate_limit = max(1, int(getattr(self, "max_multiscale_candidates", 512)))
-        if len(candidates) > candidate_limit:
-            candidates = candidates[:candidate_limit]
-        kept = []
-        for x, y, w, h, score, scale in candidates:
-            self._raise_if_stopped()
-            box = (x, y, x + w, y + h)
-            if any(self._box_iou(box, (kx, ky, kx + kw, ky + kh)) > 0.3 for kx, ky, kw, kh, _, _ in kept):
-                continue
-            kept.append((x, y, w, h, score, scale))
-
-        kept.sort(key=lambda item: (item[1], item[0]))
-        return kept
+            cache[cache_key] = (template, variants)
+        else:
+            variants = cached[1]
+        matches = find_template_matches(
+            frame,
+            template,
+            confidence,
+            collect_all=collect_all,
+            allow_coarse=allow_coarse,
+            match_mode=match_mode,
+            use_grayscale=use_grayscale,
+            scales=self.TEMPLATE_SCALE_FACTORS,
+            variants=variants,
+            reference_size=reference_size,
+            current_size=current_size,
+            reference_sizes=reference_sizes,
+            stop_check=self._raise_if_stopped,
+            low_variance_threshold=low_variance_threshold,
+            early_exit_score=early_exit_score,
+            max_matches_per_scale=getattr(self, "max_matches_per_scale", 128),
+            max_candidates=getattr(self, "max_multiscale_candidates", 512),
+        )
+        return [match.legacy_tuple() for match in matches]
 
     def _template_spatial_deviation(self, template):
-        if template.ndim == 3:
-            return float(
-                np.max(np.std(template.astype(np.float32), axis=(0, 1)))
-            )
-        return float(np.std(template))
+        return _spatial_deviation(template)
 
     def _best_scaled_template_match(self, frame, scaled_template):
-        height, width = scaled_template.shape[:2]
-        if height > frame.shape[0] or width > frame.shape[1]:
-            return -1.0, None
-        low_variance = self._template_spatial_deviation(scaled_template) < float(
+        low_variance = _spatial_deviation(scaled_template) < float(
             getattr(self, "low_variance_threshold", 1.0)
         )
-        if low_variance:
-            raw_result = cv2.matchTemplate(frame, scaled_template, cv2.TM_SQDIFF)
-            channels = scaled_template.shape[2] if scaled_template.ndim == 3 else 1
-            worst = float(width * height * channels * (255 ** 2))
-            result = np.clip(1.0 - (raw_result / worst), 0.0, 1.0)
-        else:
-            raw_result = cv2.matchTemplate(
-                frame, scaled_template, cv2.TM_CCOEFF_NORMED
-            )
-            result = np.nan_to_num(
-                raw_result, nan=-1.0, posinf=1.0, neginf=-1.0
-            )
-        self._raise_if_stopped()
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        if low_variance and result.size > 1:
-            if float(max_val) - float(result.min()) <= 1e-6:
-                return -1.0, None
-        return float(max_val), max_loc
+        return _best_variant_match(frame, scaled_template, low_variance)
 
     def _find_best_template_match_coarse(self, frame, template, confidence):
-        """Accelerate large positive searches, then verify in the original pixels."""
-        self._raise_if_stopped()
-        factor = 0.5 if min(template.shape[:2]) >= 30 else 0.67
-        small_frame = cv2.resize(
-            frame, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA
+        return self._find_template_matches_in_frame(
+            frame, template, confidence, collect_all=False, allow_coarse=True
         )
-        coarse_records = []
-        for scale in self.TEMPLATE_SCALE_FACTORS:
-            self._raise_if_stopped()
-            scaled = self._scaled_template(template, scale)
-            height, width = scaled.shape[:2]
-            small_scaled = cv2.resize(
-                scaled,
-                (max(1, round(width * factor)), max(1, round(height * factor))),
-                interpolation=cv2.INTER_AREA,
-            )
-            score, loc = self._best_scaled_template_match(small_frame, small_scaled)
-            if loc is not None:
-                coarse_records.append((score, loc, scale))
 
-        best = None
-        for _coarse_score, coarse_loc, scale in sorted(
-            coarse_records, key=lambda item: item[0], reverse=True
-        ):
-            self._raise_if_stopped()
-            scaled = self._scaled_template(template, scale)
-            height, width = scaled.shape[:2]
-            expected_x = round(coarse_loc[0] / factor)
-            expected_y = round(coarse_loc[1] / factor)
-            margin = max(8, round(max(width, height) * 0.35))
-            left = max(0, expected_x - margin)
-            top = max(0, expected_y - margin)
-            right = min(frame.shape[1], expected_x + width + margin)
-            bottom = min(frame.shape[0], expected_y + height + margin)
-            local = frame[top:bottom, left:right]
-            score, loc = self._best_scaled_template_match(local, scaled)
-            if loc is None:
-                continue
-            candidate = (
-                left + loc[0],
-                top + loc[1],
-                width,
-                height,
-                score,
-                scale,
-            )
-            if best is None or (candidate[4], -abs(scale - 1.0)) > (
-                best[4],
-                -abs(best[5] - 1.0),
-            ):
-                best = candidate
-        if best is None or best[4] < confidence:
-            return []
-        return [best]
-
-    def _find_template_matches_at_scale(self, frame, template, confidence, scale, collect_all):
-        self._raise_if_stopped()
-        scaled_template = self._scaled_template(template, scale)
-
-        h, w = scaled_template.shape[:2]
-        frame_h, frame_w = frame.shape[:2]
-        if h > frame_h or w > frame_w:
-            return []
-
-        spatial_deviation = self._template_spatial_deviation(scaled_template)
-        low_variance = spatial_deviation < float(
-            getattr(self, "low_variance_threshold", 1.0)
+    def _find_template_matches_at_scale(
+        self, frame, template, confidence, scale, collect_all
+    ):
+        matches = find_template_matches(
+            frame,
+            template,
+            confidence,
+            collect_all=collect_all,
+            allow_coarse=False,
+            match_mode="static_picture",
+            scales=(scale,),
+            stop_check=self._raise_if_stopped,
+            low_variance_threshold=float(
+                getattr(self, "low_variance_threshold", 1.0)
+            ),
+            max_matches_per_scale=getattr(self, "max_matches_per_scale", 128),
+            max_candidates=getattr(self, "max_multiscale_candidates", 512),
         )
-        if low_variance:
-            raw_result = cv2.matchTemplate(frame, scaled_template, cv2.TM_SQDIFF)
-            channels = scaled_template.shape[2] if scaled_template.ndim == 3 else 1
-            worst = float(w * h * channels * (255 ** 2))
-            result = np.clip(1.0 - (raw_result / worst), 0.0, 1.0)
-        else:
-            raw_result = cv2.matchTemplate(frame, scaled_template, cv2.TM_CCOEFF_NORMED)
-            result = np.nan_to_num(raw_result, nan=-1.0, posinf=1.0, neginf=-1.0)
-        self._raise_if_stopped()
-
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        if max_val < confidence:
-            return []
-
-        # A flat response has no defensible location. This is common with a
-        # solid template on a solid background and used to produce thousands
-        # of equally perfect, unsafe click targets.
-        if low_variance and result.size > 1:
-            min_val = float(result.min())
-            if float(max_val) - min_val <= 1e-6:
-                return []
-
-        if not collect_all:
-            return [(max_loc[0], max_loc[1], w, h, float(max_val), scale)]
-
-        candidates = self._bounded_local_peaks(result, confidence, w, h, scale)
-
-        kept = []
-        for x, y, width, height, score, match_scale in candidates:
-            self._raise_if_stopped()
-            box = (x, y, x + width, y + height)
-            if any(self._box_iou(box, (kx, ky, kx + kw, ky + kh)) > 0.3 for kx, ky, kw, kh, _, _ in kept):
-                continue
-            kept.append((x, y, width, height, score, match_scale))
-
-        kept.sort(key=lambda item: (item[1], item[0]))
-        return kept
+        return [match.legacy_tuple() for match in matches]
 
     def _bounded_local_peaks(self, scores, confidence, width, height, scale):
-        """Return a bounded set of spatial peaks without sorting every hit."""
-        self._raise_if_stopped()
-        kernel_width = max(1, min(width, scores.shape[1]))
-        kernel_height = max(1, min(height, scores.shape[0]))
-        kernel = np.ones((kernel_height, kernel_width), dtype=np.uint8)
-        local_max = cv2.dilate(scores, kernel)
-        peak_mask = (scores >= confidence) & (scores >= local_max - 1e-6)
-        flat_indices = np.flatnonzero(peak_mask)
-        if flat_indices.size == 0:
-            return []
-
-        limit = max(1, int(getattr(self, "max_matches_per_scale", 128)))
-        flat_scores = scores.reshape(-1)
-        if flat_indices.size > limit:
-            candidate_scores = flat_scores[flat_indices]
-            chosen = np.argpartition(candidate_scores, -limit)[-limit:]
-            flat_indices = flat_indices[chosen]
-
-        result_width = scores.shape[1]
-        candidates = []
-        for flat_index in flat_indices:
-            self._raise_if_stopped()
-            y, x = divmod(int(flat_index), result_width)
-            candidates.append(
-                (x, y, width, height, float(flat_scores[flat_index]), scale)
-            )
-        candidates.sort(key=lambda item: (-item[4], item[1], item[0]))
-        return candidates
+        peaks = _bounded_local_peaks(
+            scores,
+            confidence,
+            width,
+            height,
+            max(1, int(getattr(self, "max_matches_per_scale", 128))),
+        )
+        return [
+            (x, y, width, height, score, scale)
+            for x, y, score in peaks
+        ]
 
     def _scaled_template(self, template, scale):
-        if abs(scale - 1.0) < 0.001:
-            return template
         cache = getattr(self, "_scaled_template_cache", None)
         if cache is None:
             cache = {}
             self._scaled_template_cache = cache
-        key = (id(template), scale)
-        cached = cache.get(key)
-        if cached is not None and cached[0] is template:
-            return cached[1]
-        template_h, template_w = template.shape[:2]
-        width = max(1, round(template_w * scale))
-        height = max(1, round(template_h * scale))
-        scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_LINEAR)
-        cache[key] = (template, scaled)
-        return scaled
+        return resize_template(template, scale, cache=cache)
 
     def _box_iou(self, a, b):
-        ax1, ay1, ax2, ay2 = a
-        bx1, by1, bx2, by2 = b
-        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-        iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
-        intersection = iw * ih
-        if intersection == 0:
-            return 0.0
-        area_a = (ax2 - ax1) * (ay2 - ay1)
-        area_b = (bx2 - bx1) * (by2 - by1)
-        return intersection / float(area_a + area_b - intersection)
+        return box_iou(a, b)
+
 
     def _frame_to_image(self, frame):
         if isinstance(frame, Image.Image):
@@ -845,10 +882,13 @@ class MacroEngine:
         if self._stop_requested():
             return False
         if action.type == "click":
+            geometry_match = None
             if action.x is not None and action.y is not None:
                 x, y = action.x, action.y
             elif action.on_condition_index is not None and action.on_condition_index in points:
                 x, y = points[action.on_condition_index]
+                condition_matches = matches.get(action.on_condition_index, [])
+                geometry_match = condition_matches[0] if condition_matches else None
             elif action.on_condition_index is not None:
                 self.log(
                     f"  [skip] '{step.name}' click target condition "
@@ -859,12 +899,16 @@ class MacroEngine:
                 self.log(f"  [skip] '{step.name}' click action has an incomplete fixed point")
                 return False
             elif points:
-                x, y = next(iter(points.values()))
+                condition_index, point = next(iter(points.items()))
+                x, y = point
+                condition_matches = matches.get(condition_index, [])
+                geometry_match = condition_matches[0] if condition_matches else None
             else:
                 self.log(f"  [skip] '{step.name}' click action has no target point")
                 return False
-            x += action.offset_x
-            y += action.offset_y
+            scale_x, scale_y = self._match_geometry_scale(geometry_match)
+            x += round(action.offset_x * scale_x)
+            y += round(action.offset_y * scale_y)
             if self._click_point(x, y, action.button) is False:
                 return False
             self.log(f"  click ({x}, {y})")
@@ -881,11 +925,13 @@ class MacroEngine:
                 self.log(f"  [skip] '{step.name}' no valid matching row target")
                 return self._run_no_match_fallback(step, action, points)
             clicked = False
-            for x, y in targets:
+            for target in targets:
                 if self._stop_requested():
                     return clicked
-                x += action.offset_x
-                y += action.offset_y
+                x, y = target["center"]
+                scale_x, scale_y = self._match_geometry_scale(target)
+                x += round(action.offset_x * scale_x)
+                y += round(action.offset_y * scale_y)
                 if self._click_point(x, y, action.button) is False:
                     return clicked
                 clicked = True
@@ -1022,20 +1068,37 @@ class MacroEngine:
             if self._stop_requested():
                 break
             ref_y = reference["center"][1]
+            _scale_x, scale_y = self._match_geometry_scale(reference)
+            row_tolerance = max(0, round(action.row_tolerance * scale_y))
             row_targets = [
                 target for target in remaining_targets
-                if abs(target["center"][1] - ref_y) <= action.row_tolerance
+                if abs(target["center"][1] - ref_y) <= row_tolerance
             ]
             if not row_targets:
                 continue
             if not self._row_level_allowed(action, reference):
                 continue
             chosen = self._choose_row_target(reference, row_targets, action.target_choice)
-            selected.append(chosen["center"])
+            selected.append(chosen)
             remaining_targets.remove(chosen)
             if action.row_mode != "all":
                 break
         return selected
+
+    @staticmethod
+    def _match_geometry_scale(match):
+        if not match:
+            return 1.0, 1.0
+        try:
+            scale_x = float(match.get("scale_x", match.get("scale", 1.0)))
+            scale_y = float(match.get("scale_y", match.get("scale", 1.0)))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return 1.0, 1.0
+        if not math.isfinite(scale_x) or scale_x <= 0.0:
+            scale_x = 1.0
+        if not math.isfinite(scale_y) or scale_y <= 0.0:
+            scale_y = 1.0
+        return scale_x, scale_y
 
     def _row_level_allowed(self, action: Action, reference: dict):
         if self._stop_requested():
@@ -1069,12 +1132,16 @@ class MacroEngine:
     def _read_level_for_row(self, action: Action, reference: dict):
         if self._stop_requested():
             return None
-        roi = action.level_roi or [-90, -45, 220, 100]
+        roi = self._scaled_level_roi(action, reference)
         window_rect = self._get_target_window_rect()
         roi_text = tuple(roi)
         center_text = tuple(reference["center"])
         min_digits = max(1, int(getattr(action, "level_min_digits", 1) or 1))
         digit_templates = self._load_digit_templates(action.level_digit_template_dir)
+        digit_templates = self._scale_digit_templates_for_match(
+            digit_templates,
+            reference,
+        )
         if not digit_templates:
             warning_key = os.path.abspath(project_path(action.level_digit_template_dir or ""))
             warned = getattr(self, "_missing_digit_template_warnings", None)
@@ -1198,10 +1265,101 @@ class MacroEngine:
                 self.log(f"  [debug] saved level crop: {path}")
         return None
 
+    @staticmethod
+    def _template_path_key(path):
+        return os.path.normcase(os.path.normpath(str(path or "").strip()))
+
+    def _legacy_reference_sizes_for_path(self, template_path):
+        """Collect safe legacy candidates without equating region and template metadata."""
+        scenario = getattr(self, "scenario", None)
+        if scenario is None:
+            return ()
+        target_key = self._template_path_key(template_path)
+        path_sizes = []
+        global_sizes = []
+
+        def add(collection, value):
+            if (
+                value
+                and len(value) == 2
+                and value[0] > 0
+                and value[1] > 0
+            ):
+                parsed = (int(value[0]), int(value[1]))
+                if parsed not in collection:
+                    collection.append(parsed)
+
+        for step in getattr(scenario, "steps", ()):
+            for condition in getattr(step, "conditions", ()):
+                condition_size = (
+                    condition.template_reference_size
+                    or condition.region_window_size
+                )
+                add(global_sizes, condition_size)
+                if self._template_path_key(condition.template_path) == target_key:
+                    add(path_sizes, condition_size)
+                comparison_path = getattr(condition, "comparison_template_path", "")
+                if self._template_path_key(comparison_path) == target_key:
+                    add(
+                        path_sizes,
+                        getattr(
+                            condition,
+                            "comparison_template_reference_size",
+                            None,
+                        ),
+                    )
+
+        result = []
+        for size in (*path_sizes, *global_sizes):
+            if size not in result:
+                result.append(size)
+            if len(result) >= 4:
+                break
+        return tuple(result)
+
+    def _condition_matching_kwargs(
+        self,
+        cond: ImageCondition,
+        *,
+        template_path=None,
+        explicit_reference_size=_REFERENCE_UNSET,
+    ):
+        if template_path is None:
+            template_path = cond.template_path
+        if explicit_reference_size is _REFERENCE_UNSET:
+            explicit_reference_size = cond.template_reference_size
+        reference_size = explicit_reference_size or None
+        reference_sizes = (
+            ()
+            if reference_size
+            else self._legacy_reference_sizes_for_path(template_path)
+        )
+        current_size = None
+        scenario = getattr(self, "scenario", None)
+        if scenario is not None and scenario.target_window_title.strip():
+            rect = self._get_target_window_rect()
+            if rect:
+                current_size = (rect[2], rect[3])
+        elif scenario is not None and (reference_size or reference_sizes):
+            try:
+                _index, monitor = self._selected_monitor()
+            except (AttributeError, RuntimeError):
+                monitor = None
+            if monitor is not None:
+                current_size = (int(monitor["width"]), int(monitor["height"]))
+        return {
+            "match_mode": cond.match_mode,
+            "use_grayscale": cond.use_grayscale,
+            "reference_size": reference_size,
+            "reference_sizes": reference_sizes,
+            "current_size": current_size,
+        }
+
     def _level_crop_rects(self, action: Action, reference: dict, window_rect=None):
-        roi = action.level_roi or [-90, -45, 220, 100]
+        roi = self._scaled_level_roi(action, reference)
         center_x, center_y = reference["center"]
-        offsets = (0, 8, 16, 24, -8, -16)
+        _scale_x, scale_y = self._match_geometry_scale(reference)
+        offsets = tuple(round(value * scale_y) for value in (0, 8, 16, 24, -8, -16))
         rects = []
         seen = set()
         for y_offset in offsets:
@@ -1215,6 +1373,33 @@ class MacroEngine:
             seen.add(rect)
             rects.append(rect)
         return rects
+
+    def _scaled_level_roi(self, action: Action, reference: dict):
+        roi = action.level_roi or [-90, -45, 220, 100]
+        scale_x, scale_y = self._match_geometry_scale(reference)
+        return [
+            round(roi[0] * scale_x),
+            round(roi[1] * scale_y),
+            max(1, round(roi[2] * scale_x)),
+            max(1, round(roi[3] * scale_y)),
+        ]
+
+    def _scale_digit_templates_for_match(self, digit_templates, reference):
+        scale_x, scale_y = self._match_geometry_scale(reference)
+        if abs(scale_x - 1.0) < 0.001 and abs(scale_y - 1.0) < 0.001:
+            return digit_templates
+        scaled = {}
+        for digit, template in digit_templates.items():
+            height, width = template.shape[:2]
+            scaled[digit] = cv2.resize(
+                template,
+                (
+                    max(1, round(width * scale_x)),
+                    max(1, round(height * scale_y)),
+                ),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        return scaled
 
     def _constrain_level_rect(self, rect, window_rect=None):
         left, top, width, height = rect

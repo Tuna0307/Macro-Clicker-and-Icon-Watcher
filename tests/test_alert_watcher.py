@@ -112,6 +112,48 @@ class TemplateManagerTests(unittest.TestCase):
         self.assertEqual({item["angle"] for item in text_item["variants"]}, {0})
         self.assertEqual(reloaded["match_mode"], watcher.MATCH_MODE_TEXT)
 
+    def test_reference_size_persists_and_builds_resolution_specific_variants(self):
+        tm = self._manager_in_temp_dir()
+        image = np.zeros((24, 30, 3), dtype=np.uint8)
+        image[4:20, 6:24] = (30, 180, 240)
+        tm.add(
+            image,
+            "scaled",
+            template_reference_size=(1920, 1080),
+        )
+
+        same_size = tm.snapshot(
+            use_grayscale=False,
+            current_window_size=(1920, 1080),
+        )[0]
+        larger = tm.snapshot(
+            use_grayscale=False,
+            current_window_size=(2560, 1440),
+        )[0]
+        reloaded = watcher.TemplateManager().snapshot()[0]
+
+        self.assertEqual(reloaded["template_reference_size"], (1920, 1080))
+        self.assertIsNot(same_size["variants"], larger["variants"])
+        self.assertAlmostEqual(larger["variants"][0]["scale"], 4 / 3)
+
+    def test_each_template_uses_its_own_reference_size(self):
+        tm = self._manager_in_temp_dir()
+        image = np.zeros((24, 30, 3), dtype=np.uint8)
+        image[4:20, 6:24] = (30, 180, 240)
+        tm.add(image, "full-hd", template_reference_size=(1920, 1080))
+        tm.add(image, "hd-plus", template_reference_size=(1600, 900))
+
+        items = {
+            item["name"]: item
+            for item in tm.snapshot(
+                use_grayscale=False,
+                current_window_size=(2560, 1440),
+            )
+        }
+
+        self.assertAlmostEqual(items["full-hd"]["variants"][0]["scale"], 4 / 3)
+        self.assertAlmostEqual(items["hd-plus"]["variants"][0]["scale"], 1.6)
+
     def test_manifest_path_escape_is_ignored_and_cannot_delete_outside_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             templates_dir = os.path.join(temp_dir, "templates")
@@ -413,6 +455,34 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(match.call_args.kwargs["region"], (30, 40, 20, 25))
         self.assertIs(match.call_args.kwargs["variants"], sentinel.cached_variants)
 
+    def test_cropped_screenshot_can_ignore_unrecoverable_absolute_regions(self):
+        screen = np.zeros((60, 60, 3), dtype=np.uint8)
+        icon = np.zeros((12, 12, 3), dtype=np.uint8)
+        icon[:, :, 0] = 255
+        screen[25:37, 30:42] = icon
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            path = temp.name
+        try:
+            cv2.imwrite(path, screen)
+            results = watcher.test_detection_on_screenshot(
+                path,
+                [{
+                    "id": 1,
+                    "name": "cropped",
+                    "threshold": 0.85,
+                    "image": icon,
+                    "region": (1500, 900, 100, 80),
+                    "region_mode": "screen",
+                }],
+                monitor_box=(0, 0, 1920, 1080),
+                apply_saved_regions=False,
+            )
+        finally:
+            os.remove(path)
+
+        self.assertTrue(results[0]["matched"])
+
     def test_cancel_event_stops_between_template_variants(self):
         screen = np.zeros((30, 30, 3), dtype=np.uint8)
         icon = np.zeros((5, 5, 3), dtype=np.uint8)
@@ -536,6 +606,143 @@ class WatcherThreadTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["monitor"], 1)
         self.assertAlmostEqual(alerts[0]["score"], 0.92)
+
+    def test_each_monitor_prepares_templates_for_its_own_resolution(self):
+        item = self._template_item()
+        snapshot_sizes = []
+
+        class FakeManager:
+            def snapshot(self, use_grayscale=None, current_window_size=None):
+                snapshot_sizes.append(current_window_size)
+                return [item]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 4480, "height": 1440},
+                {"left": 0, "top": 0, "width": 1920, "height": 1080},
+                {"left": 1920, "top": 0, "width": 2560, "height": 1440},
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, monitor):
+                return np.zeros(
+                    (monitor["height"], monitor["width"], 4),
+                    dtype=np.uint8,
+                )
+
+        thread = watcher.WatcherThread(
+            FakeManager(),
+            queue.Queue(),
+            queue.Queue(),
+        )
+        thread._wait_for_next_cycle = thread.stop
+
+        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
+                patch.object(
+                    watcher,
+                    "match_template_multiscale",
+                    return_value=(0.0, None, 1.0),
+                ):
+            thread.run()
+
+        self.assertEqual(
+            snapshot_sizes,
+            [None, (1920, 1080), (2560, 1440)],
+        )
+
+    def test_template_added_mid_cycle_is_deferred_without_stopping_watcher(self):
+        first = self._template_item(1, "first")
+        added = self._template_item(2, "added")
+        snapshots = 0
+
+        class FakeManager:
+            def snapshot(self, use_grayscale=None, current_window_size=None):
+                nonlocal snapshots
+                snapshots += 1
+                return [first] if snapshots == 1 else [first, added]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, _monitor):
+                return np.zeros((10, 10, 4), dtype=np.uint8)
+
+        events, logs = queue.Queue(), queue.Queue()
+        thread = watcher.WatcherThread(FakeManager(), events, logs)
+        thread._wait_for_next_cycle = thread.stop
+
+        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
+                patch.object(
+                    watcher,
+                    "match_template_multiscale",
+                    return_value=(0.0, None, 1.0),
+                ) as matcher:
+            thread.run()
+
+        self.assertEqual(matcher.call_count, 1)
+        self.assertFalse(any("Watcher error" in item for item in watcher._drain_queue(logs)))
+
+    def test_target_window_automatically_follows_its_physical_monitor(self):
+        item = self._template_item()
+
+        class FakeManager:
+            def snapshot(self, use_grayscale=None, current_window_size=None):
+                return [item]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 20, "height": 10},
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+                {"left": 10, "top": 0, "width": 10, "height": 10},
+            ]
+
+            def __init__(self):
+                self.requests = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, monitor):
+                self.requests.append(monitor)
+                return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+
+        capture = FakeCapture()
+        thread = watcher.WatcherThread(
+            FakeManager(),
+            queue.Queue(),
+            queue.Queue(),
+            monitor_filter=1,
+            target_window_title="Game",
+            window_rect_provider=lambda _title: (10, 0, 10, 10),
+        )
+        thread._wait_for_next_cycle = thread.stop
+
+        with patch.object(watcher.mss, "MSS", return_value=capture), \
+                patch.object(
+                    watcher,
+                    "match_template_multiscale",
+                    return_value=(0.0, None, 1.0),
+                ):
+            thread.run()
+
+        self.assertEqual(capture.requests, [capture.monitors[2]])
 
     def test_partial_scan_can_activate_but_cannot_disarm_template(self):
         item = self._template_item()
@@ -781,6 +988,22 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(loaded, settings)
 
+    def test_monitor_relative_settings_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            settings = watcher.AppSettings(
+                monitor_choice="All monitors",
+                scan_region=(100, 50, 200, 100),
+                scan_region_mode="monitor",
+                scan_region_ratio=(100 / 1920, 50 / 1080, 200 / 1920, 100 / 1080),
+                scan_region_window_size=(1920, 1080),
+            )
+
+            watcher.save_settings(path, settings)
+            loaded = watcher.load_settings(path)
+
+        self.assertEqual(loaded, settings)
+
     def test_alert_volume_is_clamped_when_loading_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "settings.json")
@@ -945,6 +1168,22 @@ class WindowRegionTests(unittest.TestCase):
 
         self.assertIs(wt._resolve_item_scan_region(item, None), watcher.REGION_UNAVAILABLE)
         self.assertIn("Target window not found", logs.get_nowait())
+
+    def test_monitor_relative_item_region_moves_and_scales(self):
+        item = {
+            "region": (100, 50, 200, 100),
+            "region_mode": "monitor",
+            "region_ratio": (100 / 1920, 50 / 1080, 200 / 1920, 100 / 1080),
+            "region_window_size": (1920, 1080),
+        }
+
+        region = watcher.resolve_item_absolute_region(
+            item,
+            None,
+            monitor_box=(1920, 0, 2560, 1440),
+        )
+
+        self.assertEqual(region, (2053, 67, 267, 133))
 
 
 class SingleInstanceTests(unittest.TestCase):
