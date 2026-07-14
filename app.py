@@ -675,6 +675,7 @@ def action_dialog(
     row_tolerance_var = tk.IntVar(value=a.row_tolerance)
     row_mode_var = tk.StringVar(value=a.row_mode)
     target_choice_var = tk.StringVar(value=a.target_choice)
+    pre_click_delay_var = tk.DoubleVar(value=getattr(a, "pre_click_delay", 0.0))
     row_offx_var = tk.IntVar(value=a.offset_x)
     row_offy_var = tk.IntVar(value=a.offset_y)
     row_button_var = tk.StringVar(value=a.button)
@@ -752,8 +753,19 @@ def action_dialog(
     ).grid(row=11, column=1, columnspan=3, sticky="w")
     ttk.Label(row_click_frame, text="Then disable", style="Surface.TLabel").grid(row=12, column=0, sticky="w", padx=4, pady=2)
     ttk.Entry(row_click_frame, textvariable=no_match_disable_steps_var, width=34).grid(row=12, column=1, columnspan=4, sticky="we")
+    ttk.Label(
+        row_click_frame,
+        text="Delay after level check",
+        style="Surface.TLabel",
+    ).grid(row=13, column=0, sticky="w", padx=4, pady=2)
+    ttk.Entry(row_click_frame, textvariable=pre_click_delay_var, width=7).grid(
+        row=13, column=1, sticky="w"
+    )
+    ttk.Label(row_click_frame, text="seconds", style="Surface.TLabel").grid(
+        row=13, column=2, sticky="w"
+    )
 
-    advanced_rows = (2, 5, 7, 8, 9, 10, 11, 12)
+    advanced_rows = (2, 5, 7, 8, 9, 10, 11, 12, 13)
     advanced_widgets = [
         widget
         for row in advanced_rows
@@ -770,6 +782,7 @@ def action_dialog(
             getattr(a, "level_min_digits", 1) != 1,
             getattr(a, "no_match_condition_index", None) is not None,
             bool(getattr(a, "no_match_disable_steps", None)),
+            getattr(a, "pre_click_delay", 0.0) > 0.0,
         )
     )
     row_advanced_state = {
@@ -799,7 +812,7 @@ def action_dialog(
         style="Disclosure.TButton",
         command=toggle_row_advanced,
     )
-    row_advanced_btn.grid(row=13, column=0, columnspan=5, sticky="ew", pady=(8, 0))
+    row_advanced_btn.grid(row=14, column=0, columnspan=5, sticky="ew", pady=(8, 0))
     render_row_advanced()
 
     # --- key fields ---
@@ -878,6 +891,7 @@ def action_dialog(
                 new_action.row_tolerance = row_tolerance_var.get()
                 new_action.row_mode = row_mode_var.get()
                 new_action.target_choice = target_choice_var.get()
+                new_action.pre_click_delay = pre_click_delay_var.get()
                 new_action.offset_x = row_offx_var.get()
                 new_action.offset_y = row_offy_var.get()
                 new_action.button = row_button_var.get()

@@ -124,8 +124,25 @@
       "id": 16,
       "name": "#2212",
       "file": "template_16.png",
-      "threshold": 0.95,
+      "threshold": 0.9,
       "match_mode": "colored_text",
+      "region": [
+        140,
+        985,
+        633,
+        94
+      ],
+      "region_mode": "window",
+      "region_ratio": [
+        0.07291666666666667,
+        0.9120370370370371,
+        0.3296875,
+        0.08703703703703704
+      ],
+      "region_window_size": [
+        1920,
+        1080
+      ],
       "template_reference_size": [
         1920,
         1080

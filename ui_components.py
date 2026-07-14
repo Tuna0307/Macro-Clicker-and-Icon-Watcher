@@ -287,7 +287,12 @@ def action_display_summary(action, conditions):
             low = "any" if action.min_level is None else action.min_level
             high = "any" if action.max_level is None else action.max_level
             level = f", levels {low}-{high}"
-        return f"Click {target} on {rows} matching {reference}{level}"
+        delay = (
+            f", wait {action.pre_click_delay:g}s after level check"
+            if getattr(action, "pre_click_delay", 0.0)
+            else ""
+        )
+        return f"Click {target} on {rows} matching {reference}{level}{delay}"
     if action.type == "key":
         return f"Press {action.key or 'key'}"
     if action.type == "wait":

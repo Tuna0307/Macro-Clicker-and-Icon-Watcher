@@ -80,6 +80,14 @@ class ModelValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported action type"):
             Action.from_dict({"type": "wa1t", "seconds": 1})
 
+    def test_matching_row_pre_click_delay_round_trips_and_rejects_invalid_values(self):
+        action = Action(type="click_matching_row", pre_click_delay=1.5)
+
+        self.assertEqual(Action.from_dict(action.to_dict()).pre_click_delay, 1.5)
+        for value in (-0.1, float("nan"), float("inf"), True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Action.from_dict({"type": "click_matching_row", "pre_click_delay": value})
+
     def test_nested_null_values_are_reported_as_load_errors(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, data in (

@@ -42,6 +42,7 @@ class UiComponentTests(unittest.TestCase):
             row_mode="all",
             min_level=20,
             max_level=60,
+            pre_click_delay=1.5,
             row_tolerance=47,
             offset_x=8,
             offset_y=-3,
@@ -51,6 +52,7 @@ class UiComponentTests(unittest.TestCase):
 
         self.assertIn("Join.png", summary)
         self.assertIn("GoldMob.png", summary)
+        self.assertIn("wait 1.5s after level check", summary)
         self.assertEqual(action.row_tolerance, 47)
         self.assertEqual((action.offset_x, action.offset_y), (8, -3))
 

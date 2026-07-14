@@ -335,6 +335,7 @@ class Action:
     row_tolerance: int = 60                     # vertical center distance allowed for same-row matching
     row_mode: str = "first"                     # "first" = first valid row, "all" = every valid row
     target_choice: str = "leftmost"             # "leftmost", "rightmost", or "nearest"
+    pre_click_delay: float = 0.0                 # wait after level selection, before revalidation/click
     min_level: Optional[int] = None             # optional level filter for click_matching_row
     max_level: Optional[int] = None
     level_digit_template_dir: str = os.path.join(TEMPLATES_DIR, "level_digits")
@@ -382,6 +383,9 @@ class Action:
         a.target_choice = str(d.get("target_choice", a.target_choice) or a.target_choice)
         if a.target_choice not in {"leftmost", "rightmost", "nearest"}:
             raise ValueError("target_choice must be leftmost, rightmost, or nearest")
+        a.pre_click_delay = _float_value(d.get("pre_click_delay"), a.pre_click_delay)
+        if a.pre_click_delay < 0.0:
+            raise ValueError("pre-click delay cannot be negative")
         a.min_level = _optional_int(d.get("min_level"), a.min_level)
         a.max_level = _optional_int(d.get("max_level"), a.max_level)
         if a.min_level is not None and a.min_level < 0:
@@ -443,8 +447,9 @@ class Action:
                 f"; no match click condition #{self.no_match_condition_index}"
                 if self.no_match_condition_index is not None else ""
             )
+            delay = f"; wait {self.pre_click_delay:g}s before click" if self.pre_click_delay else ""
             return (f"Click {self.target_choice} condition #{self.on_condition_index} matching "
-                    f"{scope} of condition #{self.match_condition_index}{level}{fallback}  [{self.button}]")
+                    f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}  [{self.button}]")
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
@@ -786,6 +791,15 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or action.hold < 0.0
             ):
                 raise ValueError(f"{prefix} key hold must be a non-negative finite number")
+            if (
+                isinstance(action.pre_click_delay, bool)
+                or not isinstance(action.pre_click_delay, (int, float))
+                or not math.isfinite(float(action.pre_click_delay))
+                or action.pre_click_delay < 0.0
+            ):
+                raise ValueError(
+                    f"{prefix} pre-click delay must be a non-negative finite number"
+                )
             if (
                 isinstance(action.seconds, bool)
                 or not isinstance(action.seconds, (int, float))

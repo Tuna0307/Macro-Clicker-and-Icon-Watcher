@@ -44,6 +44,9 @@ from window_locator import (
 
 _WINDOW_UNAVAILABLE = DETECTION_UNAVAILABLE
 _REFERENCE_UNSET = object()
+_LEVEL_ELIGIBLE = "eligible"
+_LEVEL_INELIGIBLE = "ineligible"
+_LEVEL_UNREADABLE = "unreadable"
 
 
 class _StopRequested(Exception):
@@ -63,6 +66,7 @@ class MacroEngine:
         self._scaled_template_cache = {}
         self._prepared_template_cache = {}
         self._digit_template_cache = {}
+        self._level_offset_cache = {}
         self._missing_digit_template_warnings = set()
         self._level_ocr_reader: Optional[LevelOcrReader] = None
         self._level_ocr_reader_lock = threading.Lock()
@@ -920,23 +924,62 @@ class MacroEngine:
                 self.log(f"  [skip] '{step.name}' conditions changed before row click")
                 return False
             points, matches = refreshed
-            targets = self._find_matching_row_targets(action, matches)
-            if not targets:
+            selections, had_unreadable_level = self._find_matching_row_selections(
+                action,
+                matches,
+                apply_level_filter=True,
+            )
+            if not selections:
+                if had_unreadable_level:
+                    self.log(
+                        f"  [retry] '{step.name}' level unreadable; "
+                        "keeping the rally page open"
+                    )
+                    return False
                 self.log(f"  [skip] '{step.name}' no valid matching row target")
                 return self._run_no_match_fallback(step, action, points)
+
+            delayed = False
+            pre_click_delay = max(0.0, float(getattr(action, "pre_click_delay", 0.0)))
+            if pre_click_delay > 0.0:
+                delayed = True
+                self.log(
+                    f"  wait {pre_click_delay:g}s after eligible level check"
+                )
+                if self._sleep_until_stop(pre_click_delay):
+                    return True
+                refreshed = self._refresh_click_matching_row_matches(step, action)
+                if refreshed is None:
+                    self.log(
+                        f"  [skip] '{step.name}' conditions changed during pre-click delay"
+                    )
+                    return True
+                _points, refreshed_matches = refreshed
+                selections = self._revalidate_row_selections(
+                    action,
+                    selections,
+                    refreshed_matches,
+                )
+                if not selections:
+                    self.log(
+                        f"  [skip] '{step.name}' selected row changed during pre-click delay"
+                    )
+                    return True
+
             clicked = False
-            for target in targets:
+            for selection in selections:
                 if self._stop_requested():
-                    return clicked
+                    return clicked or delayed
+                target = selection["target"]
                 x, y = target["center"]
                 scale_x, scale_y = self._match_geometry_scale(target)
                 x += round(action.offset_x * scale_x)
                 y += round(action.offset_y * scale_y)
                 if self._click_point(x, y, action.button) is False:
-                    return clicked
+                    return clicked or delayed
                 clicked = True
                 self.log(f"  click matching row ({x}, {y})")
-            return clicked
+            return clicked or delayed
 
         elif action.type == "key":
             if action.hold > 0:
@@ -1056,14 +1099,29 @@ class MacroEngine:
         )
 
     def _find_matching_row_targets(self, action: Action, matches: dict):
+        selections, _had_unreadable = self._find_matching_row_selections(
+            action,
+            matches,
+            apply_level_filter=True,
+        )
+        return [selection["target"] for selection in selections]
+
+    def _find_matching_row_selections(
+        self,
+        action: Action,
+        matches: dict,
+        *,
+        apply_level_filter: bool,
+    ):
         reference_index = action.match_condition_index
         target_index = action.on_condition_index
         if reference_index is None or target_index is None:
-            return []
+            return [], False
 
         reference_matches = matches.get(reference_index, [])
         remaining_targets = list(matches.get(target_index, []))
         selected = []
+        had_unreadable_level = False
         for reference in sorted(reference_matches, key=lambda m: m["center"][1]):
             if self._stop_requested():
                 break
@@ -1076,14 +1134,76 @@ class MacroEngine:
             ]
             if not row_targets:
                 continue
-            if not self._row_level_allowed(action, reference):
-                continue
+            level = None
+            if apply_level_filter:
+                level_status, level = self._row_level_status(action, reference)
+                if level_status == _LEVEL_UNREADABLE:
+                    had_unreadable_level = True
+                    continue
+                if level_status != _LEVEL_ELIGIBLE:
+                    continue
             chosen = self._choose_row_target(reference, row_targets, action.target_choice)
-            selected.append(chosen)
+            selected.append({"reference": reference, "target": chosen, "level": level})
             remaining_targets.remove(chosen)
             if action.row_mode != "all":
                 break
-        return selected
+        return selected, had_unreadable_level
+
+    def _revalidate_row_selections(self, action: Action, original_selections, matches: dict):
+        """Re-find delayed selections near their original rows and re-check level limits."""
+        reference_index = action.match_condition_index
+        target_index = action.on_condition_index
+        if reference_index is None or target_index is None:
+            return []
+
+        references = list(matches.get(reference_index, []))
+        remaining_targets = list(matches.get(target_index, []))
+        revalidated = []
+        for original in original_selections:
+            if self._stop_requested():
+                break
+            original_reference = original["reference"]
+            original_y = original_reference["center"][1]
+            _scale_x, scale_y = self._match_geometry_scale(original_reference)
+            max_row_shift = max(
+                8,
+                round(min(30.0, max(8.0, action.row_tolerance * 0.5)) * scale_y),
+            )
+            nearby_references = sorted(
+                (
+                    reference
+                    for reference in references
+                    if abs(reference["center"][1] - original_y) <= max_row_shift
+                ),
+                key=lambda reference: abs(reference["center"][1] - original_y),
+            )
+            accepted = None
+            for reference in nearby_references:
+                ref_y = reference["center"][1]
+                _ref_scale_x, ref_scale_y = self._match_geometry_scale(reference)
+                row_tolerance = max(0, round(action.row_tolerance * ref_scale_y))
+                row_targets = [
+                    target
+                    for target in remaining_targets
+                    if abs(target["center"][1] - ref_y) <= row_tolerance
+                ]
+                if not row_targets:
+                    continue
+                level_status, level = self._row_level_status(action, reference)
+                if level_status != _LEVEL_ELIGIBLE:
+                    continue
+                chosen = self._choose_row_target(
+                    reference,
+                    row_targets,
+                    action.target_choice,
+                )
+                accepted = {"reference": reference, "target": chosen, "level": level}
+                remaining_targets.remove(chosen)
+                references.remove(reference)
+                break
+            if accepted is not None:
+                revalidated.append(accepted)
+        return revalidated
 
     @staticmethod
     def _match_geometry_scale(match):
@@ -1101,25 +1221,29 @@ class MacroEngine:
         return scale_x, scale_y
 
     def _row_level_allowed(self, action: Action, reference: dict):
+        status, _level = self._row_level_status(action, reference)
+        return status == _LEVEL_ELIGIBLE
+
+    def _row_level_status(self, action: Action, reference: dict):
         if self._stop_requested():
-            return False
+            return _LEVEL_UNREADABLE, None
         if action.min_level is None and action.max_level is None:
-            return True
+            return _LEVEL_ELIGIBLE, None
 
         level = self._read_level_for_row(action, reference)
         center = tuple(reference.get("center", ()))
         limits = self._level_limit_text(action)
         if level is None:
             self.log(f"  [skip] row center={center} level unread; cannot compare with {limits}")
-            return False
+            return _LEVEL_UNREADABLE, None
         if action.min_level is not None and level < action.min_level:
             self.log(f"  [skip] row center={center} level read {level}; {level} < min {action.min_level}")
-            return False
+            return _LEVEL_INELIGIBLE, level
         if action.max_level is not None and level > action.max_level:
             self.log(f"  [skip] row center={center} level read {level}; {level} > max {action.max_level}")
-            return False
+            return _LEVEL_INELIGIBLE, level
         self.log(f"  [level] row center={center} level read {level}; within {limits} => accepted")
-        return True
+        return _LEVEL_ELIGIBLE, level
 
     def _level_limit_text(self, action: Action):
         limits = []
@@ -1156,10 +1280,15 @@ class MacroEngine:
                 warned.add(warning_key)
 
         attempts = []
-        for attempt_index, rect in enumerate(self._level_crop_rects(action, reference, window_rect)):
+        provisional_attempts = []
+        crop_candidates = self._capture_level_crop_candidates(
+            action,
+            reference,
+            window_rect,
+        )
+        for attempt_index, (base_offset, rect, frame) in enumerate(crop_candidates):
             if self._stop_requested():
                 return None
-            frame, _, _ = self._grab(rect)
             ocr_result = self._read_level_with_ocr(frame)
             if self._stop_requested():
                 return None
@@ -1204,20 +1333,44 @@ class MacroEngine:
                     f"  [level] {ocr_result.engine} read {ocr_result.level}{confidence_text} "
                     f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}"
                 )
-                if fallback_level is not None and fallback_level != ocr_result.level:
+                fallback_confirms_ocr = fallback_level == ocr_result.level
+                if fallback_level is not None and not fallback_confirms_ocr:
                     if self._should_ignore_digit_fallback_conflict(ocr_result, fallback_level):
                         self.log(
                             f"  [level] ignored digit_fallback={fallback_level} for row center={center_text}; "
                             f"matches OCR level {ocr_result.level} with extra digit noise"
                         )
-                        if attempt_index:
-                            self.log(f"  [level] recovered with alternate crop rect={rect}")
-                        return ocr_result.level
-                    attempt["status"] = "conflict"
-                    continue
-                if attempt_index:
-                    self.log(f"  [level] recovered with alternate crop rect={rect}")
-                return ocr_result.level
+                    else:
+                        attempt["status"] = "conflict"
+                        continue
+
+                confidence = ocr_result.confidence or 0.0
+                if (
+                    confidence >= LevelOcrReader.STRONG_ACCEPT_CONFIDENCE
+                    or fallback_confirms_ocr
+                ):
+                    if fallback_confirms_ocr:
+                        self.log(
+                            f"  [level] OCR and digit fallback agree on {ocr_result.level}"
+                        )
+                    if attempt_index:
+                        self.log(f"  [level] recovered with alternate crop rect={rect}")
+                    self._remember_level_crop_offset(
+                        action,
+                        reference,
+                        window_rect,
+                        base_offset,
+                    )
+                    return ocr_result.level
+
+                attempt["status"] = "provisional"
+                attempt["base_offset"] = base_offset
+                provisional_attempts.append(attempt)
+                self.log(
+                    f"  [level] provisional OCR level {ocr_result.level} "
+                    f"conf={confidence:.2f}; checking alternate crops"
+                )
+                continue
 
             if ocr_result and ocr_result.error and not getattr(self, "_level_ocr_unavailable_logged", False):
                 self.log(f"  [warn] OCR unavailable: {ocr_result.error}")
@@ -1231,6 +1384,12 @@ class MacroEngine:
                 )
                 if attempt_index:
                     self.log(f"  [level] recovered with alternate crop rect={rect}")
+                self._remember_level_crop_offset(
+                    action,
+                    reference,
+                    window_rect,
+                    base_offset,
+                )
                 return fallback_level
 
             attempt["top_scores"] = self._level_read_top_scores(frame, digit_templates)
@@ -1247,6 +1406,58 @@ class MacroEngine:
             path = self._save_level_debug_crop(conflict_attempt["frame"], rect, reference)
             if path:
                 self.log(f"  [debug] saved level conflict crop: {path}")
+            return None
+
+        if provisional_attempts:
+            counts = {}
+            for attempt in provisional_attempts:
+                level = attempt["ocr_result"].level
+                counts[level] = counts.get(level, 0) + 1
+            best_count = max(counts.values())
+            winning_levels = [
+                level for level, count in counts.items() if count == best_count
+            ]
+            if len(winning_levels) == 1:
+                winning_level = winning_levels[0]
+                selected = max(
+                    (
+                        attempt
+                        for attempt in provisional_attempts
+                        if attempt["ocr_result"].level == winning_level
+                    ),
+                    key=lambda attempt: attempt["ocr_result"].confidence or 0.0,
+                )
+                selected_result = selected["ocr_result"]
+                selected_confidence = selected_result.confidence or 0.0
+                self.log(
+                    f"  [level] accepted provisional level {winning_level} "
+                    f"from {best_count} crop(s), best conf={selected_confidence:.2f}"
+                )
+                self._remember_level_crop_offset(
+                    action,
+                    reference,
+                    window_rect,
+                    selected["base_offset"],
+                )
+                return winning_level
+
+            levels_text = ", ".join(
+                f"{level} ({counts[level]} crop(s))"
+                for level in sorted(winning_levels)
+            )
+            self.log(
+                f"  [skip] conflicting provisional OCR levels for row "
+                f"center={center_text}: {levels_text}"
+            )
+            debug_attempt = self._best_level_debug_attempt(provisional_attempts)
+            if debug_attempt:
+                path = self._save_level_debug_crop(
+                    debug_attempt["frame"],
+                    debug_attempt["rect"],
+                    reference,
+                )
+                if path:
+                    self.log(f"  [debug] saved provisional conflict crop: {path}")
             return None
 
         debug_attempt = self._best_level_debug_attempt(attempts)
@@ -1356,13 +1567,24 @@ class MacroEngine:
         }
 
     def _level_crop_rects(self, action: Action, reference: dict, window_rect=None):
+        return [
+            rect
+            for _base_offset, rect in self._level_crop_candidates(
+                action,
+                reference,
+                window_rect,
+            )
+        ]
+
+    def _level_crop_candidates(self, action: Action, reference: dict, window_rect=None):
         roi = self._scaled_level_roi(action, reference)
         center_x, center_y = reference["center"]
         _scale_x, scale_y = self._match_geometry_scale(reference)
-        offsets = tuple(round(value * scale_y) for value in (0, 8, 16, 24, -8, -16))
-        rects = []
+        base_offsets = (0, 8, 16, 24, -8, -16)
+        candidates = []
         seen = set()
-        for y_offset in offsets:
+        for base_offset in base_offsets:
+            y_offset = round(base_offset * scale_y)
             left = int(center_x + roi[0])
             top = int(center_y + roi[1] + y_offset)
             width = int(roi[2])
@@ -1371,8 +1593,75 @@ class MacroEngine:
             if rect in seen:
                 continue
             seen.add(rect)
-            rects.append(rect)
-        return rects
+            candidates.append((base_offset, rect))
+        return candidates
+
+    def _level_offset_cache_key(self, action: Action, reference: dict, window_rect=None):
+        scale_x, scale_y = self._match_geometry_scale(reference)
+        window_size = None
+        if window_rect:
+            window_size = (int(window_rect[2]), int(window_rect[3]))
+        roi = tuple(action.level_roi or [-90, -45, 220, 100])
+        return (
+            roi,
+            window_size,
+            round(scale_x, 4),
+            round(scale_y, 4),
+        )
+
+    def _remember_level_crop_offset(
+        self,
+        action: Action,
+        reference: dict,
+        window_rect,
+        base_offset,
+    ):
+        cache = getattr(self, "_level_offset_cache", None)
+        if cache is None:
+            cache = {}
+            self._level_offset_cache = cache
+        if len(cache) >= 32:
+            cache.pop(next(iter(cache)))
+        cache[self._level_offset_cache_key(action, reference, window_rect)] = base_offset
+
+    def _capture_level_crop_candidates(
+        self,
+        action: Action,
+        reference: dict,
+        window_rect=None,
+    ):
+        candidates = self._level_crop_candidates(action, reference, window_rect)
+        if not candidates:
+            return []
+        cache = getattr(self, "_level_offset_cache", {})
+        preferred = cache.get(
+            self._level_offset_cache_key(action, reference, window_rect)
+        )
+        if preferred is not None:
+            candidates.sort(key=lambda item: item[0] != preferred)
+
+        union_left = min(rect[0] for _offset, rect in candidates)
+        union_top = min(rect[1] for _offset, rect in candidates)
+        union_right = max(rect[0] + rect[2] for _offset, rect in candidates)
+        union_bottom = max(rect[1] + rect[3] for _offset, rect in candidates)
+        union_rect = (
+            union_left,
+            union_top,
+            union_right - union_left,
+            union_bottom - union_top,
+        )
+        union_frame, _off_x, _off_y = self._grab(union_rect)
+        result = []
+        for base_offset, rect in candidates:
+            left = rect[0] - union_left
+            top = rect[1] - union_top
+            right = left + rect[2]
+            bottom = top + rect[3]
+            frame = union_frame[top:bottom, left:right]
+            if frame.size == 0 or frame.shape[0] != rect[3] or frame.shape[1] != rect[2]:
+                continue
+            result.append((base_offset, rect, frame))
+        return result
 
     def _scaled_level_roi(self, action: Action, reference: dict):
         roi = action.level_roi or [-90, -45, 220, 100]
