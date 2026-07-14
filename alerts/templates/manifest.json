@@ -121,25 +121,12 @@
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "name": "#2212",
-      "file": "template_15.png",
-      "threshold": 0.9,
+      "file": "template_16.png",
+      "threshold": 0.95,
       "match_mode": "colored_text",
-      "region": [
-        139,
-        986,
-        580,
-        93
-      ],
-      "region_mode": "window",
-      "region_ratio": [
-        0.07239583333333334,
-        0.912962962962963,
-        0.3020833333333333,
-        0.08611111111111111
-      ],
-      "region_window_size": [
+      "template_reference_size": [
         1920,
         1080
       ]

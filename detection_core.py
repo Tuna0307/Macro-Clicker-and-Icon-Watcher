@@ -448,6 +448,85 @@ def _text_shape_iou(screen, template, location):
     return (intersection / union) if union else -1.0
 
 
+def _text_column_runs(template):
+    """Return visible glyph runs separated by blank mask columns."""
+    occupied = np.any(template > 127, axis=0)
+    runs = []
+    start = None
+    for index, visible in enumerate(occupied):
+        if visible and start is None:
+            start = index
+        if start is not None and (not visible or index == len(occupied) - 1):
+            end = index if not visible else index + 1
+            runs.append((start, end))
+            start = None
+    return runs
+
+
+def _shifted_glyph_iou(screen, expected, x, y, max_shift):
+    height, width = expected.shape[:2]
+    screen_height, screen_width = screen.shape[:2]
+    best = -1.0
+    for offset_y in range(-max_shift, max_shift + 1):
+        top = y + offset_y
+        if top < 0 or top + height > screen_height:
+            continue
+        for offset_x in range(-max_shift, max_shift + 1):
+            left = x + offset_x
+            if left < 0 or left + width > screen_width:
+                continue
+            candidate = screen[top:top + height, left:left + width] > 127
+            intersection = int(np.count_nonzero(candidate & expected))
+            union = int(np.count_nonzero(candidate | expected))
+            if union:
+                best = max(best, intersection / union)
+    return best
+
+
+def _text_shape_score(screen, template, location):
+    """Score the full text and reject a single substituted glyph.
+
+    A whole-string IoU can rate ``#2210`` highly against ``#2212`` because
+    four of the five glyphs are identical.  For text with separable glyphs,
+    compare every glyph locally and require the weakest one to be consistent
+    with the typical glyph quality.  This preserves tolerance for uniform
+    anti-aliasing/background changes while making one wrong character
+    decisive.
+    """
+    full_score = _text_shape_iou(screen, template, location)
+    runs = _text_column_runs(template)
+    if full_score < 0.0 or len(runs) < 3:
+        return full_score
+
+    x, y = location
+    expected_mask = template > 127
+    max_shift = max(1, min(2, round(template.shape[0] * 0.10)))
+    glyph_scores = []
+    for left, right in runs:
+        expected = expected_mask[:, left:right]
+        score = _shifted_glyph_iou(
+            screen,
+            expected,
+            x + left,
+            y,
+            max_shift,
+        )
+        if score >= 0.0:
+            glyph_scores.append(score)
+    if len(glyph_scores) < 3:
+        return full_score
+
+    typical_score = float(np.median(glyph_scores))
+    if typical_score <= 1e-6:
+        return -1.0
+    weakest_consistency = min(glyph_scores) / typical_score
+    # Exact text rendered on a different translucent background commonly has
+    # a whole-shape IoU around 0.8. Normalize that expected variation, then
+    # let the weakest glyph veto an otherwise similar string.
+    normalized_full_score = min(1.0, full_score / 0.80)
+    return min(normalized_full_score, weakest_consistency)
+
+
 def _score_map(screen, template, low_variance):
     if low_variance:
         raw = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF)
@@ -483,7 +562,7 @@ def _best_variant_match(screen, template, low_variance, text_shape=False):
         for index in indices:
             y, x = np.unravel_index(int(index), scores.shape)
             location = (int(x), int(y))
-            shape_score = _text_shape_iou(screen, template, location)
+            shape_score = _text_shape_score(screen, template, location)
             correlation = float(scores[y, x])
             if shape_score > best_score or (
                 abs(shape_score - best_score) <= 1e-9

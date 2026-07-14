@@ -179,6 +179,22 @@ class SharedMatcherTests(unittest.TestCase):
         self.assertGreaterEqual(score("#2212"), 0.95)
         self.assertLess(score("#2217"), 0.9)
 
+    def test_colored_text_rejects_one_wrong_glyph_even_when_rest_is_exact(self):
+        template = self._text_tile("#2212", (54, 111, 99))
+
+        def score(text):
+            frame = np.full((80, 260, 3), (54, 111, 99), dtype=np.uint8)
+            frame[25:57, 70:200] = self._text_tile(text, (54, 111, 99))
+            return core.match_template_multiscale(
+                frame,
+                template,
+                scales=(1.0,),
+                match_mode=core.MATCH_MODE_TEXT,
+            )[0]
+
+        self.assertGreaterEqual(score("#2212"), 0.95)
+        self.assertLess(score("#2210"), 0.9)
+
     def test_collect_all_keeps_targets_at_different_scales(self):
         rng = np.random.default_rng(137)
         template = rng.integers(0, 256, (20, 20, 3), dtype=np.uint8)
