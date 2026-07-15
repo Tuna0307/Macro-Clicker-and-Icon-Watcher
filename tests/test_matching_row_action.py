@@ -1,15 +1,136 @@
 import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
-from engine import MacroEngine
-from level_ocr import LevelOcrResult
-from models import Action, ImageCondition, Scenario, Step
+from macro_clicker.engine import MacroEngine
+from macro_clicker.level_ocr import LevelOcrResult
+from macro_clicker.models import Action, ImageCondition, Scenario, Step
 
 
 class MatchingRowActionTests(unittest.TestCase):
+    def test_matching_row_anchors_and_level_crops_share_one_atomic_snapshot(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="atomic", monitor_index=1)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._all_match_indices = {}
+        engine._evaluate_uses_frame_cache = True
+        engine._level_offset_cache = {}
+        engine._window_rect_lookup_cache = None
+        engine._matching_row_snapshot = None
+        captures = []
+
+        def grab(region):
+            captures.append(region)
+            generation = len(captures)
+            return (
+                np.full((region[3], region[2], 3), generation, dtype=np.uint8),
+                region[0],
+                region[1],
+            )
+
+        def evaluate(index, _condition, frame, _off_x, _off_y, collect_all):
+            self.assertTrue(collect_all)
+            self.assertEqual(int(frame[0, 0, 0]), 1)
+            center = (100, 100) if index == 0 else (250, 100)
+            return True, [{"center": center, "box": (*center, *center)}]
+
+        engine._grab = grab
+        engine._resolve_capture_region = lambda condition: condition.region
+        engine._evaluate_template_condition = evaluate
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+            level_roi=[-20, -10, 40, 20],
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="mob.png", region=[0, 0, 200, 200]),
+                ImageCondition(template_path="join.png", region=[200, 0, 100, 200]),
+            ],
+            actions=[action],
+        )
+
+        refreshed = engine._refresh_click_matching_row_matches(step, action)
+        self.assertIsNotNone(refreshed)
+        _points, matches = refreshed
+        candidates = engine._capture_level_crop_candidates(
+            action,
+            matches[0][0],
+        )
+
+        self.assertEqual(len(captures), 1)
+        capture_left, capture_top, capture_width, capture_height = captures[0]
+        self.assertLessEqual(capture_left, 0)
+        self.assertLessEqual(capture_top, 0)
+        self.assertGreaterEqual(capture_left + capture_width, 300)
+        self.assertGreaterEqual(capture_top + capture_height, 200)
+        self.assertEqual(len(candidates), 6)
+        self.assertTrue(
+            all(np.all(frame == 1) for _offset, _rect, frame in candidates)
+        )
+
+    def test_atomic_snapshot_includes_level_roi_outside_tight_search_region(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="tight atomic", monitor_index=1)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._all_match_indices = {}
+        engine._evaluate_uses_frame_cache = True
+        engine._level_offset_cache = {}
+        engine._window_rect_lookup_cache = None
+        engine._matching_row_snapshot = None
+        captures = []
+
+        def grab(region):
+            captures.append(region)
+            return (
+                np.full((region[3], region[2], 3), len(captures), dtype=np.uint8),
+                region[0],
+                region[1],
+            )
+
+        def evaluate(index, _condition, frame, _off_x, _off_y, collect_all):
+            self.assertTrue(collect_all)
+            self.assertEqual(int(frame[0, 0, 0]), 1)
+            center = (110, 110) if index == 0 else (210, 110)
+            return True, [{"center": center, "box": (*center, *center)}]
+
+        engine._grab = grab
+        engine._resolve_capture_region = lambda condition: condition.region
+        engine._evaluate_template_condition = evaluate
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+            level_roi=[0, 30, 20, 20],
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="mob.png", region=[100, 100, 20, 20]),
+                ImageCondition(template_path="join.png", region=[200, 100, 20, 20]),
+            ],
+            actions=[action],
+        )
+
+        refreshed = engine._refresh_click_matching_row_matches(step, action)
+        self.assertIsNotNone(refreshed)
+        _points, matches = refreshed
+        candidates = engine._capture_level_crop_candidates(action, matches[0][0])
+
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(len(candidates), 6)
+        self.assertTrue(
+            all(np.all(frame == 1) for _offset, _rect, frame in candidates)
+        )
+
     def test_row_tolerance_scales_with_reference_match_geometry(self):
         engine = object.__new__(MacroEngine)
         action = Action(
@@ -154,7 +275,7 @@ class MatchingRowActionTests(unittest.TestCase):
                     row_tolerance=40,
                 )
             ],
-            cooldown=0.0,
+            cooldown=10.0,
             repeatable=True,
         )
         engine.scenario.steps = [step]
@@ -343,8 +464,9 @@ class MatchingRowActionTests(unittest.TestCase):
                     on_condition_index=1,
                     row_tolerance=40,
                 ),
+                Action(type="click", x=10, y=20),
             ],
-            cooldown=0.0,
+            cooldown=10.0,
             repeatable=True,
         )
         engine.scenario.steps = [step]
@@ -354,6 +476,92 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(clicked, [])
         self.assertEqual(len(evaluations), 2)
         self.assertTrue(any("conditions changed before row click" in message for message in logs))
+        self.assertEqual(engine._last_fired["join"], 0.0)
+
+    def test_conditions_changed_during_delay_abort_remaining_actions_without_cooldown(self):
+        clicked = []
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="war")
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._last_fired = {"Joining": 0.0}
+        engine._evaluate_uses_frame_cache = False
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        matches = {0: [reference], 1: [target]}
+        engine._evaluate_step = lambda step: (
+            True,
+            {0: reference["center"], 1: target["center"]},
+            matches,
+        )
+        refreshed = iter((({0: reference["center"], 1: target["center"]}, matches), None))
+        engine._refresh_click_matching_row_matches = lambda step, action: next(refreshed)
+        engine._read_level_for_row = lambda action, row: 45
+        engine._record_matching_row_diagnostic = lambda *args, **kwargs: None
+        engine._sleep_until_stop = lambda seconds: False
+        engine._click_point = lambda x, y, button: clicked.append((x, y, button))
+        engine.log = lambda _message: None
+        step = Step(
+            name="Joining",
+            conditions=[ImageCondition(template_path="mob.png")],
+            actions=[
+                Action(
+                    type="click_matching_row",
+                    match_condition_index=0,
+                    on_condition_index=1,
+                    max_level=60,
+                    pre_click_delay=1.5,
+                ),
+                Action(type="click", x=10, y=20),
+            ],
+            cooldown=10.0,
+        )
+        engine.scenario.steps = [step]
+
+        engine._cycle()
+
+        self.assertEqual(clicked, [])
+        self.assertEqual(engine._last_fired["Joining"], 0.0)
+
+    def test_row_changed_during_delay_aborts_remaining_actions_without_cooldown(self):
+        clicked = []
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="war")
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._last_fired = {"Joining": 0.0}
+        engine._evaluate_uses_frame_cache = False
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        matches = {0: [reference], 1: [target]}
+        refreshed = ({0: reference["center"], 1: target["center"]}, matches)
+        engine._evaluate_step = lambda step: (True, refreshed[0], matches)
+        engine._refresh_click_matching_row_matches = lambda step, action: refreshed
+        engine._read_level_for_row = lambda action, row: 45
+        engine._revalidate_row_selections = lambda action, selections, new_matches: []
+        engine._record_matching_row_diagnostic = lambda *args, **kwargs: None
+        engine._sleep_until_stop = lambda seconds: False
+        engine._click_point = lambda x, y, button: clicked.append((x, y, button))
+        engine.log = lambda _message: None
+        step = Step(
+            name="Joining",
+            conditions=[ImageCondition(template_path="mob.png")],
+            actions=[
+                Action(
+                    type="click_matching_row",
+                    match_condition_index=0,
+                    on_condition_index=1,
+                    max_level=60,
+                    pre_click_delay=1.5,
+                ),
+                Action(type="click", x=10, y=20),
+            ],
+            cooldown=10.0,
+        )
+        engine.scenario.steps = [step]
+
+        engine._cycle()
+
+        self.assertEqual(clicked, [])
+        self.assertEqual(engine._last_fired["Joining"], 0.0)
 
     def test_matching_row_action_does_not_read_level_for_rows_without_targets(self):
         clicked = []
@@ -484,15 +692,22 @@ class MatchingRowActionTests(unittest.TestCase):
                 ImageCondition(template_path="templates/Join.png"),
                 ImageCondition(template_path="templates/BackButton.png"),
             ],
-            actions=[Action(
-                type="click_matching_row",
-                match_condition_index=0,
-                on_condition_index=1,
-                max_level=60,
-                no_match_condition_index=2,
-                no_match_disable_steps=["Joining", "Attack Confirm"],
-            )],
-            cooldown=0.0,
+            actions=[
+                Action(
+                    type="click_matching_row",
+                    match_condition_index=0,
+                    on_condition_index=1,
+                    max_level=60,
+                    no_match_condition_index=2,
+                    no_match_disable_steps=["Joining", "Attack Confirm"],
+                ),
+                Action(
+                    type="set_step",
+                    step_name="Attack Confirm",
+                    set_enabled=False,
+                ),
+            ],
+            cooldown=10.0,
         )
         attack = Step(name="Attack Confirm", enabled=True)
         engine.scenario.steps = [step, attack]
@@ -502,6 +717,7 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(clicked, [])
         self.assertTrue(step.enabled)
         self.assertTrue(attack.enabled)
+        self.assertEqual(engine._last_fired["Joining"], 0.0)
         self.assertTrue(any("level unreadable" in message for message in logs))
         self.assertFalse(any("[no-match]" in message for message in logs))
 
@@ -548,10 +764,44 @@ class MatchingRowActionTests(unittest.TestCase):
 
         engine._cycle()
 
-        self.assertEqual(
-            events,
-            ["level", ("wait", 1.5), "level", ("click", 260, 120, "left")],
+        self.assertEqual(events[0], "level")
+        self.assertEqual(events[1][0], "wait")
+        self.assertAlmostEqual(events[1][1], 1.5, places=3)
+        self.assertEqual(events[2:], ["level", ("click", 260, 120, "left")])
+
+    def test_pre_click_delay_subtracts_diagnostic_work_even_when_event_is_deduplicated(self):
+        waits = []
+        engine = object.__new__(MacroEngine)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        refreshed = (
+            {0: reference["center"], 1: target["center"]},
+            {0: [reference], 1: [target]},
         )
+        engine._refresh_click_matching_row_matches = lambda step, action: refreshed
+        engine._read_level_for_row = lambda action, row: 45
+        engine._record_matching_row_diagnostic = lambda *args, **kwargs: None
+        engine._sleep_until_stop = lambda seconds: waits.append(seconds) or False
+        engine._click_point = lambda x, y, button: True
+        engine.log = lambda message: None
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+            pre_click_delay=1.5,
+        )
+        step = Step(name="Joining", actions=[action])
+
+        with patch(
+            "macro_clicker.engine.time.monotonic",
+            side_effect=(10.0, 10.4),
+        ):
+            engine._run_action(step, action, {}, {})
+
+        self.assertEqual(len(waits), 1)
+        self.assertAlmostEqual(waits[0], 1.1)
 
     def test_level_filter_logs_unread_as_not_compared_to_limits(self):
         logs = []
@@ -578,7 +828,7 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertTrue(any("read 30" in message for message in logs))
         self.assertTrue(any("30 > max 25" in message for message in logs))
 
-    def test_failed_level_read_logs_and_saves_debug_crop(self):
+    def test_failed_level_read_saves_curated_crop_only_after_event_is_accepted(self):
         logs = []
         saved = []
         engine = object.__new__(MacroEngine)
@@ -595,7 +845,12 @@ class MatchingRowActionTests(unittest.TestCase):
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
         engine._read_level_from_frame = lambda frame, templates, min_digits=1: None
         engine._level_read_top_scores = lambda frame, templates: [("2", 0.42)]
-        engine._save_level_debug_crop = lambda frame, rect, reference: saved.append((frame.shape, rect, reference["center"]))
+        engine._submit_rally_diagnostic = lambda *args, **kwargs: "queued-event"
+        engine._save_level_debug_crop = (
+            lambda frame, rect, reference, **kwargs: saved.append(
+                (frame.shape, rect, reference["center"])
+            )
+        )
         action = Action(
             type="click_matching_row",
             min_level=25,
@@ -609,6 +864,44 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertTrue(any("unread from crop rect=(160, 280, 30, 40)" in message for message in logs))
         self.assertTrue(any("top digit scores: 2=0.42" in message for message in logs))
         self.assertEqual(saved, [((40, 30, 3), (160, 280, 30, 40), (150, 260))])
+
+    def test_level_debug_crops_are_disabled_rate_limited_and_bounded(self):
+        frame = np.zeros((20, 30, 3), dtype=np.uint8)
+        rect = (10, 20, 30, 20)
+        reference = {"center": (100, 200)}
+        engine = object.__new__(MacroEngine)
+        engine.log = lambda _message: None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            debug_dir = os.path.join(tmp, "level_debug")
+            with patch("macro_clicker.rally_matching.LEVEL_DEBUG_DIR", debug_dir):
+                engine.diagnostics_enabled = False
+                self.assertIsNone(
+                    engine._save_level_debug_crop(frame, rect, reference)
+                )
+                self.assertFalse(os.path.exists(debug_dir))
+
+                engine.diagnostics_enabled = True
+                with patch(
+                    "macro_clicker.rally_matching.time.monotonic",
+                    side_effect=[1000.0, 1001.0],
+                ):
+                    first = engine._save_level_debug_crop(frame, rect, reference)
+                    second = engine._save_level_debug_crop(frame, rect, reference)
+                self.assertIsNotNone(first)
+                self.assertIsNone(second)
+                self.assertEqual(len(os.listdir(debug_dir)), 1)
+
+                for index in range(260):
+                    path = os.path.join(debug_dir, f"level_old_{index:03d}.png")
+                    with open(path, "wb") as handle:
+                        handle.write(b"old")
+                engine._prune_level_debug_crops()
+                remaining = [
+                    name for name in os.listdir(debug_dir)
+                    if name.startswith("level_") and name.endswith(".png")
+                ]
+                self.assertLessEqual(len(remaining), 200)
 
     def test_level_read_retries_shifted_crop_when_first_crop_misses_text(self):
         logs = []
@@ -781,6 +1074,50 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(len(reads), 6)
         self.assertTrue(any(
             "accepted provisional level 23 from 6 crop(s)" in message
+            for message in logs
+        ))
+
+    def test_single_provisional_ocr_result_is_not_consensus(self):
+        logs = []
+        results = iter((45, None, None, None, None, None))
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="war")
+        engine.log = logs.append
+        engine._get_target_window_rect = lambda: None
+        engine._grab = lambda region: (
+            np.zeros((region[3], region[2], 3), dtype=np.uint8),
+            region[0],
+            region[1],
+        )
+        engine._load_digit_templates = lambda folder: {}
+
+        class Reader:
+            def read_level(self, frame):
+                level = next(results)
+                if level is None:
+                    return LevelOcrResult(None, engine="fakeocr")
+                return LevelOcrResult(
+                    level,
+                    text=f"Lv.{level}",
+                    confidence=0.82,
+                    engine="fakeocr",
+                )
+
+        engine._level_ocr_reader = Reader()
+        engine._level_read_top_scores = lambda frame, templates: []
+        engine._save_level_debug_crop = lambda frame, rect, reference: None
+        action = Action(
+            type="click_matching_row",
+            max_level=60,
+            level_roi=[10, 20, 30, 40],
+            level_min_digits=2,
+        )
+
+        level = engine._read_level_for_row(action, {"center": (100, 100)})
+
+        self.assertIsNone(level)
+        self.assertTrue(any(
+            "only one provisional OCR crop" in message
             for message in logs
         ))
 

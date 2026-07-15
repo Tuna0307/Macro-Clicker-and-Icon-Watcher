@@ -3,8 +3,8 @@ import os
 import tempfile
 import unittest
 
-from detection_core import MATCH_MODE_STATIC, MATCH_MODE_TEXT
-from models import (
+from macro_clicker.detection_core import MATCH_MODE_STATIC, MATCH_MODE_TEXT
+from macro_clicker.models import (
     Action,
     ImageCondition,
     Scenario,
@@ -76,6 +76,32 @@ class ModelValidationTests(unittest.TestCase):
 
         self.assertEqual(restored.steps[0].conditions[0], condition)
 
+    def test_region_ratio_rejects_text_values_before_runtime_coordinate_math(self):
+        with self.assertRaisesRegex(ValueError, "region_ratio"):
+            ImageCondition.from_dict({
+                "template_path": "templates/icon.png",
+                "region": [10, 20, 30, 40],
+                "region_mode": "monitor",
+                "region_ratio": ["0.1", "0.2", "0.3", "0.4"],
+                "region_window_size": [100, 100],
+            })
+
+        scenario = Scenario(
+            name="Invalid ratio",
+            steps=[Step(
+                name="One",
+                conditions=[ImageCondition(
+                    template_path="templates/icon.png",
+                    region=[10, 20, 30, 40],
+                    region_mode="monitor",
+                    region_ratio=["0.1", "0.2", "0.3", "0.4"],
+                    region_window_size=[100, 100],
+                )],
+            )],
+        )
+        with self.assertRaisesRegex(ValueError, "region_ratio"):
+            validate_scenario(scenario)
+
     def test_unknown_action_type_is_rejected_instead_of_becoming_a_click(self):
         with self.assertRaisesRegex(ValueError, "unsupported action type"):
             Action.from_dict({"type": "wa1t", "seconds": 1})
@@ -124,6 +150,22 @@ class ModelValidationTests(unittest.TestCase):
 
         scenario.steps[0].actions = [Action(type="set_step", step_name="Missing")]
         with self.assertRaisesRegex(ValueError, "missing step"):
+            validate_scenario(scenario)
+
+    def test_set_step_enabled_flag_must_be_boolean(self):
+        scenario = Scenario(
+            name="Invalid set flag",
+            steps=[Step(
+                name="One",
+                actions=[Action(
+                    type="set_step",
+                    step_name="One",
+                    set_enabled="false",
+                )],
+            )],
+        )
+
+        with self.assertRaisesRegex(ValueError, "set_enabled must be a boolean"):
             validate_scenario(scenario)
 
     def test_click_cannot_mix_fixed_and_condition_targets(self):

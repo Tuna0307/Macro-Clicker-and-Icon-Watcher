@@ -5,11 +5,17 @@ import unittest
 import cv2
 import numpy as np
 
-import alert_watcher
-import detection_core
-import engine as engine_module
-from engine import MacroEngine
-from models import ImageCondition, Scenario, Step, load_scenario, project_path
+from macro_clicker import alert_watcher, detection_core
+from macro_clicker import engine as engine_module
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import (
+    ImageCondition,
+    Scenario,
+    Step,
+    load_scenario,
+    project_path,
+)
+from macro_clicker.project_paths import PROJECT_ROOT
 
 
 class DetectionCompatibilityTests(unittest.TestCase):
@@ -113,11 +119,7 @@ class DetectionCompatibilityTests(unittest.TestCase):
 
     def test_loading_live_data_does_not_rewrite_user_files(self):
         manifest = alert_watcher.MANIFEST_PATH
-        scenario = os.path.join(
-            os.path.dirname(engine_module.__file__),
-            "scenarios",
-            "Rally Gold Mob.json",
-        )
+        scenario = os.path.join(PROJECT_ROOT, "scenarios", "Rally Gold Mob.json")
         before_manifest = open(manifest, "rb").read()
         before_scenario = open(scenario, "rb").read()
 

@@ -18,8 +18,8 @@ from typing import Optional
 import mss
 from PIL import Image, ImageTk
 
-from detection_core import capture_bgr, monitor_rect
-from models import TEMPLATES_DIR
+from .detection_core import capture_bgr, monitor_rect
+from .models import TEMPLATES_DIR
 
 
 def _validated_monitor(monitors, monitor_index):
@@ -43,6 +43,14 @@ def _grab_full_screenshot(monitor_index=1):
         img = Image.fromarray(frame[:, :, ::-1])
         left, top, _width, _height = monitor_rect(monitor)
         return img, left, top
+
+
+def _absolute_overlay_geometry(width, height, left, top):
+    """Return Tk geometry using absolute coordinates, including negatives."""
+    # Tk interprets ``-1920`` as an offset from the right edge.  Prefixing the
+    # signed coordinate with ``+`` (``+-1920``) places the window at x=-1920,
+    # which is required for monitors positioned left of the primary display.
+    return f"{width}x{height}+{left}+{top}"
 
 
 def _hide_window(window):
@@ -100,7 +108,12 @@ def select_region(root, monitor_index=1):
         overlay = tk.Toplevel(root)
         overlay.overrideredirect(True)
         overlay.geometry(
-            f"{screenshot.width}x{screenshot.height}{mon_left:+d}{mon_top:+d}"
+            _absolute_overlay_geometry(
+                screenshot.width,
+                screenshot.height,
+                mon_left,
+                mon_top,
+            )
         )
         overlay.attributes("-topmost", True)
         overlay.configure(cursor="cross")

@@ -13,7 +13,7 @@ packages do not conflict with packages installed for other programs:
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python app.py
+.\.venv\Scripts\python -m macro_clicker
 ```
 
 The dependency ranges are bounded to compatible major versions. On Windows,
@@ -29,8 +29,26 @@ For development checks:
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python -m pytest -q
 .\.venv\Scripts\python -m ruff check .
-.\.venv\Scripts\python -m mypy detection_core.py app.py app_helpers.py alert_watcher.py capture_tool.py engine.py level_ocr.py models.py window_locator.py log_maintenance.py level_debug_tester.py runtime_paths.py
+.\.venv\Scripts\python -m mypy macro_clicker tools
 ```
+
+## Project layout
+
+```text
+macro_clicker/   Application, detection, OCR, diagnostics, and UI code
+tools/           Standalone developer and OCR-tuning utilities
+tests/           Automated tests
+templates/       Macro image assets and level digit references
+scenarios/       Saved macro scenarios
+alerts/          Icon Alert settings and templates
+docs/            Architecture and maintenance notes
+launcher.pyw     Windows GUI entry point used by the launch scripts
+```
+
+Generated caches and runtime logs do not belong in the repository. Runtime
+logs and diagnostic captures are written to the per-user data directory shown
+below. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module ownership and
+safe extension points.
 
 On Windows, run your terminal as Administrator if your game runs
 elevated -- otherwise clicks/keys sent by `pyautogui`/`keyboard` won't
@@ -60,7 +78,7 @@ behavior.
 
 ## Shared detection foundation
 
-Macro Builder and Icon Alerts use the same `detection_core.py` implementation
+Macro Builder and Icon Alerts use the same `macro_clicker/detection_core.py` implementation
 for DPI-aware BGR screen captures, monitor selection, window/monitor-relative
 regions, template scaling, colored-text masking, rotations, low-variance
 safety, bounded variant preparation, coarse search, and match scoring.
@@ -133,6 +151,13 @@ click_matching_row
 This clicks the rightmost matching target in each valid row, top to
 bottom.
 
+For level-filtered rows, the mob anchors, join targets, and all six OCR crop
+offsets come from one atomic screenshot. The snapshot is expanded to include
+the level area even when the mob search region itself is tightly cropped. If
+the level is unreadable, or the selected row changes during the configured
+pre-click delay, later actions in that step are aborted and the step retries on
+the next poll without consuming its cooldown.
+
 ## Concepts
 
 - **Scenario** -- a named, saved set of Steps (`scenarios/*.json`).
@@ -170,7 +195,7 @@ Alert templates and Macro Builder conditions use the same detection types:
 
 The Icon Alerts **Grayscale pictures** option applies to its picture templates;
 Macro Builder stores the same choice per condition. New templates and old Macro
-conditions default to **Static picture**. Older alert manifests without a
+  conditions default to **Static picture**. Older alert manifests without a
 detection type retain the previous animated/rotating behavior.
 
 ## Tips
@@ -186,3 +211,42 @@ detection type retain the previous animated/rotating behavior.
 - The kill-switch key (default F12) is required before a scenario starts and
   is checked between captures, matches, and every action, even while the game
   has focus.
+
+## Diagnostic evidence
+
+Macro Builder scenarios collect bounded diagnostic evidence by default. The
+setting can be disabled in **Scenario settings**. Icon Alerts does not collect
+screenshots. Events are stored under:
+
+```text
+%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs\diagnostics
+```
+
+The collector uses a selective policy so a long-running macro does not save a
+full screenshot for every normal check:
+
+- Unread OCR, OCR conflicts, fallback-only reads, accepted OCR below 95%, row
+  changes, and template/row near misses keep full evidence.
+- A repeated `no eligible row` result is captured at most once every five
+  minutes.
+- Strong successful reads (95% or higher) are sampled at most once every 30
+  minutes.
+- Visually similar screenshots are deduplicated for five minutes.
+
+Full events are split into `critical` and `samples` directories. Each contains
+`metadata.json`, a JPEG annotated context screenshot, and lossless PNG OCR
+crops. Rally records include row and target matches, template scores, OCR
+text/confidence, digit-fallback results, all crop offsets, level limits, and the
+final decision.
+
+Every rally decision is also appended without screenshots to the rotating
+`decisions.jsonl` log. It is limited to 5 MB plus three backups. Screenshot
+retention keeps up to 175 critical events and 25 routine success samples, with
+the existing overall limits of 200 events, seven days, and 500 MB. Automatic
+labels are only diagnostic classifications; determining whether an event is
+truly a false positive or false negative still requires reviewing the evidence.
+
+For digit-template tuning, accepted unread/conflict events may also place one
+curated crop in `logs\level_debug`. This flat collection is limited to one crop
+per row/decision every 15 minutes and is continuously capped at 200 files and
+seven days. It is disabled together with scenario diagnostics.

@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from level_ocr import LevelOcrReader
+from macro_clicker.level_ocr import LevelOcrReader
 
 
 class LevelOcrReaderTests(unittest.TestCase):
@@ -18,6 +18,15 @@ class LevelOcrReaderTests(unittest.TestCase):
         self.assertEqual(reader._extract_level("LV-407"), 40)
         self.assertEqual(reader._extract_level("ALV-.4070"), 40)
         self.assertEqual(reader._extract_level("L.500"), 50)
+
+    def test_hyphenated_real_three_digit_levels_are_not_truncated(self):
+        reader = LevelOcrReader()
+
+        self.assertEqual(reader._extract_level("Lv-105"), 105)
+        self.assertEqual(reader._extract_level("Lv-150"), 150)
+        self.assertEqual(reader._extract_level("Lv-060"), 60)
+        self.assertEqual(reader._extract_level("Lv-300"), 300)
+        self.assertEqual(reader._extract_level("Lv-301"), 30)
 
     def test_extracts_last_number_when_prefix_is_missing(self):
         reader = LevelOcrReader()

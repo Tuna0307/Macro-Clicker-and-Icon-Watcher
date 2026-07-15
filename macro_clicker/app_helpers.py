@@ -3,8 +3,7 @@ import os
 import shutil
 import tempfile
 
-from models import project_path
-
+from .models import project_path
 
 CONDITION_REFERENCE_FIELDS = (
     "on_condition_index",
@@ -141,10 +140,11 @@ def find_case_insensitive_name(names, candidate, exclude_name=None):
 
 
 def _unique_step_name(base_name, existing_names):
-    if base_name not in existing_names:
+    existing_folded = {str(name).casefold() for name in existing_names}
+    if base_name.casefold() not in existing_folded:
         return base_name
     counter = 2
-    while f"{base_name}_{counter}" in existing_names:
+    while f"{base_name}_{counter}".casefold() in existing_folded:
         counter += 1
     return f"{base_name}_{counter}"
 

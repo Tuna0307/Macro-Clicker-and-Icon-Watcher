@@ -5,9 +5,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import engine as engine_module
-from engine import MacroEngine
-from models import Action, ImageCondition, Scenario, Step
+from macro_clicker import engine as engine_module
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import Action, ImageCondition, Scenario, Step
 
 
 class EngineSafetyTests(unittest.TestCase):

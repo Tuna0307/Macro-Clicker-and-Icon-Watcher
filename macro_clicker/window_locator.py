@@ -1,6 +1,5 @@
 from typing import Callable, Optional, Sequence, Tuple
 
-
 Rect = Tuple[int, int, int, int]
 
 

@@ -8,12 +8,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# Running this file directly places tools/ rather than the repository root on
+# sys.path. Add the root only for that invocation; module imports remain clean.
+if __package__ in {None, ""}:
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import cv2
 
-from engine import MacroEngine
-from models import TEMPLATES_DIR
-from runtime_paths import LEVEL_DEBUG_DIR
-
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import TEMPLATES_DIR
+from macro_clicker.runtime_paths import LEVEL_DEBUG_DIR
 
 DEFAULT_CROP_DIR = Path(LEVEL_DEBUG_DIR)
 DEFAULT_LABELS = DEFAULT_CROP_DIR / "labels.json"

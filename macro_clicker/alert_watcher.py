@@ -25,25 +25,35 @@ import os
 import queue
 import struct
 import sys
-import tempfile
 import threading
 import time
 import tkinter as tk
-from dataclasses import asdict, dataclass
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 import cv2
 import mss
 import numpy as np
 from PIL import Image, ImageTk
 
-from detection_core import (
+from .alert_settings import (
+    DEFAULT_ALERT_VOLUME,
+    DEFAULT_COOLDOWN_SEC,
+    DEFAULT_START_STOP_HOTKEY,
+    DEFAULT_TEST_ALERT_HOTKEY,
+    SETTINGS_PATH,
+    AppSettings,
+    load_settings,
+    save_settings,
+)
+from .alert_ui import AlertPopup, RegionOverlay, ScreenRegionPicker
+from .atomic_io import atomic_write_json as _atomic_write_json
+from .atomic_io import atomic_write_png as _atomic_write_png
+from .detection_core import (
     DEFAULT_NEW_MATCH_MODE,
     DEFAULT_ROTATIONS,
     DEFAULT_SCALES,
     DETECTION_UNAVAILABLE,
-    LEGACY_ALERT_MATCH_MODE as LEGACY_MATCH_MODE,
     MATCH_MODE_ANIMATED,
     MATCH_MODE_BY_LABEL,
     MATCH_MODE_LABELS,
@@ -60,8 +70,20 @@ from detection_core import (
     normalize_match_mode,
     prepare_template_variants,
 )
-from runtime_paths import INSTANCE_LOCK_PATH
-from window_locator import (
+from .detection_core import (
+    LEGACY_ALERT_MATCH_MODE as LEGACY_MATCH_MODE,
+)
+from .project_paths import (
+    ALERT_MANIFEST_PATH,
+    ALERT_TEMPLATES_DIR,
+    PROJECT_ROOT,
+)
+from .project_paths import (
+    ALERTS_DIR as ALERTS_PATH,
+)
+from .runtime_paths import INSTANCE_LOCK_PATH
+from .ui_components import COLORS, CollapsibleSection, Tooltip, configure_theme
+from .window_locator import (
     find_window_rect,
     proportional_region_from_window,
     relative_region_from_window,
@@ -69,16 +91,22 @@ from window_locator import (
     resolve_window_region,
     visible_window_titles,
 )
-from ui_components import COLORS, CollapsibleSection, Tooltip, configure_theme
 
 __all__ = [
+    "AppSettings",
+    "DEFAULT_ALERT_VOLUME",
+    "DEFAULT_COOLDOWN_SEC",
     "DEFAULT_ROTATIONS",
     "DEFAULT_SCALES",
+    "DEFAULT_START_STOP_HOTKEY",
+    "DEFAULT_TEST_ALERT_HOTKEY",
     "MATCH_MODE_ANIMATED",
     "MATCH_MODE_STATIC",
     "MATCH_MODE_TEXT",
     "match_template_multiscale",
+    "load_settings",
     "prepare_template_variants",
+    "save_settings",
 ]
 
 try:
@@ -110,23 +138,18 @@ try:
 except ImportError:
     HAVE_WINSOUND = False  # non-Windows: alerts will be popup-only
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-ALERTS_DIR = os.path.join(APP_DIR, "alerts")
-TEMPLATES_DIR = os.path.join(ALERTS_DIR, "templates")
-MANIFEST_PATH = os.path.join(TEMPLATES_DIR, "manifest.json")
-SETTINGS_PATH = os.path.join(ALERTS_DIR, "settings.json")
+APP_DIR = str(PROJECT_ROOT)
+ALERTS_DIR = str(ALERTS_PATH)
+TEMPLATES_DIR = str(ALERT_TEMPLATES_DIR)
+MANIFEST_PATH = str(ALERT_MANIFEST_PATH)
 LOCK_PATH = INSTANCE_LOCK_PATH
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 
 POLL_INTERVAL_SEC = 0.6
 DEFAULT_THRESHOLD = 0.85
-DEFAULT_COOLDOWN_SEC = 5.0
-DEFAULT_ALERT_VOLUME = 1.0
 TEXT_CONFIRMATION_DELAY_SEC = 0.10
 TEXT_IMMEDIATE_SCORE = 0.97
 DEFAULT_TEXT_THRESHOLD = 0.90
-DEFAULT_START_STOP_HOTKEY = "ctrl+shift+f8"
-DEFAULT_TEST_ALERT_HOTKEY = "ctrl+shift+f9"
 REGION_UNAVAILABLE = DETECTION_UNAVAILABLE
 MONITOR_REGION_PENDING = object()
 _WINDOW_CONTEXT_UNSET = object()
@@ -142,181 +165,6 @@ def _drain_queue(q):
             yield q.get_nowait()
         except queue.Empty:
             break
-
-
-def _atomic_write_json(path, data):
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=folder
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, allow_nan=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _atomic_write_png(path, image_bgr):
-    try:
-        ok, encoded = cv2.imencode(".png", image_bgr)
-    except cv2.error as exc:
-        raise OSError(f"Could not encode template image: {path}") from exc
-    if not ok:
-        raise OSError(f"Could not encode template image: {path}")
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{os.path.basename(path)}.", suffix=".png", dir=folder
-    )
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(encoded.tobytes())
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-@dataclass(eq=True)
-class AppSettings:
-    monitor_choice: str = "All monitors"
-    grayscale: bool = True
-    debug: bool = False
-    cooldown_sec: float = DEFAULT_COOLDOWN_SEC
-    alert_volume: float = DEFAULT_ALERT_VOLUME
-    scan_region: Optional[Tuple[int, int, int, int]] = None
-    scan_region_mode: str = "screen"
-    scan_region_ratio: Optional[Tuple[float, float, float, float]] = None
-    scan_region_window_size: Optional[Tuple[int, int]] = None
-    target_window_title: str = ""
-    start_stop_hotkey: str = DEFAULT_START_STOP_HOTKEY
-    test_alert_hotkey: str = DEFAULT_TEST_ALERT_HOTKEY
-    minimize_to_tray: bool = False
-
-
-def load_settings(path=SETTINGS_PATH):
-    if not os.path.exists(path):
-        return AppSettings()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError, UnicodeError):
-        return AppSettings()
-
-    if not isinstance(data, dict):
-        return AppSettings()
-
-    defaults = AppSettings()
-    values = asdict(defaults)
-    values.update({key: data[key] for key in values if key in data})
-
-    def _int_tuple(value, length, positive_size_from=None):
-        if value is None or isinstance(value, (str, bytes, dict)):
-            return None
-        try:
-            if any(isinstance(v, bool) for v in value):
-                return None
-            result = tuple(int(v) for v in value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if len(result) != length:
-            return None
-        if positive_size_from is not None and any(v <= 0 for v in result[positive_size_from:]):
-            return None
-        return result
-
-    def _float_tuple(value, length):
-        if value is None or isinstance(value, (str, bytes, dict)):
-            return None
-        try:
-            if any(isinstance(v, bool) for v in value):
-                return None
-            result = tuple(float(v) for v in value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if len(result) != length or not all(math.isfinite(v) for v in result):
-            return None
-        return result
-
-    values["scan_region"] = _int_tuple(values["scan_region"], 4, positive_size_from=2)
-    if values["scan_region_mode"] not in ("screen", "window", "monitor"):
-        values["scan_region_mode"] = "screen"
-    ratio = _float_tuple(values["scan_region_ratio"], 4)
-    if ratio is not None:
-        x, y, width, height = ratio
-        if (
-            x < 0.0
-            or y < 0.0
-            or width <= 0.0
-            or height <= 0.0
-            or x + width > 1.001
-            or y + height > 1.001
-        ):
-            ratio = None
-    values["scan_region_ratio"] = ratio
-    values["scan_region_window_size"] = _int_tuple(
-        values["scan_region_window_size"],
-        2,
-        positive_size_from=0,
-    )
-    if (
-        values["scan_region"] is None
-        or values["scan_region_mode"] == "screen"
-        or (values["scan_region_ratio"] is None)
-        != (values["scan_region_window_size"] is None)
-    ):
-        values["scan_region_ratio"] = None
-        values["scan_region_window_size"] = None
-    try:
-        cooldown = float(values["cooldown_sec"])
-        values["cooldown_sec"] = max(0.0, cooldown) if math.isfinite(cooldown) else defaults.cooldown_sec
-    except (TypeError, ValueError, OverflowError):
-        values["cooldown_sec"] = defaults.cooldown_sec
-    try:
-        volume = float(values["alert_volume"])
-        values["alert_volume"] = (
-            min(1.0, max(0.0, volume)) if math.isfinite(volume) else defaults.alert_volume
-        )
-    except (TypeError, ValueError, OverflowError):
-        values["alert_volume"] = defaults.alert_volume
-
-    for key in ("grayscale", "debug", "minimize_to_tray"):
-        if not isinstance(values[key], bool):
-            values[key] = getattr(defaults, key)
-    for key in ("monitor_choice", "target_window_title", "start_stop_hotkey", "test_alert_hotkey"):
-        if not isinstance(values[key], str):
-            values[key] = getattr(defaults, key)
-    if not values["monitor_choice"].strip():
-        values["monitor_choice"] = defaults.monitor_choice
-    if not values["start_stop_hotkey"].strip():
-        values["start_stop_hotkey"] = defaults.start_stop_hotkey
-    if not values["test_alert_hotkey"].strip():
-        values["test_alert_hotkey"] = defaults.test_alert_hotkey
-    return AppSettings(**values)
-
-
-def save_settings(path, settings):
-    data = asdict(settings)
-    if data["scan_region"] is not None:
-        data["scan_region"] = list(data["scan_region"])
-    if data["scan_region_ratio"] is not None:
-        data["scan_region_ratio"] = list(data["scan_region_ratio"])
-    if data["scan_region_window_size"] is not None:
-        data["scan_region_window_size"] = list(data["scan_region_window_size"])
-    _atomic_write_json(path, data)
 
 
 class SingleInstanceLock:
@@ -545,9 +393,12 @@ class TemplateState:
         if now is None:
             now = time.monotonic()
         if not self.active and score >= self.threshold:
+            # This is a new appearance even when its alert is suppressed by
+            # cooldown.  Keep it active so the same uninterrupted appearance
+            # cannot produce a delayed alert when the cooldown later expires.
+            self.active = True
             if self.last_alert_at is not None and now - self.last_alert_at < self.cooldown_sec:
                 return False
-            self.active = True
             self.last_alert_at = now
             return True
         if self.active and score < (self.threshold - self.hysteresis):
@@ -1513,199 +1364,6 @@ def play_alert_sound(volume=DEFAULT_ALERT_VOLUME):
 # --------------------------------------------------------------------------
 # GUI
 # --------------------------------------------------------------------------
-class ScreenRegionPicker(tk.Toplevel):
-    """Fullscreen overlay (spans all monitors) for dragging a box around an icon."""
-    def __init__(self, master, on_picked, on_cancel=None):
-        super().__init__(master)
-        self.on_picked = on_picked
-        self.on_cancel = on_cancel
-        self.completed = False
-        self.withdraw()
-
-        with mss.MSS() as sct:
-            virtual = sct.monitors[0]
-            frame = capture_bgr(sct, virtual)
-            self.origin_x, self.origin_y = virtual["left"], virtual["top"]
-            img = Image.fromarray(frame[:, :, ::-1])
-            self.full_img = img
-
-        self.geometry(f"{virtual['width']}x{virtual['height']}+{virtual['left']}+{virtual['top']}")
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-
-        self.tk_img = ImageTk.PhotoImage(img)
-        self.canvas = tk.Canvas(self, cursor="cross", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.canvas.create_image(0, 0, image=self.tk_img, anchor="nw")
-        self.hint = self.canvas.create_text(
-            virtual["width"] // 2, 30,
-            text="Drag a box tightly around the icon. Press Esc to cancel.",
-            fill="yellow", font=("Segoe UI", 16, "bold")
-        )
-
-        self.start_x = self.start_y = None
-        self.rect_id = None
-        self.canvas.bind("<ButtonPress-1>", self._on_press)
-        self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_release)
-        self.bind("<Escape>", lambda e: self._cancel())
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
-
-        self.deiconify()
-        self.focus_force()
-
-    def _on_press(self, event):
-        self.start_x, self.start_y = event.x, event.y
-        if self.rect_id:
-            self.canvas.delete(self.rect_id)
-        self.rect_id = self.canvas.create_rectangle(
-            event.x, event.y, event.x, event.y, outline="#00FF66", width=2
-        )
-
-    def _on_drag(self, event):
-        if self.rect_id is None or self.start_x is None or self.start_y is None:
-            return
-        self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
-
-    def _on_release(self, event):
-        if self.start_x is None or self.start_y is None:
-            return
-        width, height = self.full_img.size
-        end_x = min(max(event.x, 0), width)
-        end_y = min(max(event.y, 0), height)
-        start_x = min(max(self.start_x, 0), width)
-        start_y = min(max(self.start_y, 0), height)
-        x0, y0 = min(start_x, end_x), min(start_y, end_y)
-        x1, y1 = max(start_x, end_x), max(start_y, end_y)
-        if x1 - x0 < 4 or y1 - y0 < 4:
-            self._cancel()
-            return
-        crop = self.full_img.crop((x0, y0, x1, y1))
-        crop_bgr = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR)
-        abs_box = (x0 + self.origin_x, y0 + self.origin_y, x1 - x0, y1 - y0)
-        self.completed = True
-        self.destroy()
-        self.on_picked(crop_bgr, abs_box)
-
-    def _cancel(self):
-        if self.completed:
-            return
-        self.completed = True
-        self.destroy()
-        if self.on_cancel is not None:
-            self.on_cancel()
-
-
-class RegionOverlay(tk.Toplevel):
-    def __init__(self, master, absolute_box, label, duration_ms=4500):
-        super().__init__(master)
-        self.title("Scan Region Preview")
-
-        with mss.MSS() as sct:
-            virtual = sct.monitors[0]
-
-        origin_x, origin_y = virtual["left"], virtual["top"]
-        width, height = virtual["width"], virtual["height"]
-        self.geometry(f"{width}x{height}+{origin_x}+{origin_y}")
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-
-        transparent = "#123456"
-        self.configure(bg=transparent)
-        try:
-            self.attributes("-transparentcolor", transparent)
-        except tk.TclError:
-            self.attributes("-alpha", 0.35)
-
-        self.canvas = tk.Canvas(
-            self,
-            bg=transparent,
-            highlightthickness=0,
-            cursor="hand2",
-        )
-        self.canvas.pack(fill="both", expand=True)
-
-        x, y, w, h = absolute_box
-        x0, y0 = x - origin_x, y - origin_y
-        x1, y1 = x0 + w, y0 + h
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(width, x1), min(height, y1)
-
-        if x1 > x0 and y1 > y0:
-            self.canvas.create_rectangle(x0, y0, x1, y1, outline="#000000", width=7)
-            self.canvas.create_rectangle(x0, y0, x1, y1, outline="#ffcc00", width=4)
-            text_y = y0 - 16 if y0 >= 28 else y1 + 16
-            text = f"{label}: {w}x{h} at {x},{y}"
-            self.canvas.create_text(
-                x0 + 2,
-                text_y,
-                text=text,
-                fill="#000000",
-                anchor="w",
-                font=("Segoe UI", 12, "bold"),
-            )
-            self.canvas.create_text(
-                x0,
-                text_y - 2,
-                text=text,
-                fill="#ffcc00",
-                anchor="w",
-                font=("Segoe UI", 12, "bold"),
-            )
-
-        self.bind("<Escape>", lambda _event: self.destroy())
-        self.canvas.bind("<Button-1>", lambda _event: self.destroy())
-        self.after(duration_ms, self._safe_destroy)
-
-    def _safe_destroy(self):
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
-
-
-class AlertPopup(tk.Toplevel):
-    def __init__(self, master, name, monitor, thumb_img):
-        super().__init__(master)
-        self.title("Icon Alert")
-        self.attributes("-topmost", True)
-        self.resizable(False, False)
-        self.configure(bg="#1f1f1f")
-
-        frame = tk.Frame(self, bg="#1f1f1f", padx=14, pady=12)
-        frame.pack()
-
-        if thumb_img is not None:
-            tk_thumb = ImageTk.PhotoImage(thumb_img)
-            lbl_img = tk.Label(frame, image=tk_thumb, bg="#1f1f1f")
-            lbl_img.image = tk_thumb
-            lbl_img.grid(row=0, column=0, rowspan=2, padx=(0, 12))
-
-        tk.Label(frame, text=f"{name} detected!", fg="white", bg="#1f1f1f",
-                 font=("Segoe UI", 13, "bold")).grid(row=0, column=1, sticky="w")
-        tk.Label(frame, text=f"Monitor {monitor} - {time.strftime('%H:%M:%S')}",
-                 fg="#aaaaaa", bg="#1f1f1f", font=("Segoe UI", 9)).grid(row=1, column=1, sticky="w")
-
-        ttk.Button(frame, text="Dismiss", command=self.destroy).grid(
-            row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
-
-        self.update_idletasks()
-        try:
-            with mss.MSS() as sct:
-                virtual = sct.monitors[0]
-            right = virtual["left"] + virtual["width"]
-        except Exception:
-            right = self.winfo_screenwidth()
-        self.geometry(f"+{right - self.winfo_width() - 40}+40")
-        self.after(8000, self._safe_destroy)
-
-    def _safe_destroy(self):
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
-
-
 class AlertWatcherFrame(ttk.Frame):
     def __init__(self, master, embedded=True):
         super().__init__(master)
@@ -1730,6 +1388,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._screenshot_test_running = False
         self._close_when_stopped = False
         self._destroy_scheduled = False
+        self._shutting_down = False
         self._errored_watcher = None
 
         self._build_ui()
@@ -2053,6 +1712,7 @@ class AlertWatcherFrame(ttk.Frame):
             save_settings(SETTINGS_PATH, self.settings)
         except (OSError, TypeError, ValueError) as exc:
             self._append_log(f"Could not save settings: {exc}")
+            self._schedule_failed_settings_retry()
         watcher = self.watcher
         if watcher is not None and watcher.is_alive():
             watcher.update_config(
@@ -2071,6 +1731,19 @@ class AlertWatcherFrame(ttk.Frame):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
         self._settings_save_after_id = self.after(300, self._save_settings)
+
+    def _schedule_failed_settings_retry(self):
+        if (
+            self._settings_save_after_id is not None
+            or getattr(self, "_close_when_stopped", False)
+            or getattr(self, "_destroy_scheduled", False)
+            or getattr(self, "_shutting_down", False)
+        ):
+            return
+        try:
+            self._settings_save_after_id = self.after(2000, self._save_settings)
+        except tk.TclError:
+            pass
 
     def _on_settings_changed(self):
         if hasattr(self, "monitor_var") and hasattr(self, "tray_var"):
@@ -2298,6 +1971,23 @@ class AlertWatcherFrame(ttk.Frame):
             self.tm._save()
         except (OSError, TypeError, ValueError) as exc:
             self._append_log(f"Could not save template settings: {exc}")
+            self._schedule_failed_template_retry()
+
+    def _schedule_failed_template_retry(self):
+        if (
+            self._template_save_after_id is not None
+            or getattr(self, "_close_when_stopped", False)
+            or getattr(self, "_destroy_scheduled", False)
+            or getattr(self, "_shutting_down", False)
+        ):
+            return
+        try:
+            self._template_save_after_id = self.after(
+                2000,
+                self._flush_template_save,
+            )
+        except tk.TclError:
+            pass
 
     def _open_region_picker(self, on_picked):
         self.withdraw()
@@ -2857,6 +2547,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._finish_app_quit()
 
     def shutdown(self):
+        self._shutting_down = True
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
             self._save_settings()

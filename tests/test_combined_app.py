@@ -5,8 +5,8 @@ from unittest.mock import patch
 class CombinedAppTests(unittest.TestCase):
     def test_main_window_contains_macro_and_icon_alert_tabs(self):
         import tkinter as tk
-        import alert_watcher
-        import app
+
+        from macro_clicker import alert_watcher, app
 
         alert_watcher.HAVE_KEYBOARD = False
         alert_watcher.HAVE_PYSTRAY = False

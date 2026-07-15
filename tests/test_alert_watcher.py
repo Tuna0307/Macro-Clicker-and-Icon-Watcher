@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch, sentinel
 import cv2
 import numpy as np
 
-import alert_watcher as watcher
-import window_locator
+from macro_clicker import alert_watcher as watcher
+from macro_clicker import window_locator
 
 
 class FakeWindow:
@@ -537,7 +537,10 @@ class TemplateStateTests(unittest.TestCase):
         self.assertFalse(state.update(0.9, now=now + 0.2))
         self.assertFalse(state.update(0.7, now=now + 0.3))
         self.assertFalse(state.update(0.9, now=now + 0.4))
-        self.assertTrue(state.update(0.9, now=now + 1.1))
+        self.assertTrue(state.active)
+        self.assertFalse(state.update(0.9, now=now + 1.1))
+        self.assertFalse(state.update(0.7, now=now + 1.2))
+        self.assertTrue(state.update(0.9, now=now + 1.3))
 
 
 class WatcherThreadTests(unittest.TestCase):
@@ -1044,6 +1047,26 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(loaded.grayscale)
         self.assertIsNone(loaded.scan_region)
         self.assertEqual(loaded.target_window_title, "")
+
+    def test_fractional_pixel_coordinates_are_not_silently_truncated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "scan_region": [10.9, 20, 300, 100],
+                        "scan_region_mode": "monitor",
+                        "scan_region_ratio": [0.1, 0.2, 0.3, 0.4],
+                        "scan_region_window_size": [1920.5, 1080],
+                    },
+                    handle,
+                )
+
+            loaded = watcher.load_settings(path)
+
+        self.assertIsNone(loaded.scan_region)
+        self.assertIsNone(loaded.scan_region_ratio)
+        self.assertIsNone(loaded.scan_region_window_size)
 
 
 class SoundTests(unittest.TestCase):

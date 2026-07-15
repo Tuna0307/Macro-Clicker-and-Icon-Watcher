@@ -1,13 +1,13 @@
 import unittest
 
-from models import ImageCondition, Scenario
-from engine import MacroEngine, _WINDOW_UNAVAILABLE
-from app import resolve_condition_preview_box
-from window_locator import (
+from macro_clicker.app import resolve_condition_preview_box
+from macro_clicker.engine import _WINDOW_UNAVAILABLE, MacroEngine
+from macro_clicker.models import ImageCondition, Scenario
+from macro_clicker.window_locator import (
     absolute_region_from_window,
     absolute_region_from_window_ratio,
-    proportional_region_from_window,
     find_window_rect,
+    proportional_region_from_window,
     resolve_window_region,
     visible_window_titles,
 )

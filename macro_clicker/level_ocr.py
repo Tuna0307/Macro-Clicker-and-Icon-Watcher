@@ -487,11 +487,10 @@ class LevelOcrReader:
         if lv_prefixed and len(digits) >= 3:
             value = int(digits)
             first_two = int(digits[:2])
-            likely_noisy_prefix = "-" in separator
             likely_out_of_game_range = value > 300
             if (
                 1 <= first_two <= 150
-                and (likely_noisy_prefix or likely_out_of_game_range)
+                and likely_out_of_game_range
             ):
                 return first_two
         return int(digits)

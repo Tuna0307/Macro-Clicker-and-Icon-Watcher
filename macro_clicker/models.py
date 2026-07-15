@@ -13,15 +13,17 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
-from detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
+from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
+from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
+from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
 
 ACTION_TYPES = frozenset({"click", "click_matching_row", "key", "wait", "set_step"})
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SCENARIOS_DIR = os.path.join(APP_DIR, "scenarios")
-TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
+APP_DIR = str(PROJECT_ROOT)
+SCENARIOS_DIR = str(SCENARIO_PATH)
+TEMPLATES_DIR = str(MACRO_TEMPLATES_DIR)
 WINDOWS_RESERVED_SCENARIO_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{i}" for i in range(1, 10)}
@@ -145,7 +147,10 @@ def _float_list(value):
     if not isinstance(value, (list, tuple)):
         return None
     try:
-        if any(isinstance(part, bool) for part in value):
+        if any(
+            isinstance(part, bool) or not isinstance(part, (int, float))
+            for part in value
+        ):
             return None
         result = [float(part) for part in value]
         return result if all(math.isfinite(part) for part in result) else None
@@ -182,10 +187,12 @@ def _validate_ratio(region_ratio):
         return None
     if not isinstance(region_ratio, (list, tuple)) or len(region_ratio) != 4:
         raise ValueError("region_ratio must contain [left, top, width, height]")
-    try:
-        left, top, width, height = (float(value) for value in region_ratio)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("region_ratio must contain finite numbers") from exc
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in region_ratio
+    ):
+        raise ValueError("region_ratio must contain finite numbers")
+    left, top, width, height = (float(value) for value in region_ratio)
     if not all(math.isfinite(value) for value in (left, top, width, height)):
         raise ValueError("region_ratio must contain finite numbers")
     if left < 0.0 or top < 0.0 or width <= 0.0 or height <= 0.0:
@@ -515,6 +522,7 @@ class Scenario:
     monitor_index: int = 1
     kill_switch: str = "f12"
     target_window_title: str = ""
+    diagnostics_enabled: bool = True
 
     def to_dict(self):
         return {
@@ -524,6 +532,7 @@ class Scenario:
             "monitor_index": self.monitor_index,
             "kill_switch": self.kill_switch,
             "target_window_title": self.target_window_title,
+            "diagnostics_enabled": self.diagnostics_enabled,
         }
 
     @staticmethod
@@ -540,6 +549,7 @@ class Scenario:
         name = d.get("name")
         kill_switch = d.get("kill_switch", "f12")
         target_window_title = d.get("target_window_title", "")
+        diagnostics_enabled = _bool_value(d.get("diagnostics_enabled"), True)
         if not isinstance(name, str) or not name.strip():
             raise ValueError("scenario name must be non-empty text")
         if not isinstance(kill_switch, str) or not kill_switch.strip():
@@ -553,6 +563,7 @@ class Scenario:
             monitor_index=monitor_index,
             kill_switch=kill_switch,
             target_window_title=target_window_title,
+            diagnostics_enabled=diagnostics_enabled,
         )
         validate_scenario(scenario)
         return scenario
@@ -643,6 +654,8 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("kill_switch cannot be blank")
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")
+    if not isinstance(scenario.diagnostics_enabled, bool):
+        raise ValueError("diagnostics_enabled must be a boolean")
 
     step_names = {step.name for step in scenario.steps}
     for step in scenario.steps:
@@ -768,6 +781,8 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 raise ValueError(f"{prefix} has invalid row target choice")
             if action.button not in {"left", "right", "middle"}:
                 raise ValueError(f"{prefix} has invalid mouse button")
+            if not isinstance(action.set_enabled, bool):
+                raise ValueError(f"{prefix} set_enabled must be a boolean")
             if (action.x is None) != (action.y is None):
                 raise ValueError(f"{prefix} fixed point requires both x and y")
             if action.x is not None and (

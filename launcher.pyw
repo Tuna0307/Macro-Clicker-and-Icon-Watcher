@@ -1,13 +1,11 @@
 """Windows GUI launcher that makes startup failures visible and persistent."""
 import ctypes
 import os
-import runpy
 import sys
 import traceback
 from datetime import datetime
 
-from runtime_paths import STARTUP_ERROR_LOG
-
+from macro_clicker.runtime_paths import STARTUP_ERROR_LOG
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -36,7 +34,9 @@ def main():
     if APP_DIR not in sys.path:
         sys.path.insert(0, APP_DIR)
     try:
-        runpy.run_path(os.path.join(APP_DIR, "app.py"), run_name="__main__")
+        from macro_clicker.app import main as run_application
+
+        run_application()
     except SystemExit:
         # app.main() already reports expected non-zero exits (for example a
         # second instance or a GUI initialization failure).

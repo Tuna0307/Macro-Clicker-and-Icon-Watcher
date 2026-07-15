@@ -7,14 +7,13 @@ but both route their visual detection through this module.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
 import math
 import sys
+from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence
 
 import cv2
 import numpy as np
-
 
 Rect = tuple[int, int, int, int]
 Size = tuple[int, int]
@@ -1170,7 +1169,7 @@ def find_template_matches(
         else:
             peaks = full_resolution_peaks(template, variant, text_shape)
         for x, y, raw_score in peaks:
-            score = _text_shape_iou(frame, template, (x, y)) if text_shape else raw_score
+            score = _text_shape_score(frame, template, (x, y)) if text_shape else raw_score
             if score < confidence:
                 continue
             candidates.append(TemplateMatch(

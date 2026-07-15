@@ -1,6 +1,6 @@
+import json
 import os
 import queue
-import json
 import tempfile
 import threading
 import time
@@ -9,14 +9,11 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-import app
-import alert_watcher
-import capture_tool
-import engine as engine_module
-import models
-from engine import MacroEngine
-from level_ocr import LevelOcrReader
-from models import Action, ImageCondition, Scenario, Step
+from macro_clicker import alert_watcher, app, capture_tool, editors, models
+from macro_clicker import engine as engine_module
+from macro_clicker.engine import MacroEngine
+from macro_clicker.level_ocr import LevelOcrReader
+from macro_clicker.models import Action, ImageCondition, Scenario, Step
 
 
 class FakeVar:
@@ -70,6 +67,100 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertEqual(os.path.basename(path), "Rally_1.png")
         self.assertEqual(os.path.dirname(path), tmp)
+
+    def test_cancelled_condition_capture_removes_only_unused_new_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kept = os.path.join(tmp, "kept.png")
+            discarded = os.path.join(tmp, "discarded.png")
+            for path in (kept, discarded):
+                with open(path, "wb") as handle:
+                    handle.write(b"capture")
+
+            editors._cleanup_captured_templates(
+                [kept, discarded],
+                kept,
+            )
+
+            self.assertTrue(os.path.exists(kept))
+            self.assertFalse(os.path.exists(discarded))
+
+    def test_capture_overlay_geometry_preserves_negative_monitor_coordinates(self):
+        self.assertEqual(
+            capture_tool._absolute_overlay_geometry(1920, 1080, -1920, -200),
+            "1920x1080+-1920+-200",
+        )
+        self.assertEqual(
+            capture_tool._absolute_overlay_geometry(2560, 1440, 1920, 0),
+            "2560x1440+1920+0",
+        )
+
+    def test_failed_alert_saves_schedule_a_retry_but_shutdown_does_not(self):
+        frame = object.__new__(alert_watcher.AlertWatcherFrame)
+        scheduled = []
+        frame._settings_save_after_id = None
+        frame._template_save_after_id = None
+        frame._close_when_stopped = False
+        frame._destroy_scheduled = False
+        frame._shutting_down = False
+        frame.after = lambda delay, callback: scheduled.append(
+            (delay, callback.__name__)
+        ) or f"retry-{len(scheduled)}"
+
+        frame._schedule_failed_settings_retry()
+        frame._schedule_failed_template_retry()
+
+        self.assertEqual(
+            scheduled,
+            [
+                (2000, "_save_settings"),
+                (2000, "_flush_template_save"),
+            ],
+        )
+        self.assertEqual(frame._settings_save_after_id, "retry-1")
+        self.assertEqual(frame._template_save_after_id, "retry-2")
+
+        frame._settings_save_after_id = None
+        frame._template_save_after_id = None
+        frame._shutting_down = True
+        frame._schedule_failed_settings_retry()
+        frame._schedule_failed_template_retry()
+        self.assertEqual(len(scheduled), 2)
+
+    def test_step_preview_worker_reports_result_through_ui_queue(self):
+        app_instance = object.__new__(app.App)
+        app_instance.control_queue = queue.Queue()
+        app_instance._queue_log = lambda _message: None
+        scenario = Scenario(name="preview", steps=[Step(name="row")])
+        preview = {"ok": True}
+        stopped = []
+
+        class FakeEngine:
+            def __init__(self, received_scenario, log=None):
+                self.scenario = received_scenario
+
+            def preview_step(self, received_step):
+                self.assertIsNotNone(received_step)
+                return preview
+
+            def stop(self):
+                stopped.append(True)
+
+            def assertIsNotNone(self, value):
+                if value is None:
+                    raise AssertionError("step was missing")
+
+        with patch.object(app, "MacroEngine", FakeEngine):
+            app_instance._run_step_preview_worker(
+                scenario,
+                scenario.steps[0],
+            )
+
+        command = app_instance.control_queue.get_nowait()
+        self.assertEqual(command[0], "step_preview")
+        self.assertIs(command[1], scenario.steps[0])
+        self.assertIs(command[2], preview)
+        self.assertIsNone(command[3])
+        self.assertEqual(stopped, [True])
 
     def test_engine_stop_closes_capture_without_spurious_log_when_never_started(self):
         logs = []

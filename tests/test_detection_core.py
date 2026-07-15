@@ -4,8 +4,8 @@ import unittest
 import cv2
 import numpy as np
 
-import detection_core as core
-from window_locator import absolute_region_from_window_ratio
+from macro_clicker import detection_core as core
+from macro_clicker.window_locator import absolute_region_from_window_ratio
 
 
 class ResolutionScalingTests(unittest.TestCase):
@@ -194,6 +194,22 @@ class SharedMatcherTests(unittest.TestCase):
 
         self.assertGreaterEqual(score("#2212"), 0.95)
         self.assertLess(score("#2210"), 0.9)
+
+    def test_collect_all_colored_text_uses_the_same_wrong_glyph_rejection(self):
+        template = self._text_tile("#2212", (54, 111, 99))
+        frame = np.full((80, 260, 3), (54, 111, 99), dtype=np.uint8)
+        frame[25:57, 70:200] = self._text_tile("#2210", (54, 111, 99))
+
+        matches = core.find_template_matches(
+            frame,
+            template,
+            0.85,
+            collect_all=True,
+            scales=(1.0,),
+            match_mode=core.MATCH_MODE_TEXT,
+        )
+
+        self.assertEqual(matches, [])
 
     def test_collect_all_keeps_targets_at_different_scales(self):
         rng = np.random.default_rng(137)

@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from engine import MacroEngine
-from models import Action, ImageCondition, Scenario, Step
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import Action, ImageCondition, Scenario, Step
 
 
 class EnginePerformanceTests(unittest.TestCase):
@@ -132,7 +132,8 @@ class EnginePerformanceTests(unittest.TestCase):
         engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
 
         from unittest.mock import patch
-        import engine as engine_module
+
+        from macro_clicker import engine as engine_module
 
         with patch.object(engine_module.time, "monotonic", return_value=10.0) as monotonic, \
                 patch.object(engine_module.time, "time", side_effect=AssertionError("wall clock used")):
@@ -145,7 +146,8 @@ class EnginePerformanceTests(unittest.TestCase):
         template = np.zeros((20, 30, 3), dtype=np.uint8)
 
         from unittest.mock import patch
-        import engine as engine_module
+
+        from macro_clicker import engine as engine_module
 
         with patch.object(engine_module.cv2, "resize", wraps=engine_module.cv2.resize) as resize:
             first = engine._scaled_template(template, 1.2)

@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 
-from log_maintenance import cleanup_directory, rotate_log_file
+from macro_clicker.log_maintenance import cleanup_directory, rotate_log_file
 
 
 class LogMaintenanceTests(unittest.TestCase):

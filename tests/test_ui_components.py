@@ -1,7 +1,7 @@
 import unittest
 
-from models import Action, ImageCondition
-from ui_components import (
+from macro_clicker.models import Action, ImageCondition
+from macro_clicker.ui_components import (
     BUTTON_STATE_COLORS,
     action_display_summary,
     condition_choice_for_index,

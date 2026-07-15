@@ -1,19 +1,45 @@
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from engine import MacroEngine
-from level_debug_tester import (
+from macro_clicker.engine import MacroEngine
+from tools.level_debug_tester import (
     evaluate_grid,
     load_labels,
     parse_float_list,
     save_labels,
-    sorted_results,
     set_label,
+    sorted_results,
 )
 
 
 class LevelDebugTesterTests(unittest.TestCase):
+    def test_script_help_runs_directly_from_repository_root(self):
+        project_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(project_root / "tools" / "level_debug_tester.py"),
+                "--help",
+            ],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Tune the level digit fallback", result.stdout)
+
     def test_label_file_round_trips_by_filename(self):
         with tempfile.TemporaryDirectory() as tmp:
             label_path = Path(tmp) / "labels.json"

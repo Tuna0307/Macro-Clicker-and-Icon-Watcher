@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from engine import MacroEngine
-from models import ImageCondition, Step
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import ImageCondition, Step
 
 
 class StepPreviewTests(unittest.TestCase):

@@ -1104,5 +1104,6 @@
   "poll_interval": 0.25,
   "monitor_index": 1,
   "kill_switch": "f12",
-  "target_window_title": "Last War-Survival Game"
+  "target_window_title": "Last War-Survival Game",
+  "diagnostics_enabled": true
 }

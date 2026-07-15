@@ -2,8 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app_helpers import duplicate_scenario, duplicate_step, duplicate_template_file
-from models import ImageCondition, Scenario, Step
+from macro_clicker.app_helpers import (
+    duplicate_scenario,
+    duplicate_step,
+    duplicate_template_file,
+)
+from macro_clicker.models import ImageCondition, Scenario, Step
 
 
 class DuplicateTests(unittest.TestCase):
@@ -29,6 +33,13 @@ class DuplicateTests(unittest.TestCase):
         self.assertEqual(copied.name, "Join_copy_2")
         self.assertIsNot(copied.conditions[0], step.conditions[0])
         self.assertEqual(copied.conditions[0].template_path, "templates/mob.png")
+
+    def test_duplicate_step_name_is_unique_without_case_sensitivity(self):
+        step = Step(name="Join")
+
+        copied = duplicate_step(step, {"Join", "join_copy"})
+
+        self.assertEqual(copied.name, "Join_copy_2")
 
     def test_duplicate_scenario_deep_copies_and_uses_new_name(self):
         scenario = Scenario(
