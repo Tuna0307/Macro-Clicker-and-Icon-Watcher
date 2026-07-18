@@ -74,6 +74,17 @@ class TemplateManagerTests(unittest.TestCase):
         self.assertEqual(item["region_ratio"], (0.1, 0.2, 0.3, 0.4))
         self.assertEqual(item["region_window_size"], (100, 100))
 
+    def test_template_enabled_choice_is_persisted(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "optional")
+
+        self.assertTrue(tm.get(tid)["enabled"])
+        tm.set_enabled(tid, False)
+
+        self.assertFalse(tm.snapshot()[0]["enabled"])
+        self.assertEqual(tm.snapshot(enabled_only=True), [])
+        self.assertFalse(watcher.TemplateManager().snapshot()[0]["enabled"])
+
     def test_snapshot_reuses_prepared_template_variants(self):
         tm = self._manager_in_temp_dir()
         image = np.zeros((24, 24, 3), dtype=np.uint8)
@@ -609,6 +620,20 @@ class WatcherThreadTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["monitor"], 1)
         self.assertAlmostEqual(alerts[0]["score"], 0.92)
+
+    def test_disabled_templates_are_left_out_of_watcher_snapshots(self):
+        enabled = self._template_item(1, "enabled")
+        disabled = self._template_item(2, "disabled")
+        disabled["enabled"] = False
+
+        manager = Mock()
+        manager.snapshot.return_value = [enabled, disabled]
+        thread = watcher.WatcherThread(manager, queue.Queue(), queue.Queue())
+
+        self.assertEqual(thread._snapshot_items(), [enabled])
+        self.assertEqual(thread._snapshot_items(use_grayscale=True), [enabled])
+        self.assertTrue(thread.templates_changed() is None)
+        self.assertTrue(thread._wake_flag.is_set())
 
     def test_each_monitor_prepares_templates_for_its_own_resolution(self):
         item = self._template_item()

@@ -337,6 +337,8 @@ def test_detection_on_screenshot(path, template_items, use_grayscale=False, regi
         int(screenshot.shape[0]),
     )
     for item in template_items:
+        if not item.get("enabled", True):
+            continue
         item_region = None
         if apply_saved_regions:
             item_region = resolve_item_absolute_region(
@@ -575,6 +577,11 @@ class TemplateManager:
                 self.items[tid] = {
                     "name": name.strip(),
                     "file": entry["file"],
+                    "enabled": (
+                        entry.get("enabled", True)
+                        if isinstance(entry.get("enabled", True), bool)
+                        else True
+                    ),
                     "threshold": threshold,
                     "match_mode": match_mode,
                     "region": region,
@@ -594,6 +601,7 @@ class TemplateManager:
                     "id": tid,
                     "name": v["name"],
                     "file": v["file"],
+                    "enabled": v.get("enabled", True),
                     "threshold": v["threshold"],
                     "match_mode": v.get("match_mode", LEGACY_MATCH_MODE),
                 }
@@ -638,6 +646,7 @@ class TemplateManager:
             entry = {
                 "name": str(name).strip() or f"icon_{tid}",
                 "file": filename,
+                "enabled": True,
                 "threshold": numeric_threshold,
                 "match_mode": parsed_match_mode,
                 "region": None,
@@ -696,6 +705,20 @@ class TemplateManager:
                     self._save()
                 except Exception:
                     self.items[tid]["threshold"] = previous
+                    raise
+
+    def set_enabled(self, tid, enabled, save=True):
+        enabled = bool(enabled)
+        with self._lock:
+            if tid not in self.items:
+                return
+            previous = self.items[tid].get("enabled", True)
+            self.items[tid]["enabled"] = enabled
+            if save:
+                try:
+                    self._save()
+                except Exception:
+                    self.items[tid]["enabled"] = previous
                     raise
 
     def set_match_mode(self, tid, match_mode, save=True):
@@ -808,14 +831,18 @@ class TemplateManager:
         use_grayscale=None,
         current_window_size=None,
         cancel_event=None,
+        enabled_only=False,
     ):
         with self._lock:
             items = []
             for tid, entry in self.items.items():
+                if enabled_only and not entry.get("enabled", True):
+                    continue
                 item = {
                     "id": tid,
                     "name": entry["name"],
                     "file": entry["file"],
+                    "enabled": entry.get("enabled", True),
                     "threshold": entry["threshold"],
                     "match_mode": entry.get("match_mode", LEGACY_MATCH_MODE),
                     "region": entry.get("region"),
@@ -867,6 +894,10 @@ class WatcherThread(threading.Thread):
 
     def stop(self):
         self._stop_flag.set()
+        self._wake_flag.set()
+
+    def templates_changed(self):
+        """Wake the watcher so an enable/disable choice is noticed promptly."""
         self._wake_flag.set()
 
     def update_config(self, *, monitor_filter=None, scan_region=None,
@@ -933,9 +964,10 @@ class WatcherThread(threading.Thread):
 
     def _snapshot_items(self, use_grayscale=None, current_window_size=None):
         try:
-            return self.tm.snapshot(
+            items = self.tm.snapshot(
                 use_grayscale=use_grayscale,
                 current_window_size=current_window_size,
+                enabled_only=True,
                 cancel_event=(
                     self._stop_flag if use_grayscale is not None else None
                 ),
@@ -943,18 +975,19 @@ class WatcherThread(threading.Thread):
         except TypeError as exc:
             if not any(
                 name in str(exc)
-                for name in ("current_window_size", "cancel_event")
+                for name in ("current_window_size", "cancel_event", "enabled_only")
             ):
                 raise
             try:
-                return self.tm.snapshot(
+                items = self.tm.snapshot(
                     use_grayscale=use_grayscale,
                     current_window_size=current_window_size,
                 )
             except TypeError as fallback_exc:
                 if "current_window_size" not in str(fallback_exc):
                     raise
-                return self.tm.snapshot(use_grayscale=use_grayscale)
+                items = self.tm.snapshot(use_grayscale=use_grayscale)
+        return [item for item in items if item.get("enabled", True)]
 
     def _emit_aggregated_matches(self, items, best_scores, now, complete_ids=None):
         if complete_ids is None:
@@ -1466,6 +1499,7 @@ class AlertWatcherFrame(ttk.Frame):
         )
         self.listbox.pack(fill="both", expand=True, pady=(10, 8))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
+        self.listbox.bind("<space>", self._toggle_selected_enabled)
 
         btn_row = ttk.Frame(left, style="Surface.TFrame")
         btn_row.pack(fill="x")
@@ -1482,6 +1516,19 @@ class AlertWatcherFrame(ttk.Frame):
         selected_header = ttk.Frame(left, style="Surface.TFrame")
         selected_header.pack(fill="x")
         ttk.Label(selected_header, text="Selected icon", style="Section.TLabel").pack(side="left")
+        self.detect_enabled_var = tk.BooleanVar(value=True)
+        self.detect_enabled_check = ttk.Checkbutton(
+            selected_header,
+            text="Detect this icon",
+            variable=self.detect_enabled_var,
+            command=self._on_enabled_change,
+            state="disabled",
+        )
+        self.detect_enabled_check.pack(side="left", padx=(16, 0))
+        Tooltip(
+            self.detect_enabled_check,
+            "Only checked icons are scanned. Select an icon and press Space to toggle it.",
+        )
         self.icon_region_label = ttk.Label(selected_header, text="Region: global", style="Muted.TLabel")
         self.icon_region_label.pack(side="right")
 
@@ -1876,18 +1923,25 @@ class AlertWatcherFrame(ttk.Frame):
         self.listbox.delete(0, "end")
         items = self.tm.snapshot()
         for entry in items:
+            enabled = entry.get("enabled", True)
+            check = "[x]" if enabled else "[ ]"
             marker = " [region]" if entry.get("region") is not None else ""
             mode = entry.get("match_mode", LEGACY_MATCH_MODE)
             mode_tag = MATCH_MODE_LIST_TAGS.get(mode, "Animated")
             self.listbox.insert(
                 "end",
-                f"  {entry['name']} [{mode_tag}]{marker}   (th={entry['threshold']:.2f})",
+                f"{check} {entry['name']} [{mode_tag}]{marker}   (th={entry['threshold']:.2f})",
             )
+            if not enabled:
+                self.listbox.itemconfigure("end", foreground=COLORS["muted"])
         self._id_order = [entry["id"] for entry in items]
         if selected_tid in self._id_order:
             index = self._id_order.index(selected_tid)
             self.listbox.selection_set(index)
             self.listbox.see(index)
+        elif not self._id_order and hasattr(self, "detect_enabled_check"):
+            self.detect_enabled_var.set(False)
+            self.detect_enabled_check.config(state="disabled")
 
     def _selected_id(self):
         sel = self.listbox.curselection()
@@ -1902,12 +1956,41 @@ class AlertWatcherFrame(ttk.Frame):
         entry = self.tm.get(tid)
         if entry is None:
             return
+        self.detect_enabled_var.set(entry.get("enabled", True))
+        self.detect_enabled_check.config(state="normal")
         self.thresh_var.set(entry["threshold"])
         self.thresh_label.config(text=f"{entry['threshold']:.2f}")
         match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
         self.match_mode_var.set(MATCH_MODE_LABELS[match_mode])
         self._show_preview(entry["image"])
         self._update_icon_region_label(entry)
+
+    def _on_enabled_change(self):
+        tid = self._selected_id()
+        if tid is None:
+            return
+        enabled = bool(self.detect_enabled_var.get())
+        self.tm.set_enabled(tid, enabled, save=False)
+        self._refresh_list(selected_tid=tid)
+        self._schedule_template_save()
+        watcher = self.watcher
+        if watcher is not None and watcher.is_alive():
+            watcher.templates_changed()
+        state = "enabled" if enabled else "disabled"
+        entry = self.tm.get(tid)
+        if entry is not None:
+            self._append_log(f"Detection {state} for '{entry['name']}'.")
+
+    def _toggle_selected_enabled(self, _event=None):
+        tid = self._selected_id()
+        if tid is None:
+            return "break"
+        entry = self.tm.get(tid)
+        if entry is None:
+            return "break"
+        self.detect_enabled_var.set(not entry.get("enabled", True))
+        self._on_enabled_change()
+        return "break"
 
     def _update_icon_region_label(self, entry=None):
         if entry is None:
@@ -2303,8 +2386,15 @@ class AlertWatcherFrame(ttk.Frame):
 
     # ---------------- monitoring control ----------------
     def _start_watching(self):
-        if not self.tm.snapshot():
+        items = self.tm.snapshot()
+        if not items:
             messagebox.showinfo("No icons", "Add at least one icon to watch first.")
+            return
+        if not any(item.get("enabled", True) for item in items):
+            messagebox.showinfo(
+                "No icons selected",
+                "Check 'Detect this icon' for at least one watched icon first.",
+            )
             return
         if self.watcher is not None:
             if self.watcher.is_alive():
@@ -2384,8 +2474,15 @@ class AlertWatcherFrame(ttk.Frame):
         if self._screenshot_test_running:
             self._append_log("A screenshot test is already running.")
             return
-        if not self.tm.snapshot():
+        items = self.tm.snapshot()
+        if not items:
             messagebox.showinfo("No icons", "Add at least one icon to watch first.")
+            return
+        if not any(item.get("enabled", True) for item in items):
+            messagebox.showinfo(
+                "No icons selected",
+                "Check 'Detect this icon' for at least one watched icon first.",
+            )
             return
         path = filedialog.askopenfilename(
             title="Select screenshot image",
@@ -2424,10 +2521,15 @@ class AlertWatcherFrame(ttk.Frame):
             # to identify its source resolution. Legacy scales are safer than
             # treating the virtual desktop as one enormous monitor.
             current_size = None
-        template_items = self.tm.snapshot(
-            use_grayscale=use_grayscale,
-            current_window_size=current_size,
-        )
+        template_items = [
+            item
+            for item in self.tm.snapshot(
+                use_grayscale=use_grayscale,
+                current_window_size=current_size,
+                enabled_only=True,
+            )
+            if item.get("enabled", True)
+        ]
         if is_full_monitor_screenshot:
             test_region = global_region
             origin = (monitor_box[0], monitor_box[1])
