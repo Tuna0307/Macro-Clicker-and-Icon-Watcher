@@ -520,6 +520,7 @@ class Scenario:
     steps: List[Step] = field(default_factory=list)
     poll_interval: float = 0.25
     monitor_index: int = 1
+    start_hotkey: str = "f8"
     kill_switch: str = "f12"
     target_window_title: str = ""
     diagnostics_enabled: bool = True
@@ -530,6 +531,7 @@ class Scenario:
             "steps": [s.to_dict() for s in self.steps],
             "poll_interval": self.poll_interval,
             "monitor_index": self.monitor_index,
+            "start_hotkey": self.start_hotkey,
             "kill_switch": self.kill_switch,
             "target_window_title": self.target_window_title,
             "diagnostics_enabled": self.diagnostics_enabled,
@@ -547,11 +549,14 @@ class Scenario:
         if monitor_index < 1:
             raise ValueError("monitor_index must be 1 or greater")
         name = d.get("name")
+        start_hotkey = d.get("start_hotkey", "f8")
         kill_switch = d.get("kill_switch", "f12")
         target_window_title = d.get("target_window_title", "")
         diagnostics_enabled = _bool_value(d.get("diagnostics_enabled"), True)
         if not isinstance(name, str) or not name.strip():
             raise ValueError("scenario name must be non-empty text")
+        if not isinstance(start_hotkey, str) or not start_hotkey.strip():
+            raise ValueError("start_hotkey must be non-empty text")
         if not isinstance(kill_switch, str) or not kill_switch.strip():
             raise ValueError("kill_switch must be non-empty text")
         if not isinstance(target_window_title, str):
@@ -561,6 +566,7 @@ class Scenario:
             steps=steps,
             poll_interval=poll_interval,
             monitor_index=monitor_index,
+            start_hotkey=start_hotkey,
             kill_switch=kill_switch,
             target_window_title=target_window_title,
             diagnostics_enabled=diagnostics_enabled,
@@ -650,8 +656,12 @@ def validate_scenario(scenario: Scenario, require_files=False):
         or scenario.monitor_index < 1
     ):
         raise ValueError("monitor_index must be a whole number of 1 or greater")
+    if not isinstance(scenario.start_hotkey, str) or not scenario.start_hotkey.strip():
+        raise ValueError("start_hotkey cannot be blank")
     if not isinstance(scenario.kill_switch, str) or not scenario.kill_switch.strip():
         raise ValueError("kill_switch cannot be blank")
+    if scenario.start_hotkey.strip().casefold() == scenario.kill_switch.strip().casefold():
+        raise ValueError("start_hotkey and kill_switch must use different keys")
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")
     if not isinstance(scenario.diagnostics_enabled, bool):

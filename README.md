@@ -208,6 +208,8 @@ detection type retain the previous animated/rotating behavior.
   size changes.
 - Use `click_matching_row` when one condition identifies the row and
   another condition is the button to click in that same row.
+- Each scenario can configure its own start key (default F8) and stop key
+  under **Scenario settings**. The two keys must be different.
 - The kill-switch key (default F12) is required before a scenario starts and
   is checked between captures, matches, and every action, even while the game
   has focus.

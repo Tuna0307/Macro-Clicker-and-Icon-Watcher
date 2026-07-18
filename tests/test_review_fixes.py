@@ -305,6 +305,21 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(ui._start_hotkey_handle, "f8-handle")
         self.assertEqual(ui.control_queue.get_nowait(), "start")
 
+    def test_scenario_start_hotkey_replaces_the_previous_registration(self):
+        ui = object.__new__(app.App)
+        ui.scenario = Scenario(name="Custom", start_hotkey="ctrl+f9")
+        ui._start_hotkey_handle = "old-handle"
+        ui._queue_log = Mock()
+
+        with patch.object(app.keyboard, "add_hotkey", return_value="new-handle") as add_hotkey, \
+                patch.object(app.keyboard, "remove_hotkey") as remove_hotkey:
+            registered = ui._register_start_hotkey()
+
+        self.assertTrue(registered)
+        self.assertEqual(add_hotkey.call_args.args[0], "ctrl+f9")
+        remove_hotkey.assert_called_once_with("old-handle")
+        self.assertEqual(ui._start_hotkey_handle, "new-handle")
+
     def test_f8_start_hotkey_is_ignored_while_engine_is_running(self):
         ui = object.__new__(app.App)
         ui.engine = type("Engine", (), {"is_running": True})()

@@ -76,6 +76,25 @@ class ModelValidationTests(unittest.TestCase):
 
         self.assertEqual(restored.steps[0].conditions[0], condition)
 
+    def test_scenario_start_hotkey_round_trips_and_legacy_files_default_to_f8(self):
+        scenario = Scenario(
+            name="Custom start",
+            start_hotkey="ctrl+f8",
+            kill_switch="f12",
+        )
+
+        restored = Scenario.from_dict(scenario.to_dict())
+        legacy = Scenario.from_dict({"name": "Legacy", "steps": []})
+
+        self.assertEqual(restored.start_hotkey, "ctrl+f8")
+        self.assertEqual(legacy.start_hotkey, "f8")
+
+    def test_scenario_start_and_stop_hotkeys_must_be_different(self):
+        with self.assertRaisesRegex(ValueError, "different keys"):
+            validate_scenario(
+                Scenario(name="Conflicting keys", start_hotkey="F12", kill_switch="f12")
+            )
+
     def test_region_ratio_rejects_text_values_before_runtime_coordinate_math(self):
         with self.assertRaisesRegex(ValueError, "region_ratio"):
             ImageCondition.from_dict({

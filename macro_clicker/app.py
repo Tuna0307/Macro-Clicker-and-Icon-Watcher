@@ -171,9 +171,9 @@ class App:
         self.run_btn.grid(row=0, column=8, padx=3)
         self.stop_btn = ttk.Button(top, text="Stop", style="Danger.TButton", state="disabled", command=self._stop_engine)
         self.stop_btn.grid(row=0, column=9, padx=3)
-        Tooltip(
+        self.run_tooltip = Tooltip(
             self.run_btn,
-            f"Start the selected scenario ({START_MACRO_HOTKEY.upper()})",
+            f"Start the selected scenario ({self.scenario.start_hotkey.upper()})",
         )
         Tooltip(self.stop_btn, "Stop the running scenario")
 
@@ -192,6 +192,7 @@ class App:
 
         self.poll_var = tk.DoubleVar(value=self.scenario.poll_interval)
         self.monitor_var = tk.IntVar(value=self.scenario.monitor_index)
+        self.start_var = tk.StringVar(value=self.scenario.start_hotkey)
         self.kill_var = tk.StringVar(value=self.scenario.kill_switch)
         self.diagnostics_var = tk.BooleanVar(value=self.scenario.diagnostics_enabled)
         self._refresh_window_list()
@@ -385,12 +386,16 @@ class App:
         self.scenario_var.set(scenario.name)
         self.poll_var.set(scenario.poll_interval)
         self.monitor_var.set(scenario.monitor_index)
+        if hasattr(self, "start_var"):
+            self.start_var.set(scenario.start_hotkey)
         self.kill_var.set(scenario.kill_switch)
         self.target_window_var.set(scenario.target_window_title)
         if hasattr(self, "diagnostics_var"):
             self.diagnostics_var.set(scenario.diagnostics_enabled)
         self._loaded_scenario_name = loaded_name
         self._refresh_steps()
+        if hasattr(self, "_start_hotkey_handle"):
+            self._register_start_hotkey()
         if clean:
             self._mark_scenario_clean(loaded_name=loaded_name)
         else:
@@ -440,6 +445,10 @@ class App:
             raise ValueError("Monitor must be 1 or greater.")
         self.scenario.poll_interval = poll_interval
         self.scenario.monitor_index = monitor_index
+        start_var = getattr(self, "start_var", None)
+        self.scenario.start_hotkey = (
+            start_var.get().strip() if start_var is not None else self.scenario.start_hotkey
+        ) or START_MACRO_HOTKEY
         self.scenario.kill_switch = self.kill_var.get().strip() or "f12"
         self.scenario.target_window_title = self.target_window_var.get().strip()
         diagnostics_var = getattr(self, "diagnostics_var", None)
@@ -458,6 +467,7 @@ class App:
         body.columnconfigure(1, weight=1)
         poll_var = tk.DoubleVar(value=self.poll_var.get())
         monitor_var = tk.IntVar(value=self.monitor_var.get())
+        start_var = tk.StringVar(value=self.start_var.get())
         kill_var = tk.StringVar(value=self.kill_var.get())
         diagnostics_var = tk.BooleanVar(value=self.diagnostics_var.get())
 
@@ -465,16 +475,18 @@ class App:
         ttk.Entry(body, textvariable=poll_var, width=12).grid(row=0, column=1, sticky="ew", pady=6)
         ttk.Label(body, text="Monitor", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 18), pady=6)
         ttk.Entry(body, textvariable=monitor_var, width=12).grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 18), pady=6)
-        ttk.Entry(body, textvariable=kill_var, width=12).grid(row=2, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Start key", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 18), pady=6)
+        ttk.Entry(body, textvariable=start_var, width=12).grid(row=2, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 18), pady=6)
+        ttk.Entry(body, textvariable=kill_var, width=12).grid(row=3, column=1, sticky="ew", pady=6)
         ttk.Checkbutton(
             body,
             text="Collect bounded diagnostic screenshots",
             variable=diagnostics_var,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=6)
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=6)
 
         buttons = ttk.Frame(body, style="Surface.TFrame")
-        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
 
         def save_settings():
             try:
@@ -493,6 +505,25 @@ class App:
             if monitor < 1:
                 messagebox.showerror("Invalid settings", "Monitor must be 1 or greater.", parent=win)
                 return
+            start_key = start_var.get().strip() or START_MACRO_HOTKEY
+            stop_key = kill_var.get().strip() or "f12"
+            if start_key.casefold() == stop_key.casefold():
+                messagebox.showerror(
+                    "Invalid settings",
+                    "Start key and Stop key must be different.",
+                    parent=win,
+                )
+                return
+            try:
+                keyboard.parse_hotkey(start_key)
+                keyboard.parse_hotkey(stop_key)
+            except (ValueError, TypeError) as exc:
+                messagebox.showerror(
+                    "Invalid settings",
+                    f"Start key or Stop key is invalid: {exc}",
+                    parent=win,
+                )
+                return
             try:
                 _monitor_box(monitor)
             except (RuntimeError, ValueError, OSError) as exc:
@@ -500,8 +531,10 @@ class App:
                 return
             self.poll_var.set(poll)
             self.monitor_var.set(monitor)
-            self.kill_var.set(kill_var.get().strip() or "f12")
+            self.start_var.set(start_key)
+            self.kill_var.set(stop_key)
             self.diagnostics_var.set(bool(diagnostics_var.get()))
+            self._register_start_hotkey()
             win.destroy()
 
         ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="left", padx=4)
@@ -1076,15 +1109,31 @@ class App:
         return True
 
     def _register_start_hotkey(self):
+        scenario = getattr(self, "scenario", None)
+        hotkey = (
+            self.start_var.get().strip()
+            if hasattr(self, "start_var")
+            else getattr(scenario, "start_hotkey", START_MACRO_HOTKEY)
+        ) or START_MACRO_HOTKEY
         try:
-            self._start_hotkey_handle = keyboard.add_hotkey(
-                START_MACRO_HOTKEY, self._request_start_from_hotkey
-            )
+            new_handle = keyboard.add_hotkey(hotkey, self._request_start_from_hotkey)
         except Exception as exc:
             self._queue_log(
                 f"[warn] could not register start hotkey "
-                f"{START_MACRO_HOTKEY.upper()}: {exc}"
+                f"{hotkey.upper()}: {exc}"
             )
+            return False
+        old_handle = getattr(self, "_start_hotkey_handle", None)
+        self._start_hotkey_handle = new_handle
+        self._registered_start_hotkey = hotkey
+        if old_handle is not None:
+            try:
+                keyboard.remove_hotkey(old_handle)
+            except Exception:
+                pass
+        if hasattr(self, "run_tooltip"):
+            self.run_tooltip.text = f"Start the selected scenario ({hotkey.upper()})"
+        return True
 
     def _request_start_from_hotkey(self):
         self.control_queue.put("start")
@@ -1096,7 +1145,8 @@ class App:
         try:
             if root is not None and root.grab_current() is not None:
                 self._queue_log(
-                    f"[safety] {START_MACRO_HOTKEY.upper()} ignored while a dialog is open"
+                    f"[safety] {getattr(self, '_registered_start_hotkey', START_MACRO_HOTKEY).upper()} "
+                    "ignored while a dialog is open"
                 )
                 return
         except tk.TclError:
