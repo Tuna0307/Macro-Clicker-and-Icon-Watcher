@@ -815,6 +815,12 @@ def action_dialog(
         )
     )
     idle_template_var = tk.StringVar(value=getattr(a, "team_idle_template_path", ""))
+    team1_idle_template_var = tk.StringVar(
+        value=getattr(a, "team1_idle_template_path", "")
+    )
+    team3_idle_template_var = tk.StringVar(
+        value=getattr(a, "team3_idle_template_path", "")
+    )
     idle_confidence_var = tk.DoubleVar(
         value=getattr(a, "team_idle_confidence", 0.85)
     )
@@ -844,27 +850,50 @@ def action_dialog(
         state="readonly",
         width=30,
     ).grid(row=0, column=1, columnspan=4, sticky="w")
-    ttk.Label(team_frame, text="Idle icon template", style="Surface.TLabel").grid(
+    ttk.Label(
+        team_frame,
+        text="Shared idle template (legacy fallback)",
+        style="Surface.TLabel",
+    ).grid(
         row=1, column=0, sticky="w", padx=4, pady=2
     )
     ttk.Entry(team_frame, textvariable=idle_template_var, width=34).grid(
         row=1, column=1, columnspan=3, sticky="we"
     )
 
-    def browse_idle_template():
+    def browse_idle_template(variable):
         path = filedialog.askopenfilename(
             filetypes=[("PNG images", "*.png")],
             initialdir="templates",
             parent=win,
         )
         if path:
-            idle_template_var.set(portable_project_path(path))
+            variable.set(portable_project_path(path))
 
-    ttk.Button(team_frame, text="Browse", command=browse_idle_template).grid(
+    ttk.Button(
+        team_frame,
+        text="Browse",
+        command=lambda: browse_idle_template(idle_template_var),
+    ).grid(
         row=1, column=4, sticky="w", padx=4
     )
+    for row, label, variable in (
+        (2, "Team 1 (Murphy) idle template", team1_idle_template_var),
+        (3, "Team 3 (Stetmann) idle template", team3_idle_template_var),
+    ):
+        ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
+            row=row, column=0, sticky="w", padx=4, pady=2
+        )
+        ttk.Entry(team_frame, textvariable=variable, width=34).grid(
+            row=row, column=1, columnspan=3, sticky="we"
+        )
+        ttk.Button(
+            team_frame,
+            text="Browse",
+            command=lambda target=variable: browse_idle_template(target),
+        ).grid(row=row, column=4, sticky="w", padx=4)
     ttk.Label(team_frame, text="Idle confidence", style="Surface.TLabel").grid(
-        row=2, column=0, sticky="w", padx=4, pady=2
+        row=4, column=0, sticky="w", padx=4, pady=2
     )
     ttk.Spinbox(
         team_frame,
@@ -873,9 +902,9 @@ def action_dialog(
         to=1.0,
         increment=0.01,
         width=8,
-    ).grid(row=2, column=1, sticky="w")
+    ).grid(row=4, column=1, sticky="w")
     ttk.Label(team_frame, text="Button", style="Surface.TLabel").grid(
-        row=2, column=2, sticky="w", padx=(10, 4)
+        row=4, column=2, sticky="w", padx=(10, 4)
     )
     ttk.Combobox(
         team_frame,
@@ -883,7 +912,7 @@ def action_dialog(
         values=["left", "right", "middle"],
         state="readonly",
         width=8,
-    ).grid(row=2, column=3, sticky="w")
+    ).grid(row=4, column=3, sticky="w")
 
     def add_team_row(row, label, region_vars, offset_vars, max_var):
         ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
@@ -912,8 +941,8 @@ def action_dialog(
             row=row + 2, column=4, sticky="w"
         )
 
-    add_team_row(3, "Team 3 (preferred for lower levels)", team3_region_vars, team3_offset_vars, team3_max_var)
-    add_team_row(7, "Team 1 (fallback and higher levels)", team1_region_vars, team1_offset_vars, team1_max_var)
+    add_team_row(5, "Team 3 (preferred for lower levels)", team3_region_vars, team3_offset_vars, team3_max_var)
+    add_team_row(9, "Team 1 (fallback and higher levels)", team1_region_vars, team1_offset_vars, team1_max_var)
 
     # --- key fields ---
     key_var = tk.StringVar(value=a.key)
@@ -1031,13 +1060,20 @@ def action_dialog(
                 anchor = team_anchor_var.get().strip()
                 if anchor in ("", "Select condition"):
                     raise ValueError("Choose the dispatch/attack anchor condition.")
-                if not idle_template_var.get().strip():
-                    raise ValueError("Choose the idle-team icon template.")
+                shared_idle_template = idle_template_var.get().strip()
+                team1_idle_template = team1_idle_template_var.get().strip()
+                team3_idle_template = team3_idle_template_var.get().strip()
+                if not (team1_idle_template or shared_idle_template):
+                    raise ValueError("Choose the Team 1 idle icon template.")
+                if not (team3_idle_template or shared_idle_template):
+                    raise ValueError("Choose the Team 3 idle icon template.")
                 new_action.on_condition_index = condition_index_from_choice(
                     anchor,
                     "Anchor condition",
                 )
-                new_action.team_idle_template_path = idle_template_var.get().strip()
+                new_action.team_idle_template_path = shared_idle_template
+                new_action.team1_idle_template_path = team1_idle_template
+                new_action.team3_idle_template_path = team3_idle_template
                 new_action.team_idle_confidence = idle_confidence_var.get()
                 new_action.button = team_button_var.get()
                 new_action.team1_idle_region = [

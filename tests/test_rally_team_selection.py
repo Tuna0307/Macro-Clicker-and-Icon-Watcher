@@ -157,6 +157,8 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
     def test_team_action_round_trips_and_validates(self):
         action = self._action()
+        action.team1_idle_template_path = "templates/Team1Idle.png"
+        action.team3_idle_template_path = "templates/Team3Idle.png"
         restored = Action.from_dict(action.to_dict())
         scenario = Scenario(
             name="Two rally teams",
@@ -171,7 +173,29 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         validate_scenario(scenario)
 
-        self.assertEqual(restored, action)
+        self.assertEqual(
+            restored.team1_idle_template_path,
+            action.team1_idle_template_path,
+        )
+        self.assertEqual(
+            restored.team3_idle_template_path,
+            action.team3_idle_template_path,
+        )
+
+    def test_team_action_with_only_shared_idle_template_remains_valid(self):
+        action = self._action()
+        scenario = Scenario(
+            name="Legacy two rally teams",
+            steps=[
+                Step(
+                    name="Select",
+                    conditions=[ImageCondition(template_path="templates/Attack.png")],
+                    actions=[action],
+                )
+            ],
+        )
+
+        validate_scenario(scenario)
 
     def test_matching_row_click_carries_its_ocr_level_to_team_selection(self):
         engine = object.__new__(MacroEngine)
@@ -258,6 +282,14 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(
             team_action.team_idle_template_path,
             "templates/TeamIdle.png",
+        )
+        self.assertEqual(
+            team_action.team1_idle_template_path,
+            "templates/Team1Idle.png",
+        )
+        self.assertEqual(
+            team_action.team3_idle_template_path,
+            "templates/Team3Idle.png",
         )
 
     def test_busy_portraits_adapt_the_row_level_cap(self):

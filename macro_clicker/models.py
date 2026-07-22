@@ -22,7 +22,9 @@ from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
 from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
 
-ACTION_TYPES = frozenset({"click", "click_matching_row", "key", "wait", "set_step"})
+ACTION_TYPES = frozenset(
+    {"click", "click_matching_row", "select_rally_team", "key", "wait", "set_step"}
+)
 APP_DIR = str(PROJECT_ROOT)
 SCENARIOS_DIR = str(SCENARIO_PATH)
 TEMPLATES_DIR = str(MACRO_TEMPLATES_DIR)
@@ -350,6 +352,23 @@ class Action:
     level_roi: Optional[List[int]] = None       # [x, y, w, h] relative to row reference center
     no_match_condition_index: Optional[int] = None  # for click_matching_row fallback
     no_match_disable_steps: List[str] = field(default_factory=list)
+
+    # select_rally_team -- offsets/regions are relative to the anchor match center
+    team_idle_template_path: str = ""
+    team1_idle_template_path: str = ""
+    team3_idle_template_path: str = ""
+    team_idle_confidence: float = 0.85
+    team1_idle_region: Optional[List[int]] = None
+    team1_click_offset: Optional[List[int]] = None
+    team1_max_level: Optional[int] = 65
+    team3_idle_region: Optional[List[int]] = None
+    team3_click_offset: Optional[List[int]] = None
+    team3_max_level: Optional[int] = 45
+    team_status_region: Optional[List[int]] = None
+    team_status_reference_size: Optional[List[int]] = None
+    team1_busy_template_path: str = ""
+    team3_busy_template_path: str = ""
+    team_busy_confidence: float = 0.85
     x: Optional[int] = None                   # or a fixed point instead
     y: Optional[int] = None
     offset_x: int = 0
@@ -368,7 +387,23 @@ class Action:
     set_enabled: bool = True
 
     def to_dict(self):
-        return asdict(self)
+        data = asdict(self)
+        data["team_idle_template_path"] = portable_project_path(
+            self.team_idle_template_path
+        )
+        data["team1_idle_template_path"] = portable_project_path(
+            self.team1_idle_template_path
+        )
+        data["team3_idle_template_path"] = portable_project_path(
+            self.team3_idle_template_path
+        )
+        data["team1_busy_template_path"] = portable_project_path(
+            self.team1_busy_template_path
+        )
+        data["team3_busy_template_path"] = portable_project_path(
+            self.team3_busy_template_path
+        )
+        return data
 
     @staticmethod
     def from_dict(d):
@@ -405,6 +440,75 @@ class Action:
         )
         a.no_match_condition_index = _optional_int(d.get("no_match_condition_index"), a.no_match_condition_index)
         a.no_match_disable_steps = _string_list(d.get("no_match_disable_steps"))
+        a.team_idle_template_path = str(
+            d.get("team_idle_template_path", a.team_idle_template_path) or ""
+        )
+        a.team1_idle_template_path = str(
+            d.get("team1_idle_template_path", a.team1_idle_template_path) or ""
+        )
+        a.team3_idle_template_path = str(
+            d.get("team3_idle_template_path", a.team3_idle_template_path) or ""
+        )
+        a.team_idle_confidence = _float_value(
+            d.get("team_idle_confidence"), a.team_idle_confidence
+        )
+        if not 0.0 <= a.team_idle_confidence <= 1.0:
+            raise ValueError("team idle confidence must be between 0 and 1")
+        a.team1_idle_region = _validate_region(
+            _optional_int_list_field(d, "team1_idle_region", "team1_idle_region"),
+            "team1_idle_region",
+        )
+        a.team3_idle_region = _validate_region(
+            _optional_int_list_field(d, "team3_idle_region", "team3_idle_region"),
+            "team3_idle_region",
+        )
+        a.team1_click_offset = _optional_int_list_field(
+            d, "team1_click_offset", "team1_click_offset"
+        )
+        a.team3_click_offset = _optional_int_list_field(
+            d, "team3_click_offset", "team3_click_offset"
+        )
+        for label, value in (
+            ("team1_click_offset", a.team1_click_offset),
+            ("team3_click_offset", a.team3_click_offset),
+        ):
+            if value is not None and len(value) != 2:
+                raise ValueError(f"{label} must contain [x, y]")
+        a.team1_max_level = _optional_int(
+            d.get("team1_max_level"), a.team1_max_level
+        )
+        a.team3_max_level = _optional_int(
+            d.get("team3_max_level"), a.team3_max_level
+        )
+        for label, value in (
+            ("team1_max_level", a.team1_max_level),
+            ("team3_max_level", a.team3_max_level),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{label} cannot be negative")
+        a.team_status_region = _validate_region(
+            _optional_int_list_field(d, "team_status_region", "team_status_region"),
+            "team_status_region",
+        )
+        a.team_status_reference_size = _validate_window_size(
+            _optional_int_list_field(
+                d,
+                "team_status_reference_size",
+                "team_status_reference_size",
+            ),
+            "team_status_reference_size",
+        )
+        a.team1_busy_template_path = str(
+            d.get("team1_busy_template_path", a.team1_busy_template_path) or ""
+        )
+        a.team3_busy_template_path = str(
+            d.get("team3_busy_template_path", a.team3_busy_template_path) or ""
+        )
+        a.team_busy_confidence = _float_value(
+            d.get("team_busy_confidence"), a.team_busy_confidence
+        )
+        if not 0.0 <= a.team_busy_confidence <= 1.0:
+            raise ValueError("team busy confidence must be between 0 and 1")
         a.x = _optional_int(d.get("x"), a.x)
         a.y = _optional_int(d.get("y"), a.y)
         if (a.x is None) != (a.y is None):
@@ -429,6 +533,27 @@ class Action:
             raise ValueError("key actions require a key name")
         if a.type == "set_step" and not a.step_name.strip():
             raise ValueError("set_step actions require a target step name")
+        if a.type == "select_rally_team":
+            if a.on_condition_index is None:
+                raise ValueError("select_rally_team requires an anchor condition")
+            if not (
+                a.team1_idle_template_path.strip()
+                or a.team_idle_template_path.strip()
+            ):
+                raise ValueError("select_rally_team requires a Team 1 idle template")
+            if not (
+                a.team3_idle_template_path.strip()
+                or a.team_idle_template_path.strip()
+            ):
+                raise ValueError("select_rally_team requires a Team 3 idle template")
+            for label, value in (
+                ("team1_idle_region", a.team1_idle_region),
+                ("team1_click_offset", a.team1_click_offset),
+                ("team3_idle_region", a.team3_idle_region),
+                ("team3_click_offset", a.team3_click_offset),
+            ):
+                if value is None:
+                    raise ValueError(f"select_rally_team requires {label}")
         return a
 
     def summary(self):
@@ -449,8 +574,19 @@ class Action:
                 if self.no_match_condition_index is not None else ""
             )
             delay = f"; wait {self.pre_click_delay:g}s before click" if self.pre_click_delay else ""
+            availability = (
+                "; adapt level to idle rally teams"
+                if self.team1_busy_template_path and self.team3_busy_template_path
+                else ""
+            )
             return (f"Click {self.target_choice} condition #{self.on_condition_index} matching "
-                    f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}  [{self.button}]")
+                    f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}"
+                    f"{availability}  [{self.button}]")
+        if self.type == "select_rally_team":
+            return (
+                f"Select idle Team 3 through level {self.team3_max_level}, then "
+                f"Team 1 through level {self.team1_max_level}"
+            )
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
@@ -851,6 +987,59 @@ def validate_scenario(scenario: Scenario, require_files=False):
             ):
                 raise ValueError(f"{prefix} minimum level cannot exceed maximum level")
             _validate_region(action.level_roi, f"{prefix} level ROI")
+            if (
+                isinstance(action.team_idle_confidence, bool)
+                or not isinstance(action.team_idle_confidence, (int, float))
+                or not math.isfinite(float(action.team_idle_confidence))
+                or not 0.0 <= action.team_idle_confidence <= 1.0
+            ):
+                raise ValueError(
+                    f"{prefix} team idle confidence must be between 0 and 1"
+                )
+            for field_name in ("team1_idle_region", "team3_idle_region"):
+                _validate_region(
+                    getattr(action, field_name),
+                    f"{prefix} {field_name.replace('_', ' ')}",
+                )
+            for field_name in ("team1_click_offset", "team3_click_offset"):
+                value = getattr(action, field_name)
+                if value is not None and (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(
+                        isinstance(part, bool) or not isinstance(part, int)
+                        for part in value
+                    )
+                ):
+                    raise ValueError(f"{prefix} {field_name} must contain [x, y]")
+            for field_name in ("team1_max_level", "team3_max_level"):
+                value = getattr(action, field_name)
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise ValueError(f"{prefix} {field_name} cannot be negative")
+            _validate_region(action.team_status_region, f"{prefix} team status region")
+            _validate_window_size(
+                action.team_status_reference_size,
+                f"{prefix} team status reference size",
+            )
+            if (
+                isinstance(action.team_busy_confidence, bool)
+                or not isinstance(action.team_busy_confidence, (int, float))
+                or not math.isfinite(float(action.team_busy_confidence))
+                or not 0.0 <= action.team_busy_confidence <= 1.0
+            ):
+                raise ValueError(
+                    f"{prefix} team busy confidence must be between 0 and 1"
+                )
+            for field_name in (
+                "team1_busy_template_path",
+                "team3_busy_template_path",
+            ):
+                if not isinstance(getattr(action, field_name), str):
+                    raise ValueError(f"{prefix} {field_name} must be text")
             for field_name in (
                 "on_condition_index",
                 "match_condition_index",
@@ -873,6 +1062,67 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     raise ValueError(
                         f"{prefix} row-reference and click-target conditions must differ"
                     )
+                team_status_configured = any(
+                    (
+                        action.team_status_region is not None,
+                        action.team_status_reference_size is not None,
+                        bool(action.team1_busy_template_path.strip()),
+                        bool(action.team3_busy_template_path.strip()),
+                    )
+                )
+                if team_status_configured:
+                    for field_name in (
+                        "team_status_region",
+                        "team_status_reference_size",
+                        "team1_busy_template_path",
+                        "team3_busy_template_path",
+                    ):
+                        value = getattr(action, field_name)
+                        if value is None or (isinstance(value, str) and not value.strip()):
+                            raise ValueError(f"{prefix} requires {field_name}")
+                    if require_files:
+                        for raw_path in (
+                            action.team1_busy_template_path,
+                            action.team3_busy_template_path,
+                        ):
+                            if not os.path.isfile(project_path(raw_path)):
+                                raise ValueError(
+                                    f"{prefix} team-busy template does not exist: "
+                                    f"{raw_path}"
+                                )
+            if action.type == "select_rally_team":
+                if action.on_condition_index is None:
+                    raise ValueError(f"{prefix} requires an anchor condition")
+                effective_idle_paths = {
+                    "Team 1": (
+                        action.team1_idle_template_path
+                        or action.team_idle_template_path
+                    ),
+                    "Team 3": (
+                        action.team3_idle_template_path
+                        or action.team_idle_template_path
+                    ),
+                }
+                for team_label, raw_path in effective_idle_paths.items():
+                    if not isinstance(raw_path, str) or not raw_path.strip():
+                        raise ValueError(
+                            f"{prefix} requires a {team_label} idle-team template"
+                        )
+                for field_name in (
+                    "team1_idle_region",
+                    "team1_click_offset",
+                    "team3_idle_region",
+                    "team3_click_offset",
+                ):
+                    if getattr(action, field_name) is None:
+                        raise ValueError(f"{prefix} requires {field_name}")
+                if require_files:
+                    for team_label, raw_path in effective_idle_paths.items():
+                        if not os.path.isfile(project_path(raw_path)):
+                            raise ValueError(
+                                f"{prefix} {team_label} idle-team template does "
+                                f"not exist: {raw_path}"
+                            )
             if action.type == "key" and (
                 not isinstance(action.key, str) or not action.key.strip()
             ):
