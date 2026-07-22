@@ -666,7 +666,7 @@
           "team_idle_template_path": "templates/TeamIdle.png",
           "team1_idle_template_path": "templates/Team1Idle.png",
           "team3_idle_template_path": "templates/Team3Idle.png",
-          "team_idle_confidence": 0.85,
+          "team_idle_confidence": 0.8,
           "team1_idle_region": [
             -249,
             130,

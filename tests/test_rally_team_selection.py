@@ -468,6 +468,41 @@ class RallyTeamSelectionTests(unittest.TestCase):
             "templates/Team3Idle.png",
         )
 
+    def test_two_team_idle_threshold_accepts_supplied_idle_and_rejects_busy(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Attack Confirm"
+            for action in step.actions
+            if action.type == "select_rally_team"
+        )
+        idle_crop = cv2.imread(
+            project_path(
+                "tests/fixtures/rally_team_selection/team3_idle_0818.png"
+            )
+        )
+        busy_crop = cv2.imread(
+            project_path(
+                "tests/fixtures/rally_team_selection/team3_busy_0736.png"
+            )
+        )
+        template = cv2.imread(project_path("templates/Team3Idle.png"))
+        self.assertIsNotNone(idle_crop)
+        self.assertIsNotNone(busy_crop)
+        self.assertIsNotNone(template)
+
+        engine = object.__new__(MacroEngine)
+        engine.low_variance_threshold = 1.0
+        idle_score, _ = engine._best_scaled_template_match(idle_crop, template)
+        busy_score, _ = engine._best_scaled_template_match(busy_crop, template)
+
+        self.assertAlmostEqual(action.team_idle_confidence, 0.80)
+        self.assertGreaterEqual(idle_score, action.team_idle_confidence)
+        self.assertLess(busy_score, action.team_idle_confidence)
+        self.assertAlmostEqual(idle_score, 0.8177595, places=5)
+        self.assertAlmostEqual(busy_score, 0.7355111, places=5)
+
     def test_busy_portraits_adapt_the_row_level_cap(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         action = next(
