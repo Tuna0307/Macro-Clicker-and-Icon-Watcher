@@ -1551,9 +1551,18 @@ class MacroEngine(RallyMatchingMixin):
                 )
             recovery_x = anchor[0]
             recovery_y = round(anchor[1] - 400 * scale_y)
-            recovery_clicked = bool(
-                self._click_point(recovery_x, recovery_y, action.button)
-            )
+            try:
+                recovery_clicked = bool(
+                    self._click_point(recovery_x, recovery_y, action.button)
+                )
+            except (pyautogui.FailSafeException, _StopRequested):
+                raise
+            except Exception as exc:
+                recovery_clicked = False
+                self.log(
+                    "  [recovery] rally selector dismissal failed "
+                    f"({type(exc).__name__}: {exc})"
+                )
             if recovery_clicked:
                 self.log(
                     "  [recovery] dismissed rally team selector at "

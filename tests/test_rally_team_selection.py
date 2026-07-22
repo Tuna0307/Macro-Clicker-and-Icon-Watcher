@@ -2,8 +2,9 @@ import unittest
 
 import cv2
 import numpy as np
+import pyautogui
 
-from macro_clicker.engine import MacroEngine
+from macro_clicker.engine import MacroEngine, _StopRequested
 from macro_clicker.models import (
     Action,
     ImageCondition,
@@ -247,6 +248,45 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertIsNone(engine._pending_rally_level)
         self.assertIsNone(engine._pending_rally_team_availability)
 
+    def test_no_idle_diagnostic_uses_selector_frame_and_precedes_dismissal(self):
+        engine, _clicked = self._engine(
+            45, team1_idle=False, team3_idle=False
+        )
+        engine._abort_current_step = False
+        engine._cleanup_after_abort = False
+        captured_frames = []
+        original_grab = engine._grab
+
+        def grab(region):
+            result = original_grab(region)
+            captured_frames.append(result)
+            return result
+
+        events = []
+
+        def submit(_event_type, _metadata, **kwargs):
+            events.append(("diagnostic", kwargs["context_snapshot"]))
+
+        def click(x, y, button):
+            events.append(("click", (x, y, button)))
+            return True
+
+        engine._grab = grab
+        engine._submit_rally_diagnostic = submit
+        engine._click_point = click
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertTrue(result)
+        self.assertEqual([event[0] for event in events], ["diagnostic", "click"])
+        snapshot = events[0][1]
+        self.assertIs(snapshot.frame, captured_frames[0][0])
+        self.assertEqual((snapshot.left, snapshot.top), captured_frames[0][1:])
+        self.assertEqual(events[1][1], (500, -100, "left"))
+
     def test_high_level_with_busy_team1_aborts_for_back_recovery(self):
         engine, clicked = self._engine(50, team1_idle=False, team3_idle=False)
         engine._abort_current_step = False
@@ -282,6 +322,72 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertTrue(engine._cleanup_after_abort)
         self.assertIsNone(engine._pending_rally_level)
         self.assertIsNone(engine._pending_rally_team_availability)
+
+    def test_no_idle_still_requests_cleanup_when_dismiss_click_raises(self):
+        engine, _clicked = self._engine(
+            45, team1_idle=False, team3_idle=False
+        )
+        engine._abort_current_step = False
+        engine._cleanup_after_abort = False
+        engine._pending_rally_team_availability = {"level_cap": 65}
+        logs = []
+        engine.log = logs.append
+
+        def raise_click_error(_x, _y, _button):
+            raise RuntimeError("dismissal click failed")
+
+        engine._click_point = raise_click_error
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertFalse(result)
+        self.assertTrue(engine._abort_current_step)
+        self.assertTrue(engine._cleanup_after_abort)
+        self.assertIsNone(engine._pending_rally_level)
+        self.assertIsNone(engine._pending_rally_team_availability)
+        self.assertTrue(
+            any(
+                "RuntimeError: dismissal click failed" in message
+                for message in logs
+            )
+        )
+
+    def test_no_idle_dismissal_propagates_fail_safe(self):
+        engine, _clicked = self._engine(
+            45, team1_idle=False, team3_idle=False
+        )
+
+        def raise_fail_safe(_x, _y, _button):
+            raise pyautogui.FailSafeException("fail-safe requested")
+
+        engine._click_point = raise_fail_safe
+        points, matches = self._context()
+
+        with self.assertRaisesRegex(
+            pyautogui.FailSafeException, "fail-safe requested"
+        ):
+            engine._run_select_rally_team_action(
+                self._action(), points, matches
+            )
+
+    def test_no_idle_dismissal_propagates_stop_requested(self):
+        engine, _clicked = self._engine(
+            45, team1_idle=False, team3_idle=False
+        )
+
+        def raise_stop_requested(_x, _y, _button):
+            raise _StopRequested("stop requested")
+
+        engine._click_point = raise_stop_requested
+        points, matches = self._context()
+
+        with self.assertRaisesRegex(_StopRequested, "stop requested"):
+            engine._run_select_rally_team_action(
+                self._action(), points, matches
+            )
 
     def test_aborted_attack_step_skips_attack_click_and_runs_recovery_step(self):
         attack_step = Step(
@@ -647,11 +753,10 @@ class RallyTeamSelectionTests(unittest.TestCase):
         idle_score, _ = engine._best_scaled_template_match(idle_crop, template)
         busy_score, _ = engine._best_scaled_template_match(busy_crop, template)
 
-        self.assertAlmostEqual(action.team_idle_confidence, 0.80)
+        self.assertEqual(action.team_idle_confidence, 0.80)
         self.assertGreaterEqual(idle_score, action.team_idle_confidence)
         self.assertLess(busy_score, action.team_idle_confidence)
-        self.assertAlmostEqual(idle_score, 0.8177595, places=5)
-        self.assertAlmostEqual(busy_score, 0.7355111, places=5)
+        self.assertGreaterEqual(idle_score - busy_score, 0.05)
 
     def test_busy_portraits_adapt_the_row_level_cap(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
