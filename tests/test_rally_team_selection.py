@@ -327,6 +327,69 @@ class RallyTeamSelectionTests(unittest.TestCase):
             ],
         )
 
+    def test_cleanup_abort_skips_attack_and_runs_only_trailing_set_steps(self):
+        joining_step = Step(name="Joining", enabled=True)
+        attack_step = Step(
+            name="Attack Confirm",
+            enabled=True,
+            actions=[
+                Action(type="select_rally_team"),
+                Action(type="wait", seconds=0.2),
+                Action(type="click", x=10, y=20),
+                Action(type="set_step", step_name="Joining", set_enabled=False),
+                Action(
+                    type="set_step",
+                    step_name="Attack Confirm",
+                    set_enabled=False,
+                ),
+                Action(
+                    type="set_step",
+                    step_name="Back if wrong mob",
+                    set_enabled=False,
+                ),
+            ],
+        )
+        back_step = Step(name="Back if wrong mob", enabled=True)
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="Cleanup abort",
+            steps=[joining_step, attack_step, back_step],
+        )
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._last_fired = {attack_step.name: 0.0}
+        engine._evaluate_uses_frame_cache = False
+        engine._evaluate_step = lambda _step: (True, {}, {})
+        engine._refresh_step_caches = lambda: [attack_step]
+        engine._prepare_rally_team_availability_for_entry = lambda _step: True
+        engine._should_log_perf = lambda *_args, **_kwargs: False
+        engine.log = lambda _message: None
+        engine._step_lookup = {
+            step.name: step for step in engine.scenario.steps
+        }
+        executed = []
+
+        def run_action(_step, action, _points, _matches):
+            executed.append(action.type)
+            if action.type == "select_rally_team":
+                engine._abort_current_step = True
+                engine._cleanup_after_abort = True
+                return True
+            if action.type == "set_step":
+                engine._step_lookup[action.step_name].enabled = action.set_enabled
+            return False
+
+        engine._run_action = run_action
+
+        self.assertTrue(engine._cycle())
+        self.assertEqual(
+            executed,
+            ["select_rally_team", "set_step", "set_step", "set_step"],
+        )
+        self.assertFalse(joining_step.enabled)
+        self.assertFalse(attack_step.enabled)
+        self.assertFalse(back_step.enabled)
+        self.assertFalse(engine._cleanup_after_abort)
+
     def test_team_action_round_trips_and_validates(self):
         action = self._action()
         action.team1_idle_template_path = "templates/Team1Idle.png"

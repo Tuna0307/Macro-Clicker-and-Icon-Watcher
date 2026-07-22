@@ -1731,7 +1731,8 @@ class MacroEngine(RallyMatchingMixin):
                 fired_any = True
                 retry_step = False
                 self._abort_current_step = False
-                for action in step.actions:
+                self._cleanup_after_abort = False
+                for action_index, action in enumerate(step.actions):
                     if self._stop_requested():
                         return fired_any
                     self._retry_current_step = False
@@ -1754,6 +1755,15 @@ class MacroEngine(RallyMatchingMixin):
                         frame_cache.clear()
                         self._window_rect_lookup_cache = {}
                     if getattr(self, "_abort_current_step", False):
+                        if getattr(self, "_cleanup_after_abort", False):
+                            for cleanup_action in step.actions[action_index + 1 :]:
+                                if cleanup_action.type != "set_step":
+                                    continue
+                                if self._stop_requested():
+                                    return fired_any
+                                self._retry_current_step = False
+                                self._run_action(step, cleanup_action, points, matches)
+                            self._cleanup_after_abort = False
                         break
                     if getattr(self, "_retry_current_step", False):
                         retry_step = True
