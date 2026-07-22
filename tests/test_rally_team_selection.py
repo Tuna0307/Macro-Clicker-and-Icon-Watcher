@@ -1148,16 +1148,20 @@ class RallyTeamSelectionTests(unittest.TestCase):
         target = {"center": (300, 100)}
         engine = object.__new__(MacroEngine)
         engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
-        engine._pending_rally_team_availability = {"level_cap": 70}
         engine._read_level_for_row = lambda _action, _reference: 60
         engine.log = lambda _message: None
 
-        selected = engine._find_matching_row_targets(
-            action,
-            {0: [reference], 1: [target]},
-        )
+        for pending_cap in (70, "unbounded"):
+            with self.subTest(pending_cap=pending_cap):
+                engine._pending_rally_team_availability = {
+                    "level_cap": pending_cap
+                }
+                selected = engine._find_matching_row_targets(
+                    action,
+                    {0: [reference], 1: [target]},
+                )
 
-        self.assertEqual(selected, [])
+                self.assertEqual(selected, [])
 
     def test_busy_team_requires_a_clear_score_drop_before_becoming_idle(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
