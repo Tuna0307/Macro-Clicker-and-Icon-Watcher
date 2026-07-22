@@ -870,6 +870,12 @@ def action_dialog(
         if path:
             variable.set(portable_project_path(path))
 
+    def idle_template_browse_command(variable: tk.StringVar):
+        def browse() -> None:
+            browse_idle_template(variable)
+
+        return browse
+
     ttk.Button(
         team_frame,
         text="Browse",
@@ -890,7 +896,7 @@ def action_dialog(
         ttk.Button(
             team_frame,
             text="Browse",
-            command=lambda target=variable: browse_idle_template(target),
+            command=idle_template_browse_command(variable),
         ).grid(row=row, column=4, sticky="w", padx=4)
     ttk.Label(team_frame, text="Idle confidence", style="Surface.TLabel").grid(
         row=4, column=0, sticky="w", padx=4, pady=2
