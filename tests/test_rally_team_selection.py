@@ -225,20 +225,27 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(clicked, [(515, 320, "left")])
 
-    def test_no_eligible_idle_team_aborts_before_attack_action(self):
+    def test_no_eligible_idle_team_dismisses_selector_and_requests_cleanup(self):
         engine, clicked = self._engine(45, team1_idle=False, team3_idle=False)
         engine._abort_current_step = False
-        points, matches = self._context()
+        engine._cleanup_after_abort = False
+        engine._pending_rally_team_availability = {"level_cap": 65}
+        points = {0: (962, 808)}
+        matches = {
+            0: [{"center": (962, 808), "scale_x": 1.0, "scale_y": 1.0}]
+        }
 
         result = engine._run_select_rally_team_action(
             self._action(), points, matches
         )
 
-        self.assertFalse(result)
-        self.assertEqual(clicked, [])
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(962, 408, "left")])
         self.assertFalse(engine._retry_current_step)
         self.assertTrue(engine._abort_current_step)
+        self.assertTrue(engine._cleanup_after_abort)
         self.assertIsNone(engine._pending_rally_level)
+        self.assertIsNone(engine._pending_rally_team_availability)
 
     def test_high_level_with_busy_team1_aborts_for_back_recovery(self):
         engine, clicked = self._engine(50, team1_idle=False, team3_idle=False)
@@ -249,11 +256,32 @@ class RallyTeamSelectionTests(unittest.TestCase):
             self._action(), points, matches
         )
 
-        self.assertFalse(result)
-        self.assertEqual(clicked, [])
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(500, -100, "left")])
         self.assertFalse(engine._retry_current_step)
         self.assertTrue(engine._abort_current_step)
+        self.assertTrue(engine._cleanup_after_abort)
         self.assertIsNone(engine._pending_rally_level)
+
+    def test_no_idle_still_requests_cleanup_when_dismiss_click_fails(self):
+        engine, _clicked = self._engine(
+            45, team1_idle=False, team3_idle=False
+        )
+        engine._abort_current_step = False
+        engine._cleanup_after_abort = False
+        engine._pending_rally_team_availability = {"level_cap": 65}
+        engine._click_point = lambda _x, _y, _button: False
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertFalse(result)
+        self.assertTrue(engine._abort_current_step)
+        self.assertTrue(engine._cleanup_after_abort)
+        self.assertIsNone(engine._pending_rally_level)
+        self.assertIsNone(engine._pending_rally_team_availability)
 
     def test_aborted_attack_step_skips_attack_click_and_runs_recovery_step(self):
         attack_step = Step(

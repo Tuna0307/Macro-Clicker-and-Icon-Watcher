@@ -85,6 +85,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
         self._abort_current_step = False
+        self._cleanup_after_abort = False
         self._level_ocr_reader: Optional[LevelOcrReader] = None
         self._level_ocr_reader_lock = threading.Lock()
         self._level_ocr_unavailable_logged = False
@@ -144,6 +145,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
         self._abort_current_step = False
+        self._cleanup_after_abort = False
         self._last_perf_log.clear()
         self._ever_started = True
         self._step_names_snapshot = ()
@@ -1547,10 +1549,27 @@ class MacroEngine(RallyMatchingMixin):
                     key=f"team:no-eligible:{level}",
                     context_snapshot=snapshot,
                 )
+            recovery_x = anchor[0]
+            recovery_y = round(anchor[1] - 400 * scale_y)
+            recovery_clicked = bool(
+                self._click_point(recovery_x, recovery_y, action.button)
+            )
+            if recovery_clicked:
+                self.log(
+                    "  [recovery] dismissed rally team selector at "
+                    f"({recovery_x}, {recovery_y})"
+                )
+            else:
+                self.log(
+                    "  [recovery] could not dismiss rally team selector; "
+                    "continuing state cleanup"
+                )
             self._pending_rally_level = None
+            self._pending_rally_team_availability = None
             self._retry_current_step = False
+            self._cleanup_after_abort = True
             self._abort_current_step = True
-            return False
+            return recovery_clicked
 
         click_x, click_y = selected["click"]
         if self._click_point(click_x, click_y, action.button) is False:
