@@ -40,6 +40,7 @@ from .models import (
     ImageCondition,
     Scenario,
     Step,
+    has_smart_rally_team_prefilter,
     project_path,
     validate_scenario,
 )
@@ -432,7 +433,11 @@ class MacroEngine(RallyMatchingMixin):
         for action in step.actions:
             if (
                 action.type != "click_matching_row"
-                or (action.min_level is None and action.max_level is None)
+                or (
+                    action.min_level is None
+                    and action.max_level is None
+                    and not has_smart_rally_team_prefilter(action)
+                )
                 or action.match_condition_index is None
                 or not 0 <= action.match_condition_index < len(regions)
             ):

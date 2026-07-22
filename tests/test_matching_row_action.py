@@ -138,6 +138,66 @@ class MatchingRowActionTests(unittest.TestCase):
             all(np.all(frame == 1) for _offset, _rect, frame in candidates)
         )
 
+    def test_unbounded_smart_row_snapshot_still_contains_level_crops(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="smart atomic", monitor_index=1)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._all_match_indices = {}
+        engine._evaluate_uses_frame_cache = True
+        engine._level_offset_cache = {}
+        engine._window_rect_lookup_cache = None
+        engine._matching_row_snapshot = None
+        captures = []
+
+        def grab(region):
+            captures.append(region)
+            return (
+                np.full((region[3], region[2], 3), len(captures), dtype=np.uint8),
+                region[0],
+                region[1],
+            )
+
+        def evaluate(index, _condition, frame, _off_x, _off_y, collect_all):
+            self.assertTrue(collect_all)
+            self.assertEqual(int(frame[0, 0, 0]), 1)
+            center = (110, 110) if index == 0 else (210, 110)
+            return True, [{"center": center, "box": (*center, *center)}]
+
+        engine._grab = grab
+        engine._resolve_capture_region = lambda condition: condition.region
+        engine._evaluate_template_condition = evaluate
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            min_level=None,
+            max_level=None,
+            level_roi=[0, 30, 20, 20],
+            team_status_region=[0, 0, 100, 100],
+            team_status_reference_size=[1920, 1080],
+            team1_busy_template_path="team1-busy.png",
+            team3_busy_template_path="team3-busy.png",
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="mob.png", region=[100, 100, 20, 20]),
+                ImageCondition(template_path="join.png", region=[200, 100, 20, 20]),
+            ],
+            actions=[action],
+        )
+
+        refreshed = engine._refresh_click_matching_row_matches(step, action)
+        self.assertIsNotNone(refreshed)
+        _points, matches = refreshed
+        candidates = engine._capture_level_crop_candidates(action, matches[0][0])
+
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(len(candidates), 6)
+        self.assertTrue(
+            all(np.all(frame == 1) for _offset, _rect, frame in candidates)
+        )
+
     def test_row_tolerance_scales_with_reference_match_geometry(self):
         engine = object.__new__(MacroEngine)
         action = Action(

@@ -801,6 +801,23 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(level_cap(team1_busy=True, team3_busy=False), 50)
         self.assertEqual(level_cap(team1_busy=False, team3_busy=False), 65)
         self.assertIsNone(level_cap(team1_busy=True, team3_busy=True))
+        selector_action = next(
+            action
+            for step in scenario.steps
+            for action in step.actions
+            if action.type == "select_rally_team"
+        )
+        selector_action.team3_max_level = None
+        self.assertEqual(
+            level_cap(team1_busy=True, team3_busy=False),
+            "unbounded",
+        )
+        selector_action.team3_max_level = 50
+        selector_action.team1_max_level = None
+        self.assertEqual(
+            level_cap(team1_busy=False, team3_busy=True),
+            "unbounded",
+        )
 
     def test_visible_team3_limit_controls_joining_prefilter(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
@@ -957,22 +974,24 @@ class RallyTeamSelectionTests(unittest.TestCase):
             },
         )
 
-    def test_legacy_row_action_limits_apply_without_a_team_selector(self):
+    def test_smart_limit_resolver_rejects_a_missing_selector_at_runtime(self):
         row_action = Action(
             type="click_matching_row",
+            team_status_region=[0, 0, 100, 100],
+            team_status_reference_size=[100, 100],
+            team1_busy_template_path="team1-busy.png",
+            team3_busy_template_path="team3-busy.png",
             team1_max_level=65,
             team3_max_level=45,
         )
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(
-            name="Legacy rally teams",
+            name="Missing selector",
             steps=[Step(name="Joining", actions=[row_action])],
         )
 
-        self.assertEqual(
-            engine._rally_team_level_limits(row_action),
-            ({1: 65, 3: 45}, "legacy_row_action"),
-        )
+        with self.assertRaisesRegex(ValueError, "exactly one select_rally_team"):
+            engine._rally_team_level_limits(row_action)
 
     def test_level_limit_resolver_rejects_multiple_team_selectors_at_runtime(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
@@ -997,10 +1016,10 @@ class RallyTeamSelectionTests(unittest.TestCase):
         engine = object.__new__(MacroEngine)
         engine.scenario = scenario
 
-        with self.assertRaisesRegex(ValueError, "multiple select_rally_team"):
+        with self.assertRaisesRegex(ValueError, "exactly one select_rally_team"):
             engine._rally_team_level_limits(joining_action)
 
-    def test_blank_visible_team_limit_uses_joining_maximum_when_team_is_idle(self):
+    def test_blank_visible_team_limit_is_unbounded_when_that_team_is_idle(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         joining_action = next(
             action
@@ -1016,8 +1035,9 @@ class RallyTeamSelectionTests(unittest.TestCase):
             if action.type == "select_rally_team"
         )
         selector_action.team3_max_level = None
-        self.assertEqual(joining_action.team3_max_level, 45)
-        self.assertEqual(joining_action.max_level, 65)
+        joining_action.max_level = 12
+        joining_action.team1_max_level = 11
+        joining_action.team3_max_level = 10
 
         engine = object.__new__(MacroEngine)
         engine.scenario = scenario
@@ -1038,7 +1058,10 @@ class RallyTeamSelectionTests(unittest.TestCase):
             (0, 0),
         )
 
-        self.assertEqual(engine._available_rally_team_level_cap(joining_action), 65)
+        self.assertEqual(
+            engine._available_rally_team_level_cap(joining_action),
+            "unbounded",
+        )
         self.assertEqual(
             engine._last_rally_team_availability["level_limits"], {1: 65, 3: None}
         )
@@ -1047,7 +1070,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
             "select_rally_team",
         )
 
-    def test_joining_maximum_bounds_selector_prefilter(self):
+    def test_selector_limit_above_joining_maximum_is_not_clamped(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         joining_action = next(
             action
@@ -1063,6 +1086,9 @@ class RallyTeamSelectionTests(unittest.TestCase):
             if action.type == "select_rally_team"
         )
         selector_action.team3_max_level = 70
+        joining_action.max_level = 30
+        joining_action.team1_max_level = 29
+        joining_action.team3_max_level = 28
 
         engine = object.__new__(MacroEngine)
         engine.scenario = scenario
@@ -1084,7 +1110,31 @@ class RallyTeamSelectionTests(unittest.TestCase):
             (0, 0),
         )
 
-        self.assertEqual(engine._available_rally_team_level_cap(joining_action), 65)
+        self.assertEqual(engine._available_rally_team_level_cap(joining_action), 70)
+
+    def test_original_one_team_row_maximum_remains_active(self):
+        scenario = load_scenario("Rally Gold Mob")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        self.assertIsNotNone(action.max_level)
+        self.assertFalse(action.team1_busy_template_path)
+        self.assertFalse(action.team3_busy_template_path)
+
+        engine = object.__new__(MacroEngine)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine.log = lambda _message: None
+        rejected_level = action.max_level + 1
+        engine._read_level_for_row = lambda _action, _reference: rejected_level
+
+        self.assertEqual(
+            engine._row_level_status(action, {"center": (100, 100)}),
+            ("ineligible", rejected_level),
+        )
 
     def test_busy_team_requires_a_clear_score_drop_before_becoming_idle(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
@@ -1191,8 +1241,6 @@ class RallyTeamSelectionTests(unittest.TestCase):
             for action in step.actions
             if action.type == "select_rally_team"
         )
-        row_action.min_level = 0
-        row_action.max_level = None
         selector_action.team3_max_level = None
 
         engine = object.__new__(MacroEngine)
@@ -1221,7 +1269,10 @@ class RallyTeamSelectionTests(unittest.TestCase):
             (1.0 if path == row_action.team1_busy_template_path else 0.0),
             (0, 0),
         )
-        engine._read_level_for_row = lambda _action, _reference: 99
+        level_reads = []
+        engine._read_level_for_row = (
+            lambda _action, _reference: level_reads.append(99) or 99
+        )
 
         self.assertTrue(engine._prepare_rally_team_availability_for_entry(entry_step))
         row_level_cap = engine._available_rally_team_level_cap(row_action)
@@ -1238,6 +1289,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
         )
         self.assertEqual(row_level_cap, "unbounded")
         self.assertIsNotNone(row_level_cap)
+        self.assertEqual(level_reads, [99])
         self.assertEqual(level_status, ("eligible", 99))
         self.assertEqual(
             engine._last_rally_team_availability["level_cap"],
@@ -1245,6 +1297,37 @@ class RallyTeamSelectionTests(unittest.TestCase):
         )
         self.assertIn("level cap unbounded", "\n".join(logs))
         self.assertNotIn("level cap none", "\n".join(logs))
+
+        joining_step = steps["Joining"]
+        row_matches = {
+            0: [{"center": (100, 100)}],
+            1: [{"center": (300, 100), "scale_x": 1.0, "scale_y": 1.0}],
+        }
+        engine._pending_rally_level = None
+        engine._matching_row_reuse_context = (joining_step, row_action, object())
+        engine._find_matching_row_selections = lambda *_args, **_kwargs: (
+            [
+                {
+                    "reference": row_matches[0][0],
+                    "target": row_matches[1][0],
+                    "level": level_status[1],
+                }
+            ],
+            False,
+        )
+        engine._record_matching_row_diagnostic = lambda *_args, **_kwargs: None
+        engine._click_point = lambda _x, _y, _button: True
+
+        self.assertTrue(
+            engine._run_action(
+                joining_step,
+                row_action,
+                {0: (100, 100), 1: (300, 100)},
+                row_matches,
+            )
+        )
+        self.assertEqual(engine._pending_rally_level, 99)
+        self.assertEqual(level_reads, [99])
 
     def test_rally_entry_is_blocked_when_team1_and_team3_are_both_busy(self):
         scenario = load_scenario("Rally gold mob_ 2 team")

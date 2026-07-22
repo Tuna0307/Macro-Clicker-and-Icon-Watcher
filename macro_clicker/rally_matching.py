@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from .level_ocr import LevelOcrReader
-from .models import Action, ImageCondition
+from .models import Action, ImageCondition, has_smart_rally_team_prefilter
 
 _REFERENCE_UNSET = object()
 _LEVEL_ELIGIBLE = "eligible"
@@ -259,19 +259,20 @@ class RallyMatchingMixin:
     ):
         if self._stop_requested():
             return _LEVEL_UNREADABLE, None
-        effective_max = action.max_level
+        smart_override = max_level_override is not _TEAM_LEVEL_CAP_UNSET
+        if max_level_override is None:
+            return _LEVEL_INELIGIBLE, None
+        if max_level_override == _TEAM_LEVEL_CAP_UNBOUNDED:
+            effective_max = None
+        elif smart_override:
+            effective_max = int(max_level_override)
+        else:
+            effective_max = action.max_level
         if (
-            max_level_override is not _TEAM_LEVEL_CAP_UNSET
-            and max_level_override != _TEAM_LEVEL_CAP_UNBOUNDED
+            not smart_override
+            and action.min_level is None
+            and effective_max is None
         ):
-            if max_level_override is None:
-                return _LEVEL_INELIGIBLE, None
-            effective_max = (
-                int(max_level_override)
-                if effective_max is None
-                else min(effective_max, int(max_level_override))
-            )
-        if action.min_level is None and effective_max is None:
             return _LEVEL_ELIGIBLE, None
 
         level = self._read_level_for_row(action, reference)
@@ -311,7 +312,7 @@ class RallyMatchingMixin:
     ) -> tuple[
         dict[int, int | None],
         str,
-        dict[str, str | int] | None,
+        dict[str, str | int],
     ]:
         selectors = []
         for step_index, step in enumerate(
@@ -329,22 +330,19 @@ class RallyMatchingMixin:
                             },
                         )
                     )
-        if len(selectors) > 1:
-            raise ValueError("Scenario contains multiple select_rally_team actions.")
-        if selectors:
-            selector, identity = selectors[0]
-            return (
-                {
-                    1: selector.team1_max_level,
-                    3: selector.team3_max_level,
-                },
-                "select_rally_team",
-                identity,
+        if len(selectors) != 1:
+            raise ValueError(
+                "Smart rally-team availability requires exactly one "
+                f"select_rally_team action; found {len(selectors)}."
             )
+        selector, identity = selectors[0]
         return (
-            {1: action.team1_max_level, 3: action.team3_max_level},
-            "legacy_row_action",
-            None,
+            {
+                1: selector.team1_max_level,
+                3: selector.team3_max_level,
+            },
+            "select_rally_team",
+            identity,
         )
 
     def _rally_team_level_limits(
@@ -432,23 +430,16 @@ class RallyMatchingMixin:
             for team_number, score in scores.items()
         }
         idle_teams = [team_number for team_number in (1, 3) if not busy[team_number]]
-        idle_caps: list[int] = []
-        for team_number in idle_teams:
-            team_cap = level_limits[team_number]
-            if team_cap is not None:
-                idle_caps.append(team_cap)
         if not idle_teams:
             level_cap: int | str | None = None
-        elif len(idle_caps) != len(idle_teams):
-            level_cap = (
-                action.max_level
-                if action.max_level is not None
-                else _TEAM_LEVEL_CAP_UNBOUNDED
-            )
+        elif any(level_limits[team_number] is None for team_number in idle_teams):
+            level_cap = _TEAM_LEVEL_CAP_UNBOUNDED
         else:
-            level_cap = max(idle_caps)
-            if action.max_level is not None:
-                level_cap = min(level_cap, action.max_level)
+            level_cap = max(
+                int(level_limits[team_number])
+                for team_number in idle_teams
+                if level_limits[team_number] is not None
+            )
         state = (busy[1], busy[3], level_cap)
         if state != getattr(self, "_last_rally_team_busy_state", None):
             self.log(
@@ -997,9 +988,12 @@ class RallyMatchingMixin:
     def _scenario_uses_level_ocr(self):
         for step in getattr(self.scenario, "steps", []):
             for action in getattr(step, "actions", []):
+                if action.type != "click_matching_row":
+                    continue
                 if (
-                    action.type == "click_matching_row"
-                    and (action.min_level is not None or action.max_level is not None)
+                    action.min_level is not None
+                    or action.max_level is not None
+                    or has_smart_rally_team_prefilter(action)
                 ):
                     return True
         return False

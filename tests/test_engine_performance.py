@@ -345,6 +345,28 @@ class EnginePerformanceTests(unittest.TestCase):
         self.assertEqual(calls, ["warm"])
         self.assertTrue(any("[ocr] warm-up ready" in message for message in logs))
 
+    def test_smart_row_with_blank_ordinary_limits_still_uses_level_ocr(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="Smart OCR",
+            steps=[
+                Step(
+                    name="Joining",
+                    actions=[
+                        Action(
+                            type="click_matching_row",
+                            team_status_region=[0, 0, 100, 100],
+                            team_status_reference_size=[1920, 1080],
+                            team1_busy_template_path="team1-busy.png",
+                            team3_busy_template_path="team3-busy.png",
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertTrue(engine._scenario_uses_level_ocr())
+
     def test_scenario_waits_for_ocr_warm_up_before_running(self):
         engine = object.__new__(MacroEngine)
         calls = []
