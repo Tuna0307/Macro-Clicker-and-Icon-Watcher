@@ -302,6 +302,24 @@ class RallyMatchingMixin:
             limits.append(f"max {effective_max}")
         return " and ".join(limits) if limits else "no level limits"
 
+    def _rally_team_level_limits(
+        self, action: Action
+    ) -> tuple[dict[int, int | None], str]:
+        for step in getattr(getattr(self, "scenario", None), "steps", []):
+            for candidate in step.actions:
+                if candidate.type == "select_rally_team":
+                    return (
+                        {
+                            1: candidate.team1_max_level,
+                            3: candidate.team3_max_level,
+                        },
+                        "select_rally_team",
+                    )
+        return (
+            {1: action.team1_max_level, 3: action.team3_max_level},
+            "legacy_row_action",
+        )
+
     def _available_rally_team_level_cap(self, action: Action):
         pending = getattr(self, "_pending_rally_team_availability", None)
         if pending is not None:
@@ -318,6 +336,7 @@ class RallyMatchingMixin:
         status_region = action.team_status_region
         if reference_size is None or status_region is None:
             return _TEAM_LEVEL_CAP_UNSET
+        level_limits, level_limits_source = self._rally_team_level_limits(action)
 
         try:
             window_rect = self._get_target_window_rect()
@@ -376,11 +395,13 @@ class RallyMatchingMixin:
             for team_number, score in scores.items()
         }
         idle_caps = []
-        if not busy[1] and action.team1_max_level is not None:
-            idle_caps.append(action.team1_max_level)
-        if not busy[3] and action.team3_max_level is not None:
-            idle_caps.append(action.team3_max_level)
+        if not busy[1] and level_limits[1] is not None:
+            idle_caps.append(level_limits[1])
+        if not busy[3] and level_limits[3] is not None:
+            idle_caps.append(level_limits[3])
         cap = max(idle_caps) if idle_caps else None
+        if cap is not None and action.max_level is not None:
+            cap = min(cap, action.max_level)
         state = (busy[1], busy[3], cap)
         if state != getattr(self, "_last_rally_team_busy_state", None):
             self.log(
@@ -397,6 +418,8 @@ class RallyMatchingMixin:
             "effective_thresholds": effective_thresholds,
             "busy": busy,
             "level_cap": cap,
+            "level_limits": level_limits,
+            "level_limits_source": level_limits_source,
             "frame": frame.copy(),
         }
         return cap
