@@ -882,6 +882,76 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(engine._available_rally_team_level_cap(row_action), 50)
         self.assertEqual(len(captures), 1)
 
+    def test_unbounded_pre_entry_availability_is_cached_and_reused(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        steps = {step.name: step for step in scenario.steps}
+        entry_step = steps["Click Rally Icon 2/3"]
+        row_action = next(
+            action
+            for action in steps["Joining"].actions
+            if action.type == "click_matching_row"
+        )
+        selector_action = next(
+            action
+            for step in scenario.steps
+            for action in step.actions
+            if action.type == "select_rally_team"
+        )
+        row_action.min_level = 0
+        row_action.max_level = None
+        selector_action.team3_max_level = None
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        logs = []
+        engine.log = logs.append
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        captures = []
+
+        def grab(region):
+            captures.append(region)
+            return (
+                np.zeros((region[3], region[2], 3), dtype=np.uint8),
+                region[0],
+                region[1],
+            )
+
+        engine._grab = grab
+        engine._load_template = lambda path: path
+        engine._scaled_template = lambda template, _scale: template
+        engine._best_scaled_template_match = lambda _frame, path: (
+            (1.0 if path == row_action.team1_busy_template_path else 0.0),
+            (0, 0),
+        )
+        engine._read_level_for_row = lambda _action, _reference: 99
+
+        self.assertTrue(engine._prepare_rally_team_availability_for_entry(entry_step))
+        row_level_cap = engine._available_rally_team_level_cap(row_action)
+        level_status = engine._row_level_status(
+            row_action,
+            {"center": (100, 100)},
+            max_level_override=row_level_cap,
+        )
+
+        self.assertEqual(len(captures), 1)
+        self.assertIs(
+            engine._pending_rally_team_availability,
+            engine._last_rally_team_availability,
+        )
+        self.assertEqual(row_level_cap, "unbounded")
+        self.assertIsNotNone(row_level_cap)
+        self.assertEqual(level_status, ("eligible", 99))
+        self.assertEqual(
+            engine._last_rally_team_availability["level_cap"],
+            "unbounded",
+        )
+        self.assertIn("level cap unbounded", "\n".join(logs))
+        self.assertNotIn("level cap none", "\n".join(logs))
+
     def test_rally_entry_is_blocked_when_team1_and_team3_are_both_busy(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         steps = {step.name: step for step in scenario.steps}

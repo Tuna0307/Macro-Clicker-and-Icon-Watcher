@@ -19,6 +19,7 @@ _LEVEL_INELIGIBLE = "ineligible"
 _LEVEL_UNREADABLE = "unreadable"
 _MATCHING_ROW_SNAPSHOT_KEY = object()
 _TEAM_LEVEL_CAP_UNSET = object()
+_TEAM_LEVEL_CAP_UNBOUNDED = "unbounded"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class RallyMatchingMixin:
     """Private rally matching implementation mixed into ``MacroEngine``."""
 
     _level_ocr_reader: LevelOcrReader | None
-    _last_rally_team_busy_state: tuple[bool, bool, int | None] | None
+    _last_rally_team_busy_state: tuple[bool, bool, int | str | None] | None
     _last_rally_team_availability: dict
 
     def _prepare_rally_team_availability_for_entry(self, step):
@@ -259,7 +260,10 @@ class RallyMatchingMixin:
         if self._stop_requested():
             return _LEVEL_UNREADABLE, None
         effective_max = action.max_level
-        if max_level_override is not _TEAM_LEVEL_CAP_UNSET:
+        if (
+            max_level_override is not _TEAM_LEVEL_CAP_UNSET
+            and max_level_override != _TEAM_LEVEL_CAP_UNBOUNDED
+        ):
             if max_level_override is None:
                 return _LEVEL_INELIGIBLE, None
             effective_max = (
@@ -434,20 +438,24 @@ class RallyMatchingMixin:
             if team_cap is not None:
                 idle_caps.append(team_cap)
         if not idle_teams:
-            cap = None
+            level_cap: int | str | None = None
         elif len(idle_caps) != len(idle_teams):
-            cap = action.max_level
+            level_cap = (
+                action.max_level
+                if action.max_level is not None
+                else _TEAM_LEVEL_CAP_UNBOUNDED
+            )
         else:
-            cap = max(idle_caps)
+            level_cap = max(idle_caps)
             if action.max_level is not None:
-                cap = min(cap, action.max_level)
-        state = (busy[1], busy[3], cap)
+                level_cap = min(level_cap, action.max_level)
+        state = (busy[1], busy[3], level_cap)
         if state != getattr(self, "_last_rally_team_busy_state", None):
             self.log(
                 "  [team] availability: "
                 f"Team 1 {'busy' if busy[1] else 'idle'} ({scores[1]:.2f}), "
                 f"Team 3 {'busy' if busy[3] else 'idle'} ({scores[3]:.2f}); "
-                f"level cap {cap if cap is not None else 'none'}"
+                f"level cap {level_cap if level_cap is not None else 'none'}"
             )
             self._last_rally_team_busy_state = state
         self._last_rally_team_availability = {
@@ -456,15 +464,13 @@ class RallyMatchingMixin:
             "scores": scores,
             "effective_thresholds": effective_thresholds,
             "busy": busy,
-            "level_cap": cap,
+            "level_cap": level_cap,
             "level_limits": level_limits,
             "level_limits_source": level_limits_source,
             "level_limits_selector": level_limits_selector,
             "frame": frame.copy(),
         }
-        if cap is None and idle_teams:
-            return _TEAM_LEVEL_CAP_UNSET
-        return cap
+        return level_cap
 
     def _read_level_for_row(self, action: Action, reference: dict):
         if self._stop_requested():
