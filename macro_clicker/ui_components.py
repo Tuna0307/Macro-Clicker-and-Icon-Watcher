@@ -565,7 +565,26 @@ def action_display_summary(action, conditions):
             if getattr(action, "pre_click_delay", 0.0)
             else ""
         )
-        return f"Click {target} on {rows} matching {reference}{level}{delay}"
+        availability = (
+            ", adapt to idle Team 1/3"
+            if getattr(action, "team1_busy_template_path", "")
+            and getattr(action, "team3_busy_template_path", "")
+            else ""
+        )
+        return (
+            f"Click {target} on {rows} matching {reference}"
+            f"{level}{delay}{availability}"
+        )
+    if action.type == "select_rally_team":
+        anchor = condition_name(
+            conditions,
+            action.on_condition_index,
+            "Unselected anchor",
+        )
+        return (
+            f"Select idle Team 3 (≤{action.team3_max_level}), then "
+            f"Team 1 (≤{action.team1_max_level}), anchored to {anchor}"
+        )
     if action.type == "key":
         return f"Press {action.key or 'key'}"
     if action.type == "wait":
