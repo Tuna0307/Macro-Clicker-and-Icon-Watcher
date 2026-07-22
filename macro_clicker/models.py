@@ -360,10 +360,10 @@ class Action:
     team_idle_confidence: float = 0.85
     team1_idle_region: Optional[List[int]] = None
     team1_click_offset: Optional[List[int]] = None
-    team1_max_level: Optional[int] = 65
+    team1_max_level: Optional[int] = None
     team3_idle_region: Optional[List[int]] = None
     team3_click_offset: Optional[List[int]] = None
-    team3_max_level: Optional[int] = 45
+    team3_max_level: Optional[int] = None
     team_status_region: Optional[List[int]] = None
     team_status_reference_size: Optional[List[int]] = None
     team1_busy_template_path: str = ""
@@ -533,27 +533,6 @@ class Action:
             raise ValueError("key actions require a key name")
         if a.type == "set_step" and not a.step_name.strip():
             raise ValueError("set_step actions require a target step name")
-        if a.type == "select_rally_team":
-            if a.on_condition_index is None:
-                raise ValueError("select_rally_team requires an anchor condition")
-            if not (
-                a.team1_idle_template_path.strip()
-                or a.team_idle_template_path.strip()
-            ):
-                raise ValueError("select_rally_team requires a Team 1 idle template")
-            if not (
-                a.team3_idle_template_path.strip()
-                or a.team_idle_template_path.strip()
-            ):
-                raise ValueError("select_rally_team requires a Team 3 idle template")
-            for label, value in (
-                ("team1_idle_region", a.team1_idle_region),
-                ("team1_click_offset", a.team1_click_offset),
-                ("team3_idle_region", a.team3_idle_region),
-                ("team3_click_offset", a.team3_click_offset),
-            ):
-                if value is None:
-                    raise ValueError(f"select_rally_team requires {label}")
         return a
 
     def summary(self):
@@ -596,6 +575,20 @@ class Action:
             verb = "Enable" if self.set_enabled else "Disable"
             return f"{verb} step '{self.step_name}'"
         return self.type
+
+
+def has_smart_rally_team_prefilter(action: Action) -> bool:
+    """Return whether a matching-row action declares smart team availability."""
+    if action.type != "click_matching_row":
+        return False
+    return any(
+        (
+            action.team_status_region is not None,
+            action.team_status_reference_size is not None,
+            bool(action.team1_busy_template_path.strip()),
+            bool(action.team3_busy_template_path.strip()),
+        )
+    )
 
 
 @dataclass
@@ -1066,14 +1059,7 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     raise ValueError(
                         f"{prefix} row-reference and click-target conditions must differ"
                     )
-                team_status_configured = any(
-                    (
-                        action.team_status_region is not None,
-                        action.team_status_reference_size is not None,
-                        bool(action.team1_busy_template_path.strip()),
-                        bool(action.team3_busy_template_path.strip()),
-                    )
-                )
+                team_status_configured = has_smart_rally_team_prefilter(action)
                 if team_status_configured:
                     smart_rally_team_prefilter_configured = True
                     for field_name in (
@@ -1154,10 +1140,10 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     f"{prefix} refers to missing disable step(s): "
                     f"{', '.join(missing_disable_steps)}"
                 )
-    if smart_rally_team_prefilter_configured and select_rally_team_count > 1:
+    if smart_rally_team_prefilter_configured and select_rally_team_count != 1:
         raise ValueError(
-            "A smart rally-team availability prefilter may coexist with at most "
-            "one select_rally_team action."
+            "A smart rally-team availability prefilter requires exactly one "
+            "select_rally_team action."
         )
     return scenario
 

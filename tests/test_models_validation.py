@@ -149,6 +149,21 @@ class ModelValidationTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 Action.from_dict({"type": "click_matching_row", "pre_click_delay": value})
 
+    def test_rally_team_maximums_default_to_unlimited_and_round_trip_null(self):
+        defaults = Action(type="select_rally_team")
+        restored = Action.from_dict(
+            {
+                "type": "select_rally_team",
+                "team1_max_level": None,
+                "team3_max_level": None,
+            }
+        )
+
+        self.assertIsNone(defaults.team1_max_level)
+        self.assertIsNone(defaults.team3_max_level)
+        self.assertIsNone(restored.team1_max_level)
+        self.assertIsNone(restored.team3_max_level)
+
     def test_nested_null_values_are_reported_as_load_errors(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, data in (

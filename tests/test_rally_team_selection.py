@@ -613,11 +613,11 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "smart rally-team availability prefilter.*at most one select_rally_team",
+            "smart rally-team availability prefilter.*exactly one select_rally_team",
         ):
             validate_scenario(scenario)
 
-    def test_smart_availability_prefilter_without_a_team_selector_remains_valid(self):
+    def test_smart_availability_prefilter_requires_a_team_selector(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         for step in scenario.steps:
             step.actions = [
@@ -626,7 +626,11 @@ class RallyTeamSelectionTests(unittest.TestCase):
                 if action.type != "select_rally_team"
             ]
 
-        validate_scenario(scenario)
+        with self.assertRaisesRegex(
+            ValueError,
+            "smart rally-team availability prefilter.*exactly one select_rally_team",
+        ):
+            validate_scenario(scenario)
 
     def test_matching_row_click_carries_its_ocr_level_to_team_selection(self):
         engine = object.__new__(MacroEngine)
