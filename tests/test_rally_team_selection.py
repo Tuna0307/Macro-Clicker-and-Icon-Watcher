@@ -225,8 +225,9 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(clicked, [(515, 320, "left")])
 
-    def test_no_eligible_idle_team_stops_before_attack_action(self):
+    def test_no_eligible_idle_team_aborts_before_attack_action(self):
         engine, clicked = self._engine(45, team1_idle=False, team3_idle=False)
+        engine._abort_current_step = False
         points, matches = self._context()
 
         result = engine._run_select_rally_team_action(
@@ -235,8 +236,68 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(clicked, [])
-        self.assertTrue(engine._retry_current_step)
-        self.assertEqual(engine._pending_rally_level, 45)
+        self.assertFalse(engine._retry_current_step)
+        self.assertTrue(engine._abort_current_step)
+        self.assertIsNone(engine._pending_rally_level)
+
+    def test_high_level_with_busy_team1_aborts_for_back_recovery(self):
+        engine, clicked = self._engine(50, team1_idle=False, team3_idle=False)
+        engine._abort_current_step = False
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(clicked, [])
+        self.assertFalse(engine._retry_current_step)
+        self.assertTrue(engine._abort_current_step)
+        self.assertIsNone(engine._pending_rally_level)
+
+    def test_aborted_attack_step_skips_attack_click_and_runs_recovery_step(self):
+        attack_step = Step(
+            name="Attack Confirm",
+            actions=[
+                Action(type="wait", seconds=1.0),
+                Action(type="click", x=10, y=20),
+            ],
+        )
+        recovery_step = Step(
+            name="Back if wrong mob",
+            actions=[Action(type="wait", seconds=2.0)],
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="Abort recovery",
+            steps=[attack_step, recovery_step],
+        )
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._last_fired = {attack_step.name: 0.0, recovery_step.name: 0.0}
+        engine._evaluate_uses_frame_cache = False
+        engine._evaluate_step = lambda _step: (True, {}, {})
+        engine._refresh_step_caches = lambda: [attack_step, recovery_step]
+        engine._prepare_rally_team_availability_for_entry = lambda _step: True
+        engine._should_log_perf = lambda *_args, **_kwargs: False
+        engine.log = lambda _message: None
+        executed = []
+
+        def run_action(step, action, _points, _matches):
+            executed.append((step.name, action.type, action.seconds))
+            if step is attack_step and action is attack_step.actions[0]:
+                engine._abort_current_step = True
+            return False
+
+        engine._run_action = run_action
+
+        self.assertTrue(engine._cycle())
+        self.assertEqual(
+            executed,
+            [
+                ("Attack Confirm", "wait", 1.0),
+                ("Back if wrong mob", "wait", 2.0),
+            ],
+        )
 
     def test_team_action_round_trips_and_validates(self):
         action = self._action()
@@ -414,6 +475,44 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(level_cap(team1_busy=True, team3_busy=False), 45)
         self.assertEqual(level_cap(team1_busy=False, team3_busy=False), 65)
         self.assertIsNone(level_cap(team1_busy=True, team3_busy=True))
+
+    def test_busy_team_requires_a_clear_score_drop_before_becoming_idle(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        engine._grab = lambda region: (
+            np.zeros((region[3], region[2], 3), dtype=np.uint8),
+            region[0],
+            region[1],
+        )
+        engine._load_template = lambda path: path
+        engine._scaled_template = lambda template, _scale: template
+        current_scores = {1: 1.0, 3: 0.20}
+
+        def match(_frame, template_path):
+            team_number = 1 if template_path == action.team1_busy_template_path else 3
+            return current_scores[team_number], (0, 0)
+
+        engine._best_scaled_template_match = match
+
+        self.assertEqual(engine._available_rally_team_level_cap(action), 45)
+        current_scores[1] = 0.70
+        self.assertEqual(engine._available_rally_team_level_cap(action), 45)
+        current_scores[1] = 0.29
+        self.assertEqual(engine._available_rally_team_level_cap(action), 65)
 
     def test_supplied_queue_frames_identify_murphy_and_stetmann_by_portrait(self):
         cases = {

@@ -18,6 +18,7 @@ _LEVEL_ELIGIBLE = "eligible"
 _LEVEL_INELIGIBLE = "ineligible"
 _LEVEL_UNREADABLE = "unreadable"
 _MATCHING_ROW_SNAPSHOT_KEY = object()
+_TEAM_LEVEL_CAP_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,42 @@ class RallyMatchingMixin:
     """Private rally matching implementation mixed into ``MacroEngine``."""
 
     _level_ocr_reader: LevelOcrReader | None
+    _last_rally_team_busy_state: tuple[bool, bool, int | None] | None
+    _last_rally_team_availability: dict
+
+    def _prepare_rally_team_availability_for_entry(self, step):
+        """Capture squad availability before an entry click hides the queue."""
+        enabled_step_names = {
+            action.step_name
+            for action in step.actions
+            if action.type == "set_step" and action.set_enabled
+        }
+        if not enabled_step_names:
+            return True
+
+        row_action = next(
+            (
+                action
+                for candidate_step in self.scenario.steps
+                if candidate_step.name in enabled_step_names
+                for action in candidate_step.actions
+                if action.type == "click_matching_row"
+            ),
+            None,
+        )
+        if row_action is None:
+            return True
+
+        self._pending_rally_team_availability = None
+        level_cap = self._available_rally_team_level_cap(row_action)
+        if level_cap is _TEAM_LEVEL_CAP_UNSET:
+            return True
+        self._pending_rally_team_availability = self._last_rally_team_availability
+        if level_cap is None:
+            self.log("  [team] skip rally entry: Team 1 and Team 3 are both busy")
+            return False
+        self.log(f"  [team] saved pre-entry level cap {level_cap}")
+        return True
 
     def _find_matching_row_targets(self, action: Action, matches: dict):
         selections, _had_unreadable = self._find_matching_row_selections(
@@ -91,6 +128,11 @@ class RallyMatchingMixin:
 
         reference_matches = matches.get(reference_index, [])
         remaining_targets = list(matches.get(target_index, []))
+        team_level_cap = _TEAM_LEVEL_CAP_UNSET
+        if apply_level_filter:
+            team_level_cap = self._available_rally_team_level_cap(action)
+            if team_level_cap is None:
+                return [], False
         selected = []
         had_unreadable_level = False
         for reference in sorted(reference_matches, key=lambda m: m["center"][1]):
@@ -107,7 +149,11 @@ class RallyMatchingMixin:
                 continue
             level = None
             if apply_level_filter:
-                level_status, level = self._row_level_status(action, reference)
+                level_status, level = self._row_level_status(
+                    action,
+                    reference,
+                    max_level_override=team_level_cap,
+                )
                 if level_status == _LEVEL_UNREADABLE:
                     had_unreadable_level = True
                     continue
@@ -130,6 +176,9 @@ class RallyMatchingMixin:
 
         references = list(matches.get(reference_index, []))
         remaining_targets = list(matches.get(target_index, []))
+        team_level_cap = self._available_rally_team_level_cap(action)
+        if team_level_cap is None:
+            return []
         revalidated = []
         for original in original_selections:
             if self._stop_requested():
@@ -161,7 +210,11 @@ class RallyMatchingMixin:
                 ]
                 if not row_targets:
                     continue
-                level_status, level = self._row_level_status(action, reference)
+                level_status, level = self._row_level_status(
+                    action,
+                    reference,
+                    max_level_override=team_level_cap,
+                )
                 if level_status != _LEVEL_ELIGIBLE:
                     continue
                 chosen = self._choose_row_target(
@@ -196,34 +249,157 @@ class RallyMatchingMixin:
         status, _level = self._row_level_status(action, reference)
         return status == _LEVEL_ELIGIBLE
 
-    def _row_level_status(self, action: Action, reference: dict):
+    def _row_level_status(
+        self,
+        action: Action,
+        reference: dict,
+        *,
+        max_level_override=_TEAM_LEVEL_CAP_UNSET,
+    ):
         if self._stop_requested():
             return _LEVEL_UNREADABLE, None
-        if action.min_level is None and action.max_level is None:
+        effective_max = action.max_level
+        if max_level_override is not _TEAM_LEVEL_CAP_UNSET:
+            if max_level_override is None:
+                return _LEVEL_INELIGIBLE, None
+            effective_max = (
+                int(max_level_override)
+                if effective_max is None
+                else min(effective_max, int(max_level_override))
+            )
+        if action.min_level is None and effective_max is None:
             return _LEVEL_ELIGIBLE, None
 
         level = self._read_level_for_row(action, reference)
         center = tuple(reference.get("center", ()))
-        limits = self._level_limit_text(action)
+        limits = self._level_limit_text(action, max_level=effective_max)
         if level is None:
             self.log(f"  [skip] row center={center} level unread; cannot compare with {limits}")
             return _LEVEL_UNREADABLE, None
         if action.min_level is not None and level < action.min_level:
             self.log(f"  [skip] row center={center} level read {level}; {level} < min {action.min_level}")
             return _LEVEL_INELIGIBLE, level
-        if action.max_level is not None and level > action.max_level:
-            self.log(f"  [skip] row center={center} level read {level}; {level} > max {action.max_level}")
+        if effective_max is not None and level > effective_max:
+            max_label = (
+                "available-team max"
+                if max_level_override is not _TEAM_LEVEL_CAP_UNSET
+                else "max"
+            )
+            self.log(
+                f"  [skip] row center={center} level read {level}; "
+                f"{level} > {max_label} {effective_max}"
+            )
             return _LEVEL_INELIGIBLE, level
         self.log(f"  [level] row center={center} level read {level}; within {limits} => accepted")
         return _LEVEL_ELIGIBLE, level
 
-    def _level_limit_text(self, action: Action):
+    def _level_limit_text(self, action: Action, *, max_level=_TEAM_LEVEL_CAP_UNSET):
         limits = []
         if action.min_level is not None:
             limits.append(f"min {action.min_level}")
-        if action.max_level is not None:
-            limits.append(f"max {action.max_level}")
+        effective_max = action.max_level if max_level is _TEAM_LEVEL_CAP_UNSET else max_level
+        if effective_max is not None:
+            limits.append(f"max {effective_max}")
         return " and ".join(limits) if limits else "no level limits"
+
+    def _available_rally_team_level_cap(self, action: Action):
+        pending = getattr(self, "_pending_rally_team_availability", None)
+        if pending is not None:
+            return pending.get("level_cap")
+        required = (
+            action.team_status_region,
+            action.team_status_reference_size,
+            action.team1_busy_template_path,
+            action.team3_busy_template_path,
+        )
+        if not all(required):
+            return _TEAM_LEVEL_CAP_UNSET
+        reference_size = action.team_status_reference_size
+        status_region = action.team_status_region
+        if reference_size is None or status_region is None:
+            return _TEAM_LEVEL_CAP_UNSET
+
+        try:
+            window_rect = self._get_target_window_rect()
+            if not window_rect:
+                _monitor_index, monitor = self._selected_monitor()
+                window_rect = (
+                    int(monitor["left"]),
+                    int(monitor["top"]),
+                    int(monitor["width"]),
+                    int(monitor["height"]),
+                )
+            reference_width, reference_height = reference_size
+            scale_x = window_rect[2] / reference_width
+            scale_y = window_rect[3] / reference_height
+            left, top, width, height = status_region
+            capture_region = (
+                window_rect[0] + round(left * scale_x),
+                window_rect[1] + round(top * scale_y),
+                max(1, round(width * scale_x)),
+                max(1, round(height * scale_y)),
+            )
+            frame, off_x, off_y = self._grab(capture_region)
+            template_scale = math.sqrt(scale_x * scale_y)
+            scores = {}
+            for team_number in (1, 3):
+                template = self._load_template(
+                    getattr(action, f"team{team_number}_busy_template_path")
+                )
+                scaled_template = self._scaled_template(template, template_scale)
+                score, _location = self._best_scaled_template_match(
+                    frame,
+                    scaled_template,
+                )
+                scores[team_number] = float(score)
+        except Exception as exc:
+            if getattr(self, "_team_status_error_logged", None) != str(exc):
+                self.log(f"  [team] availability prefilter unavailable: {exc}")
+                self._team_status_error_logged = str(exc)
+            return _TEAM_LEVEL_CAP_UNSET
+
+        previous_availability = (
+            getattr(self, "_last_rally_team_availability", {}) or {}
+        )
+        previous_busy = previous_availability.get("busy", {})
+        busy_release_threshold = 0.50
+        effective_thresholds = {
+            team_number: (
+                busy_release_threshold
+                if previous_busy.get(team_number, False)
+                else action.team_busy_confidence
+            )
+            for team_number in scores
+        }
+        busy = {
+            team_number: score >= effective_thresholds[team_number]
+            for team_number, score in scores.items()
+        }
+        idle_caps = []
+        if not busy[1] and action.team1_max_level is not None:
+            idle_caps.append(action.team1_max_level)
+        if not busy[3] and action.team3_max_level is not None:
+            idle_caps.append(action.team3_max_level)
+        cap = max(idle_caps) if idle_caps else None
+        state = (busy[1], busy[3], cap)
+        if state != getattr(self, "_last_rally_team_busy_state", None):
+            self.log(
+                "  [team] availability: "
+                f"Team 1 {'busy' if busy[1] else 'idle'} ({scores[1]:.2f}), "
+                f"Team 3 {'busy' if busy[3] else 'idle'} ({scores[3]:.2f}); "
+                f"level cap {cap if cap is not None else 'none'}"
+            )
+            self._last_rally_team_busy_state = state
+        self._last_rally_team_availability = {
+            "capture_region": capture_region,
+            "capture_origin": (off_x, off_y),
+            "scores": scores,
+            "effective_thresholds": effective_thresholds,
+            "busy": busy,
+            "level_cap": cap,
+            "frame": frame.copy(),
+        }
+        return cap
 
     def _read_level_for_row(self, action: Action, reference: dict):
         if self._stop_requested():
@@ -1023,6 +1199,12 @@ class RallyMatchingMixin:
             level_records,
             min_interval,
         )
+        team_availability = dict(
+            getattr(self, "_last_rally_team_availability", {}) or {}
+        )
+        team_status_frame = team_availability.pop("frame", None)
+        if team_status_frame is not None:
+            images["team_status"] = team_status_frame
         return self._submit_rally_diagnostic(
             f"rally_row_{decision}",
             {
@@ -1049,6 +1231,7 @@ class RallyMatchingMixin:
                 ],
                 "matches": match_records,
                 "level_reads": level_records,
+                "team_availability": team_availability,
                 "capture_reason": policy["capture_reason"],
             },
             images,

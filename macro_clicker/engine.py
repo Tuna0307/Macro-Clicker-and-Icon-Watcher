@@ -84,6 +84,7 @@ class MacroEngine(RallyMatchingMixin):
         ] = None
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
+        self._abort_current_step = False
         self._level_ocr_reader: Optional[LevelOcrReader] = None
         self._level_ocr_reader_lock = threading.Lock()
         self._level_ocr_unavailable_logged = False
@@ -142,6 +143,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_busy_state = None
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
+        self._abort_current_step = False
         self._last_perf_log.clear()
         self._ever_started = True
         self._step_names_snapshot = ()
@@ -1529,7 +1531,7 @@ class MacroEngine(RallyMatchingMixin):
         if selected is None:
             if self._should_log_perf(("team:no-eligible", level)):
                 self.log(
-                    f"  [retry] no eligible idle team for mob level {level} "
+                    f"  [abort] no eligible idle team for mob level {level} "
                     f"({score_text})"
                 )
                 self._submit_rally_diagnostic(
@@ -1545,7 +1547,9 @@ class MacroEngine(RallyMatchingMixin):
                     key=f"team:no-eligible:{level}",
                     context_snapshot=snapshot,
                 )
-            self._retry_current_step = True
+            self._pending_rally_level = None
+            self._retry_current_step = False
+            self._abort_current_step = True
             return False
 
         click_x, click_y = selected["click"]
@@ -1707,6 +1711,7 @@ class MacroEngine(RallyMatchingMixin):
                 self.log(f"[fire] {step.name}")
                 fired_any = True
                 retry_step = False
+                self._abort_current_step = False
                 for action in step.actions:
                     if self._stop_requested():
                         return fired_any
@@ -1729,6 +1734,8 @@ class MacroEngine(RallyMatchingMixin):
                     if invalidates_frame:
                         frame_cache.clear()
                         self._window_rect_lookup_cache = {}
+                    if getattr(self, "_abort_current_step", False):
+                        break
                     if getattr(self, "_retry_current_step", False):
                         retry_step = True
                         break
