@@ -603,6 +603,7 @@ def action_dialog(
     action_type_labels = {
         "click": "Click",
         "click_matching_row": "Click matching row",
+        "select_rally_team": "Select rally team",
         "key": "Press key",
         "wait": "Wait",
         "set_step": "Enable / disable step",
@@ -621,12 +622,14 @@ def action_dialog(
 
     click_frame = ttk.LabelFrame(body, text="Click")
     row_click_frame = ttk.LabelFrame(body, text="Click matching row")
+    team_frame = ttk.LabelFrame(body, text="Select rally team")
     key_frame = ttk.LabelFrame(body, text="Key press")
     wait_frame = ttk.LabelFrame(body, text="Wait")
     step_frame = ttk.LabelFrame(body, text="Enable / disable a step")
     frames = {
         "click": click_frame,
         "click_matching_row": row_click_frame,
+        "select_rally_team": team_frame,
         "key": key_frame,
         "wait": wait_frame,
         "set_step": step_frame,
@@ -803,6 +806,115 @@ def action_dialog(
     row_advanced_btn.grid(row=12, column=0, columnspan=5, sticky="ew", pady=(8, 0))
     render_row_advanced()
 
+    # --- smart rally-team fields ---
+    team_anchor_var = tk.StringVar(
+        value=condition_choice_for_index(
+            conditions,
+            a.on_condition_index,
+            "Select condition",
+        )
+    )
+    idle_template_var = tk.StringVar(value=getattr(a, "team_idle_template_path", ""))
+    idle_confidence_var = tk.DoubleVar(
+        value=getattr(a, "team_idle_confidence", 0.85)
+    )
+    team_button_var = tk.StringVar(value=a.button)
+    team1_region = getattr(a, "team1_idle_region", None) or [-249, 130, 40, 36]
+    team1_offset = getattr(a, "team1_click_offset", None) or [-189, 168]
+    team3_region = getattr(a, "team3_idle_region", None) or [3, 130, 40, 36]
+    team3_offset = getattr(a, "team3_click_offset", None) or [63, 168]
+    team1_region_vars = [tk.IntVar(value=value) for value in team1_region]
+    team1_offset_vars = [tk.IntVar(value=value) for value in team1_offset]
+    team3_region_vars = [tk.IntVar(value=value) for value in team3_region]
+    team3_offset_vars = [tk.IntVar(value=value) for value in team3_offset]
+    team1_max_var = tk.StringVar(
+        value=str(a.team1_max_level) if a.team1_max_level is not None else ""
+    )
+    team3_max_var = tk.StringVar(
+        value=str(a.team3_max_level) if a.team3_max_level is not None else ""
+    )
+
+    ttk.Label(team_frame, text="Anchor condition", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        team_frame,
+        textvariable=team_anchor_var,
+        values=condition_values,
+        state="readonly",
+        width=30,
+    ).grid(row=0, column=1, columnspan=4, sticky="w")
+    ttk.Label(team_frame, text="Idle icon template", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(team_frame, textvariable=idle_template_var, width=34).grid(
+        row=1, column=1, columnspan=3, sticky="we"
+    )
+
+    def browse_idle_template():
+        path = filedialog.askopenfilename(
+            filetypes=[("PNG images", "*.png")],
+            initialdir="templates",
+            parent=win,
+        )
+        if path:
+            idle_template_var.set(portable_project_path(path))
+
+    ttk.Button(team_frame, text="Browse", command=browse_idle_template).grid(
+        row=1, column=4, sticky="w", padx=4
+    )
+    ttk.Label(team_frame, text="Idle confidence", style="Surface.TLabel").grid(
+        row=2, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Spinbox(
+        team_frame,
+        textvariable=idle_confidence_var,
+        from_=0.5,
+        to=1.0,
+        increment=0.01,
+        width=8,
+    ).grid(row=2, column=1, sticky="w")
+    ttk.Label(team_frame, text="Button", style="Surface.TLabel").grid(
+        row=2, column=2, sticky="w", padx=(10, 4)
+    )
+    ttk.Combobox(
+        team_frame,
+        textvariable=team_button_var,
+        values=["left", "right", "middle"],
+        state="readonly",
+        width=8,
+    ).grid(row=2, column=3, sticky="w")
+
+    def add_team_row(row, label, region_vars, offset_vars, max_var):
+        ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(8, 2)
+        )
+        ttk.Label(team_frame, text="Idle x/y/w/h", style="Surface.TLabel").grid(
+            row=row + 1, column=0, sticky="w", padx=4, pady=2
+        )
+        for column, variable in enumerate(region_vars, start=1):
+            ttk.Entry(team_frame, textvariable=variable, width=7).grid(
+                row=row + 1, column=column, sticky="w"
+            )
+        ttk.Label(team_frame, text="Click offset x/y", style="Surface.TLabel").grid(
+            row=row + 2, column=0, sticky="w", padx=4, pady=2
+        )
+        ttk.Entry(team_frame, textvariable=offset_vars[0], width=7).grid(
+            row=row + 2, column=1, sticky="w"
+        )
+        ttk.Entry(team_frame, textvariable=offset_vars[1], width=7).grid(
+            row=row + 2, column=2, sticky="w"
+        )
+        ttk.Label(team_frame, text="Max level", style="Surface.TLabel").grid(
+            row=row + 2, column=3, sticky="w", padx=(10, 4)
+        )
+        ttk.Entry(team_frame, textvariable=max_var, width=7).grid(
+            row=row + 2, column=4, sticky="w"
+        )
+
+    add_team_row(3, "Team 3 (preferred for lower levels)", team3_region_vars, team3_offset_vars, team3_max_var)
+    add_team_row(7, "Team 1 (fallback and higher levels)", team1_region_vars, team1_offset_vars, team1_max_var)
+
     # --- key fields ---
     key_var = tk.StringVar(value=a.key)
     hold_var = tk.DoubleVar(value=a.hold)
@@ -903,6 +1015,51 @@ def action_dialog(
                     for name in no_match_disable_steps_var.get().split(",")
                     if name.strip()
                 ]
+                # Team-availability prefiltering is scenario-calibrated from
+                # full-monitor screenshots. Preserve that calibration when a
+                # user edits the ordinary row/level fields in this dialog.
+                new_action.team_status_region = copy.deepcopy(a.team_status_region)
+                new_action.team_status_reference_size = copy.deepcopy(
+                    a.team_status_reference_size
+                )
+                new_action.team1_busy_template_path = a.team1_busy_template_path
+                new_action.team3_busy_template_path = a.team3_busy_template_path
+                new_action.team_busy_confidence = a.team_busy_confidence
+                new_action.team1_max_level = a.team1_max_level
+                new_action.team3_max_level = a.team3_max_level
+            elif t == "select_rally_team":
+                anchor = team_anchor_var.get().strip()
+                if anchor in ("", "Select condition"):
+                    raise ValueError("Choose the dispatch/attack anchor condition.")
+                if not idle_template_var.get().strip():
+                    raise ValueError("Choose the idle-team icon template.")
+                new_action.on_condition_index = condition_index_from_choice(
+                    anchor,
+                    "Anchor condition",
+                )
+                new_action.team_idle_template_path = idle_template_var.get().strip()
+                new_action.team_idle_confidence = idle_confidence_var.get()
+                new_action.button = team_button_var.get()
+                new_action.team1_idle_region = [
+                    variable.get() for variable in team1_region_vars
+                ]
+                new_action.team1_click_offset = [
+                    variable.get() for variable in team1_offset_vars
+                ]
+                new_action.team1_max_level = _parse_optional_int(
+                    team1_max_var.get(),
+                    "Team 1 max level",
+                )
+                new_action.team3_idle_region = [
+                    variable.get() for variable in team3_region_vars
+                ]
+                new_action.team3_click_offset = [
+                    variable.get() for variable in team3_offset_vars
+                ]
+                new_action.team3_max_level = _parse_optional_int(
+                    team3_max_var.get(),
+                    "Team 3 max level",
+                )
             elif t == "key":
                 if not key_var.get().strip():
                     messagebox.showerror("Missing key", "Enter a key name.", parent=win)

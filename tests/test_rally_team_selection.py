@@ -251,6 +251,10 @@ class RallyTeamSelectionTests(unittest.TestCase):
         )
         self.assertEqual(team_action.team3_max_level, 45)
         self.assertEqual(team_action.team1_max_level, 65)
+        self.assertEqual(team_action.team1_idle_region, [-249, 130, 40, 36])
+        self.assertEqual(team_action.team1_click_offset, [-189, 168])
+        self.assertEqual(team_action.team3_idle_region, [3, 130, 40, 36])
+        self.assertEqual(team_action.team3_click_offset, [63, 168])
         self.assertEqual(
             team_action.team_idle_template_path,
             "templates/TeamIdle.png",
