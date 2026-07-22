@@ -1,0 +1,400 @@
+import unittest
+
+import cv2
+import numpy as np
+
+from macro_clicker.engine import MacroEngine
+from macro_clicker.models import (
+    Action,
+    ImageCondition,
+    Scenario,
+    Step,
+    load_scenario,
+    project_path,
+    validate_scenario,
+)
+
+
+class RallyTeamSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _action():
+        return Action(
+            type="select_rally_team",
+            on_condition_index=0,
+            team_idle_template_path="templates/TeamIdle.png",
+            team_idle_confidence=0.85,
+            team1_idle_region=[10, 10, 10, 10],
+            team1_click_offset=[15, 20],
+            team1_max_level=65,
+            team3_idle_region=[-20, 10, 10, 10],
+            team3_click_offset=[-15, 20],
+            team3_max_level=45,
+        )
+
+    def _engine(self, level, *, team1_idle, team3_idle):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Two rally teams")
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_level = level
+        engine._scaled_template_cache = {}
+        engine._retry_current_step = False
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: None
+        engine._load_template = lambda _path: np.full((4, 4, 3), 255, dtype=np.uint8)
+        engine._best_scaled_template_match = lambda crop, _template: (
+            float(crop.mean() / 255.0),
+            (0, 0),
+        )
+        engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
+        clicked = []
+        engine._click_point = (
+            lambda x, y, button: clicked.append((x, y, button)) or True
+        )
+
+        def grab(region):
+            frame = np.zeros((region[3], region[2], 3), dtype=np.uint8)
+            # At anchor (500, 300), Team 3 occupies union x=0..9 and
+            # Team 1 occupies x=30..39.
+            if team3_idle and region[2] >= 10:
+                frame[:, :10] = 255
+            if team1_idle and region[2] >= 40:
+                frame[:, 30:40] = 255
+            return frame, region[0], region[1]
+
+        engine._grab = grab
+        return engine, clicked
+
+    @staticmethod
+    def _context():
+        return (
+            {0: (500, 300)},
+            {
+                0: [
+                    {
+                        "center": (500, 300),
+                        "scale_x": 1.0,
+                        "scale_y": 1.0,
+                    }
+                ]
+            },
+        )
+
+    def _availability_from_queue_fixture(self, fixture_name):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        frame = cv2.imread(
+            project_path(f"tests/fixtures/rally_team_status/{fixture_name}")
+        )
+        self.assertIsNotNone(frame)
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._scaled_template_cache = {}
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.low_variance_threshold = 1.0
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        engine._load_template = lambda path: cv2.imread(project_path(path))
+        engine._grab = lambda region: (frame.copy(), region[0], region[1])
+
+        cap = engine._available_rally_team_level_cap(action)
+        return cap, engine._last_rally_team_availability["busy"]
+
+    def test_low_level_prefers_idle_team3_even_when_team1_is_idle(self):
+        engine, clicked = self._engine(45, team1_idle=True, team3_idle=True)
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(485, 320, "left")])
+        self.assertIsNone(engine._pending_rally_level)
+
+    def test_low_level_falls_back_to_team1_when_team3_is_busy(self):
+        engine, clicked = self._engine(30, team1_idle=True, team3_idle=False)
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(515, 320, "left")])
+
+    def test_high_level_uses_team1_and_never_team3(self):
+        engine, clicked = self._engine(60, team1_idle=True, team3_idle=True)
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(515, 320, "left")])
+
+    def test_no_eligible_idle_team_stops_before_attack_action(self):
+        engine, clicked = self._engine(45, team1_idle=False, team3_idle=False)
+        points, matches = self._context()
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(clicked, [])
+        self.assertTrue(engine._retry_current_step)
+        self.assertEqual(engine._pending_rally_level, 45)
+
+    def test_team_action_round_trips_and_validates(self):
+        action = self._action()
+        restored = Action.from_dict(action.to_dict())
+        scenario = Scenario(
+            name="Two rally teams",
+            steps=[
+                Step(
+                    name="Select",
+                    conditions=[ImageCondition(template_path="templates/Attack.png")],
+                    actions=[restored],
+                )
+            ],
+        )
+
+        validate_scenario(scenario)
+
+        self.assertEqual(restored, action)
+
+    def test_matching_row_click_carries_its_ocr_level_to_team_selection(self):
+        engine = object.__new__(MacroEngine)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine.log = lambda _message: None
+        engine._pending_rally_level = None
+        engine._record_matching_row_diagnostic = lambda *_args, **_kwargs: None
+        engine._find_matching_row_selections = lambda *_args, **_kwargs: (
+            [
+                {
+                    "reference": {"center": (100, 100)},
+                    "target": {
+                        "center": (300, 100),
+                        "scale_x": 1.0,
+                        "scale_y": 1.0,
+                    },
+                    "level": 45,
+                }
+            ],
+            False,
+        )
+        clicked = []
+        engine._click_point = (
+            lambda x, y, button: clicked.append((x, y, button)) or True
+        )
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=65,
+        )
+        step = Step(name="Joining", actions=[action])
+        engine._matching_row_reuse_context = (step, action, object())
+
+        result = engine._run_action(
+            step,
+            action,
+            {0: (100, 100), 1: (300, 100)},
+            {0: [{"center": (100, 100)}], 1: [{"center": (300, 100)}]},
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(300, 100, "left")])
+        self.assertEqual(engine._pending_rally_level, 45)
+
+    def test_two_team_scenario_has_the_expected_gate_ranges_and_priority(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        validate_scenario(scenario, require_files=True)
+        steps = {step.name: step for step in scenario.steps}
+
+        one_third_gate = steps["Click Rally Icon 1/3"].conditions[1]
+        two_thirds_gate = steps["Click Rally Icon 2/3"].conditions[1]
+        row_action = next(
+            action
+            for action in steps["Joining"].actions
+            if action.type == "click_matching_row"
+        )
+        team_action = next(
+            action
+            for action in steps["Attack Confirm"].actions
+            if action.type == "select_rally_team"
+        )
+
+        self.assertEqual(one_third_gate.template_path, "templates/1_3Squad.png")
+        self.assertFalse(one_third_gate.negate)
+        self.assertEqual(one_third_gate.confidence, 0.9)
+        self.assertEqual(two_thirds_gate.template_path, "templates/2_3Squad.png")
+        self.assertFalse(two_thirds_gate.negate)
+        self.assertEqual(row_action.max_level, 65)
+        self.assertEqual(
+            row_action.team1_busy_template_path,
+            "templates/Team1Busy.png",
+        )
+        self.assertEqual(
+            row_action.team3_busy_template_path,
+            "templates/Team3Busy.png",
+        )
+        self.assertEqual(team_action.team3_max_level, 45)
+        self.assertEqual(team_action.team1_max_level, 65)
+        self.assertEqual(
+            team_action.team_idle_template_path,
+            "templates/TeamIdle.png",
+        )
+
+    def test_busy_portraits_adapt_the_row_level_cap(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        templates = {
+            1: cv2.imread(project_path(action.team1_busy_template_path)),
+            3: cv2.imread(project_path(action.team3_busy_template_path)),
+        }
+
+        def level_cap(*, team1_busy, team3_busy):
+            engine = object.__new__(MacroEngine)
+            engine.scenario = scenario
+            engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+            engine._scaled_template_cache = {}
+            engine.low_variance_threshold = 1.0
+            engine.log = lambda _message: None
+            engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+            engine._load_template = lambda path: cv2.imread(project_path(path))
+
+            def grab(region):
+                frame = np.zeros((region[3], region[2], 3), dtype=np.uint8)
+                if team1_busy:
+                    frame[15:63, 12:62] = templates[1]
+                if team3_busy:
+                    frame[82:130, 12:62] = templates[3]
+                return frame, region[0], region[1]
+
+            engine._grab = grab
+            return engine._available_rally_team_level_cap(action)
+
+        self.assertEqual(level_cap(team1_busy=False, team3_busy=True), 65)
+        self.assertEqual(level_cap(team1_busy=True, team3_busy=False), 45)
+        self.assertEqual(level_cap(team1_busy=False, team3_busy=False), 65)
+        self.assertIsNone(level_cap(team1_busy=True, team3_busy=True))
+
+    def test_supplied_queue_frames_identify_murphy_and_stetmann_by_portrait(self):
+        cases = {
+            "carlie_only.png": (65, {1: False, 3: False}),
+            "murphy_carlie.png": (45, {1: True, 3: False}),
+            "all_three.png": (None, {1: True, 3: True}),
+            "carlie_stetmann.png": (65, {1: False, 3: True}),
+        }
+        for fixture_name, (expected_cap, expected_busy) in cases.items():
+            with self.subTest(fixture_name=fixture_name):
+                cap, busy = self._availability_from_queue_fixture(fixture_name)
+                self.assertEqual(cap, expected_cap)
+                self.assertEqual(busy, expected_busy)
+
+    def test_rally_entry_reuses_availability_captured_before_queue_hides(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        steps = {step.name: step for step in scenario.steps}
+        entry_step = steps["Click Rally Icon 2/3"]
+        row_action = next(
+            action
+            for action in steps["Joining"].actions
+            if action.type == "click_matching_row"
+        )
+        team1_template = cv2.imread(project_path(row_action.team1_busy_template_path))
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._scaled_template_cache = {}
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.low_variance_threshold = 1.0
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        engine._load_template = lambda path: cv2.imread(project_path(path))
+        captures = []
+
+        def grab(region):
+            captures.append(region)
+            frame = np.zeros((region[3], region[2], 3), dtype=np.uint8)
+            # Team 1 is busy while the map queue is visible. A second capture
+            # would represent the rally page, where this queue has disappeared.
+            if len(captures) == 1:
+                frame[15:63, 12:62] = team1_template
+            return frame, region[0], region[1]
+
+        engine._grab = grab
+
+        self.assertTrue(engine._prepare_rally_team_availability_for_entry(entry_step))
+        self.assertEqual(engine._available_rally_team_level_cap(row_action), 45)
+        self.assertEqual(len(captures), 1)
+
+    def test_rally_entry_is_blocked_when_team1_and_team3_are_both_busy(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        steps = {step.name: step for step in scenario.steps}
+        entry_step = steps["Click Rally Icon 2/3"]
+        row_action = next(
+            action
+            for action in steps["Joining"].actions
+            if action.type == "click_matching_row"
+        )
+        templates = {
+            1: cv2.imread(project_path(row_action.team1_busy_template_path)),
+            3: cv2.imread(project_path(row_action.team3_busy_template_path)),
+        }
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._scaled_template_cache = {}
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.low_variance_threshold = 1.0
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        engine._load_template = lambda path: cv2.imread(project_path(path))
+
+        def grab(region):
+            frame = np.zeros((region[3], region[2], 3), dtype=np.uint8)
+            frame[15:63, 12:62] = templates[1]
+            frame[82:130, 12:62] = templates[3]
+            return frame, region[0], region[1]
+
+        engine._grab = grab
+
+        self.assertFalse(engine._prepare_rally_team_availability_for_entry(entry_step))
+
+    def test_non_entry_step_preserves_pre_entry_team_availability(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        joining_step = next(step for step in scenario.steps if step.name == "Joining")
+        saved = {"level_cap": 45}
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._pending_rally_team_availability = saved
+
+        self.assertTrue(engine._prepare_rally_team_availability_for_entry(joining_step))
+        self.assertIs(engine._pending_rally_team_availability, saved)
+
+
+if __name__ == "__main__":
+    unittest.main()
