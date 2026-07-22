@@ -78,6 +78,12 @@ class MacroEngine(RallyMatchingMixin):
         self._level_offset_cache = {}
         self._last_level_diagnostics = {}
         self._matching_row_snapshot = None
+        self._pending_rally_level = None
+        self._last_rally_team_busy_state: Optional[
+            tuple[bool, bool, Optional[int]]
+        ] = None
+        self._last_rally_team_availability: dict = {}
+        self._pending_rally_team_availability = None
         self._level_ocr_reader: Optional[LevelOcrReader] = None
         self._level_ocr_reader_lock = threading.Lock()
         self._level_ocr_unavailable_logged = False
@@ -132,6 +138,10 @@ class MacroEngine(RallyMatchingMixin):
         self._stop_event.clear()
         self._ready_event.clear()
         self._stop_logged = False
+        self._pending_rally_level = None
+        self._last_rally_team_busy_state = None
+        self._last_rally_team_availability = {}
+        self._pending_rally_team_availability = None
         self._last_perf_log.clear()
         self._ever_started = True
         self._step_names_snapshot = ()
@@ -1329,6 +1339,7 @@ class MacroEngine(RallyMatchingMixin):
                 if self._click_point(x, y, action.button) is False:
                     return clicked or delayed
                 clicked = True
+                self._pending_rally_level = selection.get("level")
                 self.log(f"  click matching row ({x}, {y})")
             if clicked and pre_click_delay <= 0.0:
                 # The evidence uses the already-frozen atomic snapshot, so it
@@ -1342,6 +1353,9 @@ class MacroEngine(RallyMatchingMixin):
                     "eligible_before_delay",
                 )
             return clicked or delayed
+
+        elif action.type == "select_rally_team":
+            return self._run_select_rally_team_action(action, points, matches)
 
         elif action.type == "key":
             if action.hold > 0:
@@ -1378,6 +1392,190 @@ class MacroEngine(RallyMatchingMixin):
                 state = "enabled" if action.set_enabled else "disabled"
                 self.log(f"  step '{action.step_name}' -> {state}")
         return False
+
+    @staticmethod
+    def _scaled_relative_region(anchor, region, scale_x, scale_y):
+        anchor_x, anchor_y = anchor
+        left, top, width, height = region
+        return (
+            round(anchor_x + left * scale_x),
+            round(anchor_y + top * scale_y),
+            max(1, round(width * scale_x)),
+            max(1, round(height * scale_y)),
+        )
+
+    def _run_select_rally_team_action(self, action, points, matches):
+        level = getattr(self, "_pending_rally_level", None)
+        if level is None:
+            self.log("  [skip] no carried rally level is available for team selection")
+            self._retry_current_step = True
+            return False
+
+        anchor_index = action.on_condition_index
+        anchor_matches = matches.get(anchor_index, []) if anchor_index is not None else []
+        anchor_match = anchor_matches[0] if anchor_matches else None
+        anchor = points.get(anchor_index) if anchor_index is not None else None
+        if anchor is None or anchor_match is None:
+            self.log("  [skip] rally team selector anchor is no longer available")
+            self._retry_current_step = True
+            return False
+
+        scale_x, scale_y = self._match_geometry_scale(anchor_match)
+        candidates = []
+        # Team 3 has priority for lower mobs. Team 1 remains an immediate
+        # fallback and is the only eligible team above Team 3's range.
+        for team_number in (3, 1):
+            maximum = getattr(action, f"team{team_number}_max_level")
+            if maximum is not None and level > maximum:
+                continue
+            idle_region = getattr(action, f"team{team_number}_idle_region")
+            click_offset = getattr(action, f"team{team_number}_click_offset")
+            specific_template_path = getattr(
+                action,
+                f"team{team_number}_idle_template_path",
+                "",
+            )
+            if idle_region is None or click_offset is None:
+                continue
+            candidates.append(
+                {
+                    "team": team_number,
+                    "region": self._scaled_relative_region(
+                        anchor,
+                        idle_region,
+                        scale_x,
+                        scale_y,
+                    ),
+                    "click": (
+                        round(anchor[0] + click_offset[0] * scale_x),
+                        round(anchor[1] + click_offset[1] * scale_y),
+                    ),
+                    "max_level": maximum,
+                    "template_path": (
+                        specific_template_path
+                        or action.team_idle_template_path
+                    ),
+                }
+            )
+
+        if not candidates:
+            self.log(f"  [skip] no configured rally team accepts mob level {level}")
+            self._retry_current_step = True
+            return False
+
+        left = min(candidate["region"][0] for candidate in candidates)
+        top = min(candidate["region"][1] for candidate in candidates)
+        right = max(
+            candidate["region"][0] + candidate["region"][2]
+            for candidate in candidates
+        )
+        bottom = max(
+            candidate["region"][1] + candidate["region"][3]
+            for candidate in candidates
+        )
+        capture_region = (left, top, right - left, bottom - top)
+        window_rect = self._get_target_window_rect()
+        if window_rect:
+            capture_region = self._intersect_capture_region(capture_region, window_rect)
+        frame, off_x, off_y = self._grab(capture_region)
+        snapshot = _CaptureSnapshot(frame, int(off_x), int(off_y))
+
+        template_scale = math.sqrt(scale_x * scale_y)
+        candidate_matches = {}
+        selected = None
+        for index, candidate in enumerate(candidates):
+            idle_template = self._load_template(candidate["template_path"])
+            scaled_template = resize_template(
+                idle_template,
+                template_scale,
+                cache=self._scaled_template_cache,
+            )
+            region = candidate["region"]
+            crop = snapshot.crop(region)
+            score = -1.0
+            if crop is not None:
+                score, _location = self._best_scaled_template_match(
+                    crop,
+                    scaled_template,
+                )
+            candidate["score"] = float(score)
+            candidate_matches[index] = [
+                {
+                    "box": (
+                        region[0],
+                        region[1],
+                        region[0] + region[2],
+                        region[1] + region[3],
+                    ),
+                    "center": (
+                        region[0] + region[2] // 2,
+                        region[1] + region[3] // 2,
+                    ),
+                    "score": float(score),
+                    "scale": template_scale,
+                }
+            ]
+            if score >= action.team_idle_confidence:
+                selected = candidate
+                break
+
+        evaluated_candidates = [
+            candidate for candidate in candidates if "score" in candidate
+        ]
+        score_text = ", ".join(
+            f"Team {candidate['team']}={candidate['score']:.2f}"
+            for candidate in evaluated_candidates
+        )
+        if selected is None:
+            if self._should_log_perf(("team:no-eligible", level)):
+                self.log(
+                    f"  [retry] no eligible idle team for mob level {level} "
+                    f"({score_text})"
+                )
+                self._submit_rally_diagnostic(
+                    "rally_team_no_eligible_idle_team",
+                    {
+                        "scenario": self.scenario.name,
+                        "decision": "no_eligible_idle_team",
+                        "level": level,
+                        "idle_threshold": action.team_idle_confidence,
+                        "candidates": candidates,
+                    },
+                    matches=candidate_matches,
+                    key=f"team:no-eligible:{level}",
+                    context_snapshot=snapshot,
+                )
+            self._retry_current_step = True
+            return False
+
+        click_x, click_y = selected["click"]
+        if self._click_point(click_x, click_y, action.button) is False:
+            self._retry_current_step = True
+            return False
+        preferred_team_evaluated = any(
+            candidate["team"] == 3 for candidate in evaluated_candidates
+        )
+        if selected["team"] == 1 and preferred_team_evaluated:
+            self._submit_rally_diagnostic(
+                "rally_team_preferred_fallback",
+                {
+                    "scenario": self.scenario.name,
+                    "decision": "preferred_team_fallback",
+                    "selected_team": 1,
+                    "level": level,
+                    "idle_threshold": action.team_idle_confidence,
+                    "candidates": evaluated_candidates,
+                },
+                matches=candidate_matches,
+                key=f"team:preferred-fallback:{level}",
+                context_snapshot=snapshot,
+            )
+        self._pending_rally_level = None
+        self.log(
+            f"  select idle Team {selected['team']} for mob level {level} "
+            f"({score_text})"
+        )
+        return True
 
     def _run_no_match_fallback(self, step: Step, action: Action, points: dict):
         if self._stop_requested():
@@ -1502,6 +1700,9 @@ class MacroEngine(RallyMatchingMixin):
                     continue   # condition not on screen right now -- skip this step, check the next one
                 if self._stop_requested():
                     return fired_any
+
+                if not self._prepare_rally_team_availability_for_entry(step):
+                    continue
 
                 self.log(f"[fire] {step.name}")
                 fired_any = True

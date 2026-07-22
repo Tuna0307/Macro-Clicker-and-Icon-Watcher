@@ -120,6 +120,50 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(clicked, [(485, 320, "left")])
         self.assertIsNone(engine._pending_rally_level)
 
+    def test_supplied_two_idle_frame_selects_stetmann_for_level_45(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Attack Confirm"
+            for action in step.actions
+            if action.type == "select_rally_team"
+        )
+        frame = cv2.imread(
+            project_path(
+                "tests/fixtures/rally_team_selection/both_idle_union.png"
+            )
+        )
+        self.assertIsNotNone(frame)
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_level = 45
+        engine._scaled_template_cache = {}
+        engine._retry_current_step = False
+        engine.low_variance_threshold = 1.0
+        logs = []
+        engine.log = logs.append
+        engine._get_target_window_rect = lambda: None
+        engine._load_template = lambda path: cv2.imread(project_path(path))
+        engine._grab = lambda _region: (frame.copy(), 713, 938)
+        engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
+        clicked = []
+        engine._click_point = (
+            lambda x, y, button: clicked.append((x, y, button)) or True
+        )
+        points = {0: (962, 808)}
+        matches = {
+            0: [{"center": (962, 808), "scale_x": 1.0, "scale_y": 1.0}]
+        }
+
+        result = engine._run_select_rally_team_action(action, points, matches)
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(1025, 976, "left")])
+        self.assertIn("Team 3=1.00", "\n".join(logs))
+
     def test_low_level_falls_back_to_team1_when_team3_is_busy(self):
         engine, clicked = self._engine(30, team1_idle=True, team3_idle=False)
         points, matches = self._context()
@@ -130,6 +174,45 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(clicked, [(515, 320, "left")])
+
+    def test_low_level_fallback_records_scores_from_exact_dispatch_frame(self):
+        engine, clicked = self._engine(45, team1_idle=True, team3_idle=False)
+        points, matches = self._context()
+        logs = []
+        engine.log = logs.append
+        captured_frames = []
+        original_grab = engine._grab
+
+        def grab(region):
+            result = original_grab(region)
+            captured_frames.append(result)
+            return result
+
+        engine._grab = grab
+        submissions = []
+
+        def submit(event_type, metadata, **kwargs):
+            submissions.append((event_type, metadata, kwargs))
+
+        engine._submit_rally_diagnostic = submit
+
+        result = engine._run_select_rally_team_action(
+            self._action(), points, matches
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(515, 320, "left")])
+        self.assertIn("Team 3=0.00, Team 1=1.00", "\n".join(logs))
+        self.assertEqual(len(submissions), 1)
+        event_type, metadata, kwargs = submissions[0]
+        self.assertEqual(event_type, "rally_team_preferred_fallback")
+        self.assertEqual(metadata["decision"], "preferred_team_fallback")
+        self.assertEqual(metadata["selected_team"], 1)
+        self.assertEqual(metadata["level"], 45)
+        snapshot = kwargs["context_snapshot"]
+        self.assertIs(snapshot.frame, captured_frames[0][0])
+        self.assertEqual((snapshot.left, snapshot.top), captured_frames[0][1:])
+        self.assertIn("matches", kwargs)
 
     def test_high_level_uses_team1_and_never_team3(self):
         engine, clicked = self._engine(60, team1_idle=True, team3_idle=True)
