@@ -315,7 +315,7 @@
           "target_choice": "rightmost",
           "pre_click_delay": 0.0,
           "min_level": null,
-          "max_level": 60,
+          "max_level": 65,
           "level_roi": [
             -65,
             25,
@@ -359,7 +359,7 @@
           "button": "left",
           "key": "",
           "hold": 0.0,
-          "seconds": 0.8,
+          "seconds": 1.0,
           "step_name": "",
           "set_enabled": true
         }
