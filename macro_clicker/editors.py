@@ -949,6 +949,15 @@ def action_dialog(
 
     add_team_row(5, "Team 3 (preferred for lower levels)", team3_region_vars, team3_offset_vars, team3_max_var)
     add_team_row(9, "Team 1 (fallback and higher levels)", team1_region_vars, team1_offset_vars, team1_max_var)
+    ttk.Label(
+        team_frame,
+        text=(
+            "These max levels also control which OCR levels Joining accepts.\n"
+            "Use the main Save button to keep changes after restart."
+        ),
+        style="Muted.TLabel",
+        justify="left",
+    ).grid(row=12, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
 
     # --- key fields ---
     key_var = tk.StringVar(value=a.key)

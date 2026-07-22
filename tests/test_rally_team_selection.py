@@ -417,7 +417,8 @@ class RallyTeamSelectionTests(unittest.TestCase):
             row_action.team3_busy_template_path,
             "templates/Team3Busy.png",
         )
-        self.assertEqual(team_action.team3_max_level, 45)
+        self.assertEqual(row_action.team3_max_level, 45)
+        self.assertEqual(team_action.team3_max_level, 50)
         self.assertEqual(team_action.team1_max_level, 65)
         self.assertEqual(team_action.team1_idle_region, [-249, 130, 40, 36])
         self.assertEqual(team_action.team1_click_offset, [-189, 168])
@@ -472,7 +473,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
             return engine._available_rally_team_level_cap(action)
 
         self.assertEqual(level_cap(team1_busy=False, team3_busy=True), 65)
-        self.assertEqual(level_cap(team1_busy=True, team3_busy=False), 45)
+        self.assertEqual(level_cap(team1_busy=True, team3_busy=False), 50)
         self.assertEqual(level_cap(team1_busy=False, team3_busy=False), 65)
         self.assertIsNone(level_cap(team1_busy=True, team3_busy=True))
 
@@ -521,6 +522,57 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(
             engine._last_rally_team_availability["level_limits_source"],
             "select_rally_team",
+        )
+
+        frame = cv2.imread(
+            project_path("tests/fixtures/rally_team_selection/both_idle_union.png")
+        )
+        self.assertIsNotNone(frame)
+        selection_engine = object.__new__(MacroEngine)
+        selection_engine.scenario = scenario
+        selection_engine._stop_event = type(
+            "Stop", (), {"is_set": lambda self: False}
+        )()
+        selection_engine._pending_rally_level = 50
+        selection_engine._scaled_template_cache = {}
+        selection_engine._retry_current_step = False
+        selection_engine.low_variance_threshold = 1.0
+        selection_engine.log = lambda _message: None
+        selection_engine._get_target_window_rect = lambda: None
+        selection_engine._load_template = lambda path: cv2.imread(project_path(path))
+        selection_engine._grab = lambda _region: (frame.copy(), 713, 938)
+        selection_engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
+        clicked = []
+        selection_engine._click_point = (
+            lambda x, y, button: clicked.append((x, y, button)) or True
+        )
+        points = {0: (962, 808)}
+        matches = {
+            0: [{"center": (962, 808), "scale_x": 1.0, "scale_y": 1.0}]
+        }
+
+        self.assertTrue(
+            selection_engine._run_select_rally_team_action(
+                selector_action, points, matches
+            )
+        )
+        self.assertEqual(clicked, [(1025, 976, "left")])
+
+    def test_legacy_row_action_limits_apply_without_a_team_selector(self):
+        row_action = Action(
+            type="click_matching_row",
+            team1_max_level=65,
+            team3_max_level=45,
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="Legacy rally teams",
+            steps=[Step(name="Joining", actions=[row_action])],
+        )
+
+        self.assertEqual(
+            engine._rally_team_level_limits(row_action),
+            ({1: 65, 3: 45}, "legacy_row_action"),
         )
 
     def test_joining_maximum_bounds_selector_prefilter(self):
@@ -594,16 +646,16 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         engine._best_scaled_template_match = match
 
-        self.assertEqual(engine._available_rally_team_level_cap(action), 45)
+        self.assertEqual(engine._available_rally_team_level_cap(action), 50)
         current_scores[1] = 0.70
-        self.assertEqual(engine._available_rally_team_level_cap(action), 45)
+        self.assertEqual(engine._available_rally_team_level_cap(action), 50)
         current_scores[1] = 0.29
         self.assertEqual(engine._available_rally_team_level_cap(action), 65)
 
     def test_supplied_queue_frames_identify_murphy_and_stetmann_by_portrait(self):
         cases = {
             "carlie_only.png": (65, {1: False, 3: False}),
-            "murphy_carlie.png": (45, {1: True, 3: False}),
+            "murphy_carlie.png": (50, {1: True, 3: False}),
             "all_three.png": (None, {1: True, 3: True}),
             "carlie_stetmann.png": (65, {1: False, 3: True}),
         }
@@ -649,7 +701,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
         engine._grab = grab
 
         self.assertTrue(engine._prepare_rally_team_availability_for_entry(entry_step))
-        self.assertEqual(engine._available_rally_team_level_cap(row_action), 45)
+        self.assertEqual(engine._available_rally_team_level_cap(row_action), 50)
         self.assertEqual(len(captures), 1)
 
     def test_rally_entry_is_blocked_when_team1_and_team3_are_both_busy(self):
