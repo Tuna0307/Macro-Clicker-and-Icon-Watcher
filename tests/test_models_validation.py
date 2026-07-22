@@ -186,6 +186,24 @@ class ModelValidationTests(unittest.TestCase):
         self.assertIsNone(serialized["team1_max_level"])
         self.assertIsNone(serialized["team3_max_level"])
 
+    def test_smart_row_summary_suppresses_legacy_maximum(self):
+        smart = Action.from_dict(
+            {
+                "type": "click_matching_row",
+                "min_level": 20,
+                "max_level": 65,
+                "team_status_region": [0, 0, 100, 100],
+                "team_status_reference_size": [1920, 1080],
+                "team1_busy_template_path": "team1-busy.png",
+                "team3_busy_template_path": "team3-busy.png",
+            }
+        )
+        ordinary = Action(type="click_matching_row", max_level=65)
+
+        self.assertIn(">= 20", smart.summary())
+        self.assertNotIn("<= 65", smart.summary())
+        self.assertIn("<= 65", ordinary.summary())
+
     def test_blank_team_limits_have_clear_action_summary(self):
         summary = Action(type="select_rally_team").summary()
 

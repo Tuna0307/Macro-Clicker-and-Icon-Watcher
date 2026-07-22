@@ -352,6 +352,8 @@ class RallyMatchingMixin:
         return limits, source
 
     def _available_rally_team_level_cap(self, action: Action):
+        if not has_smart_rally_team_prefilter(action):
+            return _TEAM_LEVEL_CAP_UNSET
         pending = getattr(self, "_pending_rally_team_availability", None)
         if pending is not None:
             return pending.get("level_cap")

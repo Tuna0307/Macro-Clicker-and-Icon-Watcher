@@ -549,7 +549,10 @@ class Action:
             level_parts = []
             if self.min_level is not None:
                 level_parts.append(f">= {self.min_level}")
-            if self.max_level is not None:
+            if (
+                self.max_level is not None
+                and not has_smart_rally_team_prefilter(self)
+            ):
                 level_parts.append(f"<= {self.max_level}")
             level = f", level {' and '.join(level_parts)}" if level_parts else ""
             fallback = (

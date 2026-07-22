@@ -585,9 +585,12 @@ def action_display_summary(action, conditions):
         target = condition_name(conditions, action.on_condition_index, "Unselected target")
         rows = "all rows" if action.row_mode == "all" else "first row"
         level = ""
-        if action.min_level is not None or action.max_level is not None:
+        max_level = (
+            None if has_smart_rally_team_prefilter(action) else action.max_level
+        )
+        if action.min_level is not None or max_level is not None:
             low = "any" if action.min_level is None else action.min_level
-            high = "any" if action.max_level is None else action.max_level
+            high = "any" if max_level is None else max_level
             level = f", levels {low}-{high}"
         delay = (
             f", wait {action.pre_click_delay:g}s after level check"

@@ -84,6 +84,23 @@ class UiComponentTests(unittest.TestCase):
             row_advanced_options_configured(Action(type="click_matching_row"))
         )
 
+    def test_smart_row_summary_suppresses_legacy_maximum(self):
+        smart = Action.from_dict(
+            {
+                "type": "click_matching_row",
+                "min_level": 20,
+                "max_level": 65,
+                "team_status_region": [0, 0, 100, 100],
+                "team_status_reference_size": [1920, 1080],
+                "team1_busy_template_path": "team1-busy.png",
+                "team3_busy_template_path": "team3-busy.png",
+            }
+        )
+        ordinary = Action(type="click_matching_row", max_level=65)
+
+        self.assertIn("levels 20-any", action_display_summary(smart, self.conditions))
+        self.assertIn("levels any-65", action_display_summary(ordinary, self.conditions))
+
     def test_blank_team_limits_render_as_unlimited(self):
         action = Action(
             type="select_rally_team",
