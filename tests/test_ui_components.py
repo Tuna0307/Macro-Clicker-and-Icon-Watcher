@@ -11,6 +11,8 @@ from macro_clicker.ui_components import (
     condition_choices,
     condition_index_from_choice,
     preserved_level_roi,
+    row_advanced_options_configured,
+    row_max_level_editor_state,
 )
 
 
@@ -58,6 +60,43 @@ class UiComponentTests(unittest.TestCase):
         self.assertIn("wait 1.5s after level check", summary)
         self.assertEqual(action.row_tolerance, 47)
         self.assertEqual((action.offset_x, action.offset_y), (8, -3))
+
+    def test_smart_row_maximum_control_is_disabled(self):
+        smart = Action(
+            type="click_matching_row",
+            team_status_region=[0, 0, 100, 100],
+            team_status_reference_size=[1920, 1080],
+            team1_busy_template_path="team1-busy.png",
+            team3_busy_template_path="team3-busy.png",
+        )
+        ordinary = Action(type="click_matching_row", max_level=65)
+
+        self.assertEqual(
+            row_max_level_editor_state(smart),
+            ("disabled", "Controlled by Team 1 / Team 3"),
+        )
+        self.assertEqual(
+            row_max_level_editor_state(ordinary),
+            ("normal", "Max level"),
+        )
+        self.assertTrue(row_advanced_options_configured(smart))
+        self.assertFalse(
+            row_advanced_options_configured(Action(type="click_matching_row"))
+        )
+
+    def test_blank_team_limits_render_as_unlimited(self):
+        action = Action(
+            type="select_rally_team",
+            on_condition_index=1,
+            team1_max_level=None,
+            team3_max_level=None,
+        )
+
+        summary = action_display_summary(action, self.conditions)
+
+        self.assertIn("Team 3 (unlimited)", summary)
+        self.assertIn("Team 1 (unlimited)", summary)
+        self.assertNotIn("None", summary)
 
     def test_collapsed_advanced_options_preserve_unset_level_roi(self):
         defaults = (-90, -45, 220, 100)

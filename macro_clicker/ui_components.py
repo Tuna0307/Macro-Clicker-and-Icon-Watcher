@@ -9,6 +9,8 @@ import wave
 from tkinter import ttk
 from typing import Any
 
+from .models import has_smart_rally_team_prefilter
+
 try:
     ctk: Any = importlib.import_module("customtkinter")
 except ImportError:  # Keep source checkouts usable before requirements are installed.
@@ -544,6 +546,33 @@ def condition_name(conditions, index, fallback="Automatic target"):
     return f"Missing condition {index + 1}"
 
 
+def row_max_level_editor_state(action):
+    if has_smart_rally_team_prefilter(action):
+        return "disabled", "Controlled by Team 1 / Team 3"
+    return "normal", "Max level"
+
+
+def row_advanced_options_configured(action):
+    return any(
+        (
+            has_smart_rally_team_prefilter(action),
+            action.row_tolerance != 60,
+            action.offset_x != 0,
+            action.offset_y != 0,
+            action.min_level is not None,
+            action.max_level is not None,
+            action.level_roi is not None,
+            action.no_match_condition_index is not None,
+            bool(action.no_match_disable_steps),
+            action.pre_click_delay > 0.0,
+        )
+    )
+
+
+def _team_limit_summary(max_level):
+    return "unlimited" if max_level is None else f"max level {max_level}"
+
+
 def action_display_summary(action, conditions):
     if action.type == "click":
         if action.x is not None and action.y is not None:
@@ -582,8 +611,9 @@ def action_display_summary(action, conditions):
             "Unselected anchor",
         )
         return (
-            f"Select idle Team 3 (≤{action.team3_max_level}), then "
-            f"Team 1 (≤{action.team1_max_level}), anchored to {anchor}"
+            f"Select idle Team 3 ({_team_limit_summary(action.team3_max_level)}), "
+            f"then Team 1 ({_team_limit_summary(action.team1_max_level)}), "
+            f"anchored to {anchor}"
         )
     if action.type == "key":
         return f"Press {action.key or 'key'}"

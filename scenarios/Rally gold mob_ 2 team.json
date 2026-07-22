@@ -708,7 +708,7 @@
           "target_choice": "rightmost",
           "pre_click_delay": 0.0,
           "min_level": null,
-          "max_level": 65,
+          "max_level": null,
           "level_roi": [
             -65,
             25,
@@ -727,10 +727,10 @@
           "team_idle_confidence": 0.85,
           "team1_idle_region": null,
           "team1_click_offset": null,
-          "team1_max_level": 65,
+          "team1_max_level": null,
           "team3_idle_region": null,
           "team3_click_offset": null,
-          "team3_max_level": 45,
+          "team3_max_level": null,
           "team_status_region": [
             0,
             265,

@@ -29,6 +29,7 @@ from .models import (
     ImageCondition,
     Scenario,
     Step,
+    has_smart_rally_team_prefilter,
     portable_project_path,
     project_path,
     validate_scenario,
@@ -42,6 +43,8 @@ from .ui_components import (
     condition_choices,
     condition_index_from_choice,
     preserved_level_roi,
+    row_advanced_options_configured,
+    row_max_level_editor_state,
 )
 from .window_locator import (
     find_window_rect,
@@ -685,7 +688,15 @@ def action_dialog(
     row_offy_var = tk.IntVar(value=a.offset_y)
     row_button_var = tk.StringVar(value=a.button)
     min_level_var = tk.StringVar(value=str(a.min_level) if a.min_level is not None else "")
-    max_level_var = tk.StringVar(value=str(a.max_level) if a.max_level is not None else "")
+    smart_row_limits = has_smart_rally_team_prefilter(a)
+    max_level_state, max_level_label = row_max_level_editor_state(a)
+    max_level_var = tk.StringVar(
+        value=(
+            ""
+            if smart_row_limits or a.max_level is None
+            else str(a.max_level)
+        )
+    )
     default_level_roi = a.level_roi or [-90, -45, 220, 100]
     level_roi_x_var = tk.IntVar(value=default_level_roi[0])
     level_roi_y_var = tk.IntVar(value=default_level_roi[1])
@@ -728,8 +739,17 @@ def action_dialog(
                  state="readonly", width=8).grid(row=6, column=1, sticky="w")
     ttk.Label(row_click_frame, text="Min level", style="Surface.TLabel").grid(row=7, column=0, sticky="w", padx=4, pady=(8, 2))
     ttk.Entry(row_click_frame, textvariable=min_level_var, width=7).grid(row=7, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Max level", style="Surface.TLabel").grid(row=7, column=2, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=max_level_var, width=7).grid(row=7, column=3, sticky="w")
+    ttk.Label(
+        row_click_frame,
+        text=max_level_label,
+        style="Surface.TLabel",
+    ).grid(row=7, column=2, sticky="w")
+    ttk.Entry(
+        row_click_frame,
+        textvariable=max_level_var,
+        width=7,
+        state=max_level_state,
+    ).grid(row=7, column=3, sticky="w")
     ttk.Label(row_click_frame, text="Level box x / y / w / h", style="Surface.TLabel").grid(row=8, column=0, sticky="w", padx=4, pady=2)
     ttk.Entry(row_click_frame, textvariable=level_roi_x_var, width=7).grid(row=8, column=1, sticky="w")
     ttk.Entry(row_click_frame, textvariable=level_roi_y_var, width=7).grid(row=8, column=2, sticky="w")
@@ -763,19 +783,7 @@ def action_dialog(
         for row in advanced_rows
         for widget in row_click_frame.grid_slaves(row=row)
     ]
-    advanced_configured = any(
-        (
-            a.row_tolerance != 60,
-            a.offset_x != 0,
-            a.offset_y != 0,
-            a.min_level is not None,
-            a.max_level is not None,
-            a.level_roi is not None,
-            getattr(a, "no_match_condition_index", None) is not None,
-            bool(getattr(a, "no_match_disable_steps", None)),
-            getattr(a, "pre_click_delay", 0.0) > 0.0,
-        )
-    )
+    advanced_configured = row_advanced_options_configured(a)
     row_advanced_state = {
         "expanded": advanced_configured,
         "opened": advanced_configured,
@@ -1040,7 +1048,11 @@ def action_dialog(
                 new_action.offset_y = row_offy_var.get()
                 new_action.button = row_button_var.get()
                 new_action.min_level = _parse_optional_int(min_level_var.get(), "Min level")
-                new_action.max_level = _parse_optional_int(max_level_var.get(), "Max level")
+                new_action.max_level = (
+                    None
+                    if smart_row_limits
+                    else _parse_optional_int(max_level_var.get(), "Max level")
+                )
                 new_action.level_roi = preserved_level_roi(
                     a.level_roi,
                     row_advanced_state["opened"],
@@ -1069,8 +1081,8 @@ def action_dialog(
                 new_action.team1_busy_template_path = a.team1_busy_template_path
                 new_action.team3_busy_template_path = a.team3_busy_template_path
                 new_action.team_busy_confidence = a.team_busy_confidence
-                new_action.team1_max_level = a.team1_max_level
-                new_action.team3_max_level = a.team3_max_level
+                new_action.team1_max_level = None
+                new_action.team3_max_level = None
             elif t == "select_rally_team":
                 anchor = team_anchor_var.get().strip()
                 if anchor in ("", "Select condition"):

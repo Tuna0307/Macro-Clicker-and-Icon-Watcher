@@ -403,6 +403,10 @@ class Action:
         data["team3_busy_template_path"] = portable_project_path(
             self.team3_busy_template_path
         )
+        if has_smart_rally_team_prefilter(self):
+            data["max_level"] = None
+            data["team1_max_level"] = None
+            data["team3_max_level"] = None
         return data
 
     @staticmethod
@@ -562,9 +566,19 @@ class Action:
                     f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}"
                     f"{availability}  [{self.button}]")
         if self.type == "select_rally_team":
+            team3_limit = (
+                "unlimited"
+                if self.team3_max_level is None
+                else f"max level {self.team3_max_level}"
+            )
+            team1_limit = (
+                "unlimited"
+                if self.team1_max_level is None
+                else f"max level {self.team1_max_level}"
+            )
             return (
-                f"Select idle Team 3 through level {self.team3_max_level}, then "
-                f"Team 1 through level {self.team1_max_level}"
+                f"Select idle Team 3 ({team3_limit}), then "
+                f"Team 1 ({team1_limit})"
             )
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""

@@ -164,6 +164,35 @@ class ModelValidationTests(unittest.TestCase):
         self.assertIsNone(restored.team1_max_level)
         self.assertIsNone(restored.team3_max_level)
 
+    def test_smart_row_parses_old_limits_but_serializes_them_as_null(self):
+        action = Action.from_dict(
+            {
+                "type": "click_matching_row",
+                "max_level": 12,
+                "team1_max_level": 11,
+                "team3_max_level": 10,
+                "team_status_region": [0, 0, 100, 100],
+                "team_status_reference_size": [1920, 1080],
+                "team1_busy_template_path": "templates/Team1Busy.png",
+                "team3_busy_template_path": "templates/Team3Busy.png",
+            }
+        )
+
+        self.assertEqual(action.max_level, 12)
+        self.assertEqual(action.team1_max_level, 11)
+        self.assertEqual(action.team3_max_level, 10)
+        serialized = action.to_dict()
+        self.assertIsNone(serialized["max_level"])
+        self.assertIsNone(serialized["team1_max_level"])
+        self.assertIsNone(serialized["team3_max_level"])
+
+    def test_blank_team_limits_have_clear_action_summary(self):
+        summary = Action(type="select_rally_team").summary()
+
+        self.assertIn("Team 3 (unlimited)", summary)
+        self.assertIn("Team 1 (unlimited)", summary)
+        self.assertNotIn("None", summary)
+
     def test_nested_null_values_are_reported_as_load_errors(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, data in (

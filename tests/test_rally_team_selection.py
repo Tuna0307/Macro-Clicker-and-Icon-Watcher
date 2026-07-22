@@ -699,7 +699,9 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertEqual(one_third_gate.confidence, 0.9)
         self.assertEqual(two_thirds_gate.template_path, "templates/2_3Squad.png")
         self.assertFalse(two_thirds_gate.negate)
-        self.assertEqual(row_action.max_level, 65)
+        self.assertIsNone(row_action.max_level)
+        self.assertIsNone(row_action.team1_max_level)
+        self.assertIsNone(row_action.team3_max_level)
         self.assertEqual(
             row_action.team1_busy_template_path,
             "templates/Team1Busy.png",
@@ -708,7 +710,6 @@ class RallyTeamSelectionTests(unittest.TestCase):
             row_action.team3_busy_template_path,
             "templates/Team3Busy.png",
         )
-        self.assertEqual(row_action.team3_max_level, 45)
         self.assertEqual(team_action.team3_max_level, 50)
         self.assertEqual(team_action.team1_max_level, 65)
         self.assertEqual(team_action.team1_idle_region, [-249, 130, 40, 36])
@@ -835,7 +836,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
             if action.type == "select_rally_team"
         )
         selector_action.team3_max_level = 50
-        self.assertEqual(joining_action.team3_max_level, 45)
+        self.assertIsNone(joining_action.team3_max_level)
 
         engine = object.__new__(MacroEngine)
         engine.scenario = scenario
