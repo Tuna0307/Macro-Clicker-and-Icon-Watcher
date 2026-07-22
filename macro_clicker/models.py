@@ -806,6 +806,8 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("diagnostics_enabled must be a boolean")
 
     step_names = {step.name for step in scenario.steps}
+    select_rally_team_count = 0
+    smart_rally_team_prefilter_configured = False
     for step in scenario.steps:
         if not isinstance(step.name, str) or step.name != step.name.strip():
             raise ValueError(f"step name cannot start or end with spaces: {step.name!r}")
@@ -915,6 +917,8 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 raise ValueError(f"{prefix} must be an Action")
             if action.type not in ACTION_TYPES:
                 raise ValueError(f"{prefix} has unsupported type {action.type!r}")
+            if action.type == "select_rally_team":
+                select_rally_team_count += 1
             if (
                 isinstance(action.row_tolerance, bool)
                 or not isinstance(action.row_tolerance, int)
@@ -1071,6 +1075,7 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     )
                 )
                 if team_status_configured:
+                    smart_rally_team_prefilter_configured = True
                     for field_name in (
                         "team_status_region",
                         "team_status_reference_size",
@@ -1149,6 +1154,11 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     f"{prefix} refers to missing disable step(s): "
                     f"{', '.join(missing_disable_steps)}"
                 )
+    if smart_rally_team_prefilter_configured and select_rally_team_count > 1:
+        raise ValueError(
+            "A smart rally-team availability prefilter may coexist with at most "
+            "one select_rally_team action."
+        )
     return scenario
 
 
