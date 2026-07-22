@@ -524,39 +524,60 @@ class RallyTeamSelectionTests(unittest.TestCase):
             "select_rally_team",
         )
 
+        joining_step = next(step for step in scenario.steps if step.name == "Joining")
+        row_points = {0: (100, 100), 1: (300, 100)}
+        row_matches = {
+            0: [{"center": (100, 100)}],
+            1: [{"center": (300, 100), "scale_x": 1.0, "scale_y": 1.0}],
+        }
+        engine._refresh_click_matching_row_matches = (
+            lambda _step, _action: (row_points, row_matches)
+        )
+        engine._find_matching_row_selections = lambda *_args, **_kwargs: (
+            [
+                {
+                    "reference": {"center": (100, 100)},
+                    "target": row_matches[1][0],
+                    "level": 50,
+                }
+            ],
+            False,
+        )
+        engine._record_matching_row_diagnostic = lambda *_args, **_kwargs: None
+        engine._matching_row_reuse_context = None
+        clicked = []
+        engine._click_point = (
+            lambda x, y, button: clicked.append((x, y, button)) or True
+        )
+
+        self.assertTrue(
+            engine._run_action(joining_step, joining_action, row_points, row_matches)
+        )
+        self.assertEqual(engine._pending_rally_level, 50)
+
         frame = cv2.imread(
             project_path("tests/fixtures/rally_team_selection/both_idle_union.png")
         )
         self.assertIsNotNone(frame)
-        selection_engine = object.__new__(MacroEngine)
-        selection_engine.scenario = scenario
-        selection_engine._stop_event = type(
-            "Stop", (), {"is_set": lambda self: False}
-        )()
-        selection_engine._pending_rally_level = 50
-        selection_engine._scaled_template_cache = {}
-        selection_engine._retry_current_step = False
-        selection_engine.low_variance_threshold = 1.0
-        selection_engine.log = lambda _message: None
-        selection_engine._get_target_window_rect = lambda: None
-        selection_engine._load_template = lambda path: cv2.imread(project_path(path))
-        selection_engine._grab = lambda _region: (frame.copy(), 713, 938)
-        selection_engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
-        clicked = []
-        selection_engine._click_point = (
-            lambda x, y, button: clicked.append((x, y, button)) or True
-        )
+        engine._scaled_template_cache = {}
+        engine._retry_current_step = False
+        engine.low_variance_threshold = 1.0
+        engine._get_target_window_rect = lambda: None
+        engine._load_template = lambda path: cv2.imread(project_path(path))
+        engine._grab = lambda _region: (frame.copy(), 713, 938)
+        del engine._best_scaled_template_match
+        engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
         points = {0: (962, 808)}
         matches = {
             0: [{"center": (962, 808), "scale_x": 1.0, "scale_y": 1.0}]
         }
 
         self.assertTrue(
-            selection_engine._run_select_rally_team_action(
+            engine._run_select_rally_team_action(
                 selector_action, points, matches
             )
         )
-        self.assertEqual(clicked, [(1025, 976, "left")])
+        self.assertEqual(clicked, [(300, 100, "left"), (1025, 976, "left")])
 
     def test_legacy_row_action_limits_apply_without_a_team_selector(self):
         row_action = Action(
