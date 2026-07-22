@@ -436,9 +436,9 @@ class RallyMatchingMixin:
             level_cap = _TEAM_LEVEL_CAP_UNBOUNDED
         else:
             level_cap = max(
-                int(level_limits[team_number])
+                int(team_limit)
                 for team_number in idle_teams
-                if level_limits[team_number] is not None
+                if (team_limit := level_limits[team_number]) is not None
             )
         state = (busy[1], busy[3], level_cap)
         if state != getattr(self, "_last_rally_team_busy_state", None):
