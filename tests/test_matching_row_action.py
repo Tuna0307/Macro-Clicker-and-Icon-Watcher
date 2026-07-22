@@ -1,9 +1,6 @@
-import os
-import tempfile
 import unittest
 from unittest.mock import patch
 
-import cv2
 import numpy as np
 
 from macro_clicker.engine import MacroEngine
@@ -72,6 +69,16 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertGreaterEqual(capture_left + capture_width, 300)
         self.assertGreaterEqual(capture_top + capture_height, 200)
         self.assertEqual(len(candidates), 6)
+        self.assertTrue(
+            all(np.all(frame == 1) for _offset, _rect, frame in candidates)
+        )
+        self.assertTrue(
+            all(
+                not np.shares_memory(frame, engine._matching_row_snapshot.frame)
+                for _offset, _rect, frame in candidates
+            )
+        )
+        engine._matching_row_snapshot.frame.fill(9)
         self.assertTrue(
             all(np.all(frame == 1) for _offset, _rect, frame in candidates)
         )
@@ -177,45 +184,6 @@ class MatchingRowActionTests(unittest.TestCase):
 
         self.assertEqual(rects[0], (913, 533, 200, 60))
         self.assertEqual(rects[1][1] - rects[0][1], 11)
-
-    def test_scaled_digit_templates_still_read_level_at_1440p(self):
-        engine = object.__new__(MacroEngine)
-        templates = {
-            "2": np.array(
-                [
-                    [0, 255, 255, 0],
-                    [255, 0, 0, 255],
-                    [0, 0, 255, 0],
-                    [0, 255, 0, 0],
-                    [255, 255, 255, 255],
-                ],
-                dtype=np.uint8,
-            ),
-            "7": np.array(
-                [
-                    [255, 255, 255, 255],
-                    [0, 0, 0, 255],
-                    [0, 0, 255, 0],
-                    [0, 255, 0, 0],
-                    [0, 255, 0, 0],
-                ],
-                dtype=np.uint8,
-            ),
-        }
-        reference = {"scale_x": 4 / 3, "scale_y": 4 / 3}
-        scaled = engine._scale_digit_templates_for_match(templates, reference)
-        frame = np.zeros((14, 22), dtype=np.uint8)
-        frame[3:3 + scaled["2"].shape[0], 2:2 + scaled["2"].shape[1]] = scaled["2"]
-        frame[3:3 + scaled["7"].shape[0], 13:13 + scaled["7"].shape[1]] = scaled["7"]
-
-        level = engine._read_level_from_frame(
-            frame,
-            scaled,
-            confidence=0.99,
-            min_digits=2,
-        )
-
-        self.assertEqual(level, 27)
 
     def test_detected_click_offsets_scale_with_target_match(self):
         clicked = []
@@ -803,6 +771,34 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(len(waits), 1)
         self.assertAlmostEqual(waits[0], 1.1)
 
+    def test_zero_pre_click_delay_records_success_evidence_after_click(self):
+        events = []
+        engine = object.__new__(MacroEngine)
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        matches = {0: [reference], 1: [target]}
+        engine._refresh_click_matching_row_matches = lambda step, action: (
+            {0: reference["center"], 1: target["center"]},
+            matches,
+        )
+        engine._read_level_for_row = lambda action, row: 45
+        engine._click_point = lambda x, y, button: events.append("click") or True
+        engine._record_matching_row_diagnostic = (
+            lambda *args, **kwargs: events.append("diagnostic")
+        )
+        engine.log = lambda message: None
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+            pre_click_delay=0.0,
+        )
+
+        self.assertTrue(engine._run_action(Step(name="Joining"), action, {}, {}))
+        self.assertEqual(events, ["click", "diagnostic"])
+
     def test_level_filter_logs_unread_as_not_compared_to_limits(self):
         logs = []
         engine = object.__new__(MacroEngine)
@@ -828,33 +824,25 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertTrue(any("read 30" in message for message in logs))
         self.assertTrue(any("30 > max 25" in message for message in logs))
 
-    def test_failed_level_read_saves_curated_crop_only_after_event_is_accepted(self):
+    def test_failed_level_read_records_ocr_attempts_in_diagnostics(self):
         logs = []
-        saved = []
+        submitted = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war", target_window_title="Game")
         engine.log = logs.append
-        engine._digit_template_cache = {}
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(None, engine="fakeocr")},
         )()
-        engine._load_digit_templates = lambda folder: {"2": np.ones((5, 4), dtype=np.uint8) * 255}
         engine._get_target_window_rect = lambda: (100, 200, 500, 400)
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: None
-        engine._level_read_top_scores = lambda frame, templates: [("2", 0.42)]
-        engine._submit_rally_diagnostic = lambda *args, **kwargs: "queued-event"
-        engine._save_level_debug_crop = (
-            lambda frame, rect, reference, **kwargs: saved.append(
-                (frame.shape, rect, reference["center"])
-            )
+        engine._submit_rally_diagnostic = lambda *args, **kwargs: submitted.append(
+            (args, kwargs)
         )
         action = Action(
             type="click_matching_row",
             min_level=25,
-            level_digit_template_dir="templates/level_digits",
             level_roi=[10, 20, 30, 40],
         )
 
@@ -862,52 +850,19 @@ class MatchingRowActionTests(unittest.TestCase):
 
         self.assertIsNone(level)
         self.assertTrue(any("unread from crop rect=(160, 280, 30, 40)" in message for message in logs))
-        self.assertTrue(any("top digit scores: 2=0.42" in message for message in logs))
-        self.assertEqual(saved, [((40, 30, 3), (160, 280, 30, 40), (150, 260))])
-
-    def test_level_debug_crops_are_disabled_rate_limited_and_bounded(self):
-        frame = np.zeros((20, 30, 3), dtype=np.uint8)
-        rect = (10, 20, 30, 20)
-        reference = {"center": (100, 200)}
-        engine = object.__new__(MacroEngine)
-        engine.log = lambda _message: None
-
-        with tempfile.TemporaryDirectory() as tmp:
-            debug_dir = os.path.join(tmp, "level_debug")
-            with patch("macro_clicker.rally_matching.LEVEL_DEBUG_DIR", debug_dir):
-                engine.diagnostics_enabled = False
-                self.assertIsNone(
-                    engine._save_level_debug_crop(frame, rect, reference)
-                )
-                self.assertFalse(os.path.exists(debug_dir))
-
-                engine.diagnostics_enabled = True
-                with patch(
-                    "macro_clicker.rally_matching.time.monotonic",
-                    side_effect=[1000.0, 1001.0],
-                ):
-                    first = engine._save_level_debug_crop(frame, rect, reference)
-                    second = engine._save_level_debug_crop(frame, rect, reference)
-                self.assertIsNotNone(first)
-                self.assertIsNone(second)
-                self.assertEqual(len(os.listdir(debug_dir)), 1)
-
-                for index in range(260):
-                    path = os.path.join(debug_dir, f"level_old_{index:03d}.png")
-                    with open(path, "wb") as handle:
-                        handle.write(b"old")
-                engine._prune_level_debug_crops()
-                remaining = [
-                    name for name in os.listdir(debug_dir)
-                    if name.startswith("level_") and name.endswith(".png")
-                ]
-                self.assertLessEqual(len(remaining), 200)
+        self.assertEqual(len(submitted), 1)
+        level_read = submitted[0][0][1]["level_read"]
+        self.assertEqual(level_read["decision"], "unread")
+        self.assertEqual(len(level_read["attempts"]), 6)
+        self.assertEqual(
+            set(level_read["attempts"][0]),
+            {"index", "base_offset", "rect", "status", "ocr"},
+        )
 
     def test_level_read_retries_shifted_crop_when_first_crop_misses_text(self):
         logs = []
         grabbed = []
         reads = []
-        saved = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
@@ -926,9 +881,7 @@ class MatchingRowActionTests(unittest.TestCase):
 
         engine._grab = grab
         engine._level_ocr_reader = Reader()
-        engine._load_digit_templates = lambda folder: {}
-        engine._save_level_debug_crop = lambda frame, rect, reference: saved.append(rect)
-        action = Action(type="click_matching_row", max_level=60, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=60, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
@@ -936,7 +889,6 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(grabbed, [(110, 104, 30, 80)])
         self.assertEqual(reads, [(40, 30, 3), (40, 30, 3)])
         self.assertEqual(next(iter(engine._level_offset_cache.values())), 8)
-        self.assertEqual(saved, [])
         self.assertTrue(any("recovered with alternate crop" in message for message in logs))
 
     def test_level_crop_offset_cache_is_relative_to_each_detected_row(self):
@@ -972,14 +924,13 @@ class MatchingRowActionTests(unittest.TestCase):
         self.assertEqual(preferred_rect, (110, 528, 30, 40))
         self.assertEqual(len(candidates), 6)
 
-    def test_level_read_uses_ocr_before_digit_templates(self):
+    def test_level_read_accepts_strong_ocr(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {}
         engine._level_ocr_reader = type(
             "Reader",
             (),
@@ -1004,7 +955,6 @@ class MatchingRowActionTests(unittest.TestCase):
             region[0],
             region[1],
         )
-        engine._load_digit_templates = lambda folder: {}
 
         class Reader:
             def read_level(self, frame):
@@ -1049,7 +999,6 @@ class MatchingRowActionTests(unittest.TestCase):
             region[0],
             region[1],
         )
-        engine._load_digit_templates = lambda folder: {}
 
         class Reader:
             def read_level(self, frame):
@@ -1089,7 +1038,6 @@ class MatchingRowActionTests(unittest.TestCase):
             region[0],
             region[1],
         )
-        engine._load_digit_templates = lambda folder: {}
 
         class Reader:
             def read_level(self, frame):
@@ -1104,13 +1052,10 @@ class MatchingRowActionTests(unittest.TestCase):
                 )
 
         engine._level_ocr_reader = Reader()
-        engine._level_read_top_scores = lambda frame, templates: []
-        engine._save_level_debug_crop = lambda frame, rect, reference: None
         action = Action(
             type="click_matching_row",
             max_level=60,
             level_roi=[10, 20, 30, 40],
-            level_min_digits=2,
         )
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
@@ -1133,7 +1078,6 @@ class MatchingRowActionTests(unittest.TestCase):
             region[0],
             region[1],
         )
-        engine._load_digit_templates = lambda folder: {}
 
         class Reader:
             def read_level(self, frame):
@@ -1148,8 +1092,6 @@ class MatchingRowActionTests(unittest.TestCase):
                 )
 
         engine._level_ocr_reader = Reader()
-        engine._level_read_top_scores = lambda frame, templates: []
-        engine._save_level_debug_crop = lambda frame, rect, reference: None
         action = Action(
             type="click_matching_row",
             max_level=60,
@@ -1164,48 +1106,43 @@ class MatchingRowActionTests(unittest.TestCase):
             for message in logs
         ))
 
-    def test_level_read_returns_none_when_ocr_and_fallback_conflict(self):
+    def test_repeated_low_confidence_ocr_is_accepted_by_consensus(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"3": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 30
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(22, text="Lv.22", confidence=0.70, engine="fakeocr")},
         )()
-        engine._save_level_debug_crop = lambda frame, rect, reference: "logs/level_debug/conflict.png"
         action = Action(type="click_matching_row", max_level=25, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
-        self.assertIsNone(level)
-        self.assertTrue(any("OCR conflict" in message and "22" in message and "30" in message for message in logs))
+        self.assertEqual(level, 22)
+        self.assertTrue(any("accepted provisional level 22" in message for message in logs))
 
-    def test_level_read_accepts_clear_lv_ocr_over_wrong_digit_fallback(self):
+    def test_level_read_accepts_clear_lv_ocr(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"1": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 11
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(30, text="Lv.30", confidence=0.94, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 30)
-        self.assertTrue(any("ignored digit_fallback=11" in message for message in logs))
+        self.assertTrue(any("fakeocr read 30" in message for message in logs))
 
     def test_level_read_accepts_clear_lv_ocr_rounded_to_ninety_confidence(self):
         logs = []
@@ -1214,191 +1151,154 @@ class MatchingRowActionTests(unittest.TestCase):
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"1": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 1011
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(15, text="Lv.15", confidence=0.895, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 15)
-        self.assertTrue(any("ignored digit_fallback=1011" in message for message in logs))
+        self.assertTrue(any("accepted provisional level 15" in message for message in logs))
 
-    def test_level_read_passes_action_min_digits_to_reader(self):
-        calls = []
+    def test_level_read_accepts_single_digit_ocr(self):
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
-        engine.log = lambda message: None
+        engine.log = lambda _message: None
         engine._level_ocr_reader = type(
             "Reader",
             (),
-            {"read_level": lambda self, frame: LevelOcrResult(None, engine="fakeocr")},
+            {
+                "read_level": lambda self, frame: LevelOcrResult(
+                    1,
+                    text="Lv.1",
+                    confidence=0.98,
+                    engine="fakeocr",
+                )
+            },
         )()
-        engine._load_digit_templates = lambda folder: {"8": np.ones((5, 4), dtype=np.uint8) * 255}
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-
-        def read_level(frame, templates, min_digits=1):
-            calls.append(min_digits)
-            return None
-
-        engine._read_level_from_frame = read_level
-        engine._level_read_top_scores = lambda frame, templates: []
-        engine._save_level_debug_crop = lambda frame, rect, reference: None
-        action = Action(type="click_matching_row", level_min_digits=2)
-
-        engine._read_level_for_row(action, {"center": (100, 100)})
-
-        self.assertTrue(calls)
-        self.assertTrue(all(call == 2 for call in calls))
-
-    def test_level_read_ignores_ocr_result_below_min_digits(self):
-        logs = []
-        engine = object.__new__(MacroEngine)
-        engine.scenario = Scenario(name="war")
-        engine.log = logs.append
-        engine._get_target_window_rect = lambda: None
-        engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"3": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 30
-        engine._level_ocr_reader = type(
-            "Reader",
-            (),
-            {"read_level": lambda self, frame: LevelOcrResult(0, text="LV0", confidence=0.78, engine="fakeocr")},
-        )()
-        action = Action(type="click_matching_row", max_level=25, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=25)
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
-        self.assertEqual(level, 30)
-        self.assertTrue(any("ignored" in message and "need 2 digit" in message for message in logs))
+        self.assertEqual(level, 1)
 
-    def test_level_read_rejects_single_digit_ocr_without_fallback_when_min_digits_is_two(self):
+    def test_level_read_accepts_single_digit_provisional_consensus(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {}
         engine._level_ocr_reader = type(
             "Reader",
             (),
-            {"read_level": lambda self, frame: LevelOcrResult(9, text="[CAT9]", confidence=0.79, engine="fakeocr")},
+            {"read_level": lambda self, frame: LevelOcrResult(7, text="Lv.7", confidence=0.78, engine="fakeocr")},
         )()
-        engine._level_read_top_scores = lambda frame, templates: []
-        engine._save_level_debug_crop = lambda frame, rect, reference: None
-        action = Action(type="click_matching_row", max_level=25, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=25, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
-        self.assertIsNone(level)
-        self.assertTrue(any("ignored" in message and "[CAT9]" in message for message in logs))
+        self.assertEqual(level, 7)
+        self.assertTrue(any("accepted provisional level 7" in message for message in logs))
 
-    def test_level_read_accepts_ocr_when_fallback_adds_spurious_leading_one(self):
+    def test_level_read_accepts_single_digit_ocr_without_special_configuration(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"5": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 150
+        engine._level_ocr_reader = type(
+            "Reader",
+            (),
+            {"read_level": lambda self, frame: LevelOcrResult(9, text="Lv.9", confidence=0.99, engine="fakeocr")},
+        )()
+        action = Action(type="click_matching_row", max_level=25, level_roi=[10, 20, 30, 40])
+
+        level = engine._read_level_for_row(action, {"center": (100, 100)})
+
+        self.assertEqual(level, 9)
+
+    def test_level_read_accepts_repeated_low_confidence_prefixed_ocr(self):
+        logs = []
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="war")
+        engine.log = logs.append
+        engine._get_target_window_rect = lambda: None
+        engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(50, text="L.500", confidence=0.73, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=50, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=50, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 50)
-        self.assertTrue(any("ignored digit_fallback=150" in message for message in logs))
+        self.assertTrue(any("accepted provisional level 50" in message for message in logs))
 
-    def test_level_read_accepts_confident_ocr_when_fallback_contains_extra_noise_digits(self):
+    def test_level_read_accepts_repeated_confident_ocr(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"1": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 1011
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(10, text="LV.10", confidence=0.81, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 10)
-        self.assertTrue(any("ignored digit_fallback=1011" in message for message in logs))
+        self.assertTrue(any("accepted provisional level 10" in message for message in logs))
 
-    def test_level_read_accepts_ly_prefix_ocr_over_repeated_one_fallback_noise(self):
+    def test_level_read_accepts_repeated_ly_prefix_ocr(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"1": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 111
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(15, text="Ly-15", confidence=0.77, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=60, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=60, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 15)
-        self.assertTrue(any("ignored digit_fallback=111" in message for message in logs))
+        self.assertTrue(any("accepted provisional level 15" in message for message in logs))
 
-    def test_level_read_accepts_high_confidence_ocr_over_wrong_digit_fallback(self):
+    def test_level_read_accepts_high_confidence_ocr(self):
         logs = []
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="war")
         engine.log = logs.append
         engine._get_target_window_rect = lambda: None
         engine._grab = lambda region: (np.zeros((region[3], region[2], 3), dtype=np.uint8), region[0], region[1])
-        engine._load_digit_templates = lambda folder: {"4": np.ones((5, 4), dtype=np.uint8) * 255}
-        engine._read_level_from_frame = lambda frame, templates, min_digits=1: 41
         engine._level_ocr_reader = type(
             "Reader",
             (),
             {"read_level": lambda self, frame: LevelOcrResult(55, text="Lv.55", confidence=0.99, engine="fakeocr")},
         )()
-        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40], level_min_digits=2)
+        action = Action(type="click_matching_row", max_level=55, level_roi=[10, 20, 30, 40])
 
         level = engine._read_level_for_row(action, {"center": (100, 100)})
 
         self.assertEqual(level, 55)
-        self.assertTrue(any("ignored digit_fallback=41" in message for message in logs))
-
-    def test_read_level_from_live_crop_ignores_lv_prefix(self):
-        crop_path = os.path.join(
-            "logs",
-            "level_debug",
-            "level_20260624-000747_-904_346_150x45_row-839_321.png",
-        )
-        if not os.path.exists(crop_path):
-            self.skipTest(f"missing live level crop fixture: {crop_path}")
-        engine = object.__new__(MacroEngine)
-        crop = cv2.imread(crop_path)
-        digit_templates = engine._load_digit_templates("templates/level_digits")
-
-        level = engine._read_level_from_frame(crop, digit_templates, min_digits=2)
-
-        self.assertEqual(level, 22)
-
+        self.assertTrue(any("fakeocr read 55" in message for message in logs))
 
 if __name__ == "__main__":
     unittest.main()

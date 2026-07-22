@@ -13,7 +13,8 @@ from macro_clicker.diagnostics import (
     DiagnosticCollector,
 )
 from macro_clicker.engine import MacroEngine
-from macro_clicker.models import Action, Scenario, Step
+from macro_clicker.models import Action, ImageCondition, Scenario, Step
+from macro_clicker.rally_matching import _MATCHING_ROW_SNAPSHOT_KEY
 
 
 class DiagnosticCollectorTests(unittest.TestCase):
@@ -346,6 +347,174 @@ class DiagnosticCollectorTests(unittest.TestCase):
             self.assertEqual(len(decisions), 2)
             self.assertTrue(decisions[0]["screenshot_policy"]["selected"])
             self.assertFalse(decisions[1]["screenshot_policy"]["selected"])
+
+    def test_rally_context_uses_the_atomic_matching_snapshot(self):
+        submitted = {}
+
+        class Collector:
+            def reserve_capture(self, *_args, **_kwargs):
+                return object()
+
+            def record_decision(self, *_args, **_kwargs):
+                return None
+
+            def submit(self, event_type, metadata, images, **kwargs):
+                submitted.update({
+                    "event_type": event_type,
+                    "metadata": metadata,
+                    "images": images,
+                    "kwargs": kwargs,
+                })
+                return "submitted"
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Atomic diagnostics")
+        engine.diagnostics_enabled = True
+        engine._diagnostic_collector = Collector()
+        frame = np.full((40, 60, 3), 37, dtype=np.uint8)
+        exact_snapshot = type(
+            "Snapshot",
+            (),
+            {"frame": frame, "left": 120, "top": 80},
+        )()
+        engine._matching_row_snapshot = type(
+            "Snapshot",
+            (),
+            {
+                "frame": np.full((20, 30, 3), 99, dtype=np.uint8),
+                "left": 500,
+                "top": 400,
+            },
+        )()
+
+        def unexpected_grab(_region):
+            raise AssertionError("diagnostics must not capture a newer live frame")
+
+        engine._grab = unexpected_grab
+        result = engine._submit_rally_diagnostic(
+            "rally_row_test",
+            {"decision": "test"},
+            key="atomic-context",
+            context_snapshot=exact_snapshot,
+        )
+
+        self.assertEqual(result, "submitted")
+        self.assertEqual(submitted["metadata"]["capture_region"], (120, 80, 60, 40))
+        self.assertEqual(
+            submitted["metadata"]["capture_source"],
+            "atomic_matching_snapshot",
+        )
+        annotated = submitted["images"]["context_annotated"]
+        self.assertTrue(np.all(annotated == 37))
+        self.assertFalse(np.shares_memory(annotated, frame))
+        frame.fill(99)
+        self.assertTrue(np.all(annotated == 37))
+
+    def test_template_miss_passes_the_failed_evaluation_snapshot(self):
+        class Collector:
+            def should_capture(self, *_args, **_kwargs):
+                return True
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Atomic template miss")
+        engine.diagnostics_enabled = True
+        engine._diagnostic_collector = Collector()
+        engine._evaluate_condition = lambda *_args, **_kwargs: (
+            True,
+            [{"center": (250, 100), "box": (230, 80, 270, 120)}],
+        )
+        failed_frame = np.full((40, 60, 3), 37, dtype=np.uint8)
+        engine._capture_for_condition = lambda *_args, **_kwargs: (
+            (120, 80, 60, 40),
+            failed_frame,
+            120,
+            80,
+        )
+        engine._load_template = lambda _path: np.zeros((5, 5, 3), dtype=np.uint8)
+        engine._find_best_template_match_in_frame = lambda *_args, **_kwargs: (
+            1,
+            2,
+            5,
+            5,
+            0.4,
+            1.0,
+        )
+        submitted = {}
+        engine._submit_rally_diagnostic = lambda event, metadata, **kwargs: submitted.update(
+            {"event": event, "metadata": metadata, "kwargs": kwargs}
+        )
+
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="templates/GoldMob.png"),
+                ImageCondition(template_path="templates/Join.png"),
+            ],
+            actions=[action],
+        )
+        snapshot = type(
+            "Snapshot",
+            (),
+            {"frame": failed_frame, "left": 120, "top": 80},
+        )()
+
+        engine._maybe_record_matching_row_step_miss(
+            step,
+            0,
+            {0: []},
+            {_MATCHING_ROW_SNAPSHOT_KEY: snapshot},
+        )
+
+        self.assertEqual(
+            submitted["event"],
+            "rally_template_reference_missing_with_target_present",
+        )
+        self.assertIs(submitted["kwargs"]["context_snapshot"], snapshot)
+
+    def test_matching_row_diagnostic_ignores_same_center_from_older_generation(self):
+        submitted = []
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Generation scoped")
+        engine._level_diagnostic_generation = 2
+        engine._last_level_diagnostics = {
+            (80, 100): {
+                "_generation": 1,
+                "decision": "strong_ocr",
+                "level": 45,
+                "selected_attempt_index": 0,
+                "attempts": [{"ocr": {"confidence": 0.99}}],
+                "images": {
+                    "old_crop": np.full((5, 5, 3), 45, dtype=np.uint8),
+                },
+            }
+        }
+        engine._submit_rally_diagnostic = lambda event, metadata, images, **kwargs: submitted.append(
+            (event, metadata, images, kwargs)
+        )
+        reference = {"center": (80, 100), "box": (50, 70, 110, 130)}
+        target = {"center": (250, 100), "box": (230, 80, 270, 120)}
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+        )
+
+        engine._record_matching_row_diagnostic(
+            Step(name="Joining"),
+            action,
+            [{"reference": reference, "target": target, "level": None}],
+            {0: [reference], 1: [target]},
+            "row_changed_during_delay",
+        )
+
+        self.assertEqual(submitted[0][1]["level_reads"], [])
+        self.assertNotIn("row_0_old_crop", submitted[0][2])
 
     def test_low_confidence_success_is_classified_as_critical(self):
         engine = object.__new__(MacroEngine)

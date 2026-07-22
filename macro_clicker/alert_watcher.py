@@ -82,7 +82,15 @@ from .project_paths import (
     ALERTS_DIR as ALERTS_PATH,
 )
 from .runtime_paths import INSTANCE_LOCK_PATH
-from .ui_components import COLORS, CollapsibleSection, Tooltip, configure_theme
+from .ui_components import (
+    COLORS,
+    CollapsibleSection,
+    StatusPulse,
+    Tooltip,
+    action_button,
+    configure_theme,
+)
+from .ui_preferences import load_ui_preferences
 from .window_locator import (
     find_window_rect,
     proportional_region_from_window,
@@ -1423,6 +1431,8 @@ class AlertWatcherFrame(ttk.Frame):
         self._destroy_scheduled = False
         self._shutting_down = False
         self._errored_watcher = None
+        self.ui_preferences = load_ui_preferences()
+        self._watcher_status_pulse = None
 
         self._build_ui()
         self._refresh_list()
@@ -1448,25 +1458,31 @@ class AlertWatcherFrame(ttk.Frame):
 
     # ---------------- UI construction ----------------
     def _build_ui(self):
-        toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(14, 11))
-        toolbar.pack(fill="x", padx=10, pady=(10, 6))
+        toolbar = ttk.Frame(self, style="Card.TFrame", padding=(18, 14))
+        toolbar.pack(fill="x", padx=12, pady=(12, 8))
         toolbar.columnconfigure(0, weight=1)
         ttk.Label(toolbar, text="Icon Alerts", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         self.status_label = ttk.Label(toolbar, text="Idle", style="Idle.Status.TLabel")
         self.status_label.grid(row=0, column=1, padx=(8, 10))
-        self.start_btn = ttk.Button(
+        self._watcher_status_pulse = StatusPulse(
+            self.status_label,
+            ("Watching.Status.TLabel", "WatchingPulse.Status.TLabel"),
+            interval_ms=850,
+        )
+        self.start_btn = action_button(
             toolbar,
             text="Start monitoring",
-            style="Primary.TButton",
             command=self._start_watching,
+            width=142,
         )
         self.start_btn.grid(row=0, column=2, padx=3)
-        self.stop_btn = ttk.Button(
+        self.stop_btn = action_button(
             toolbar,
             text="Stop",
-            style="Danger.TButton",
             command=self._stop_watching,
+            kind="danger",
             state="disabled",
+            width=96,
         )
         self.stop_btn.grid(row=0, column=3, padx=3)
         test_alert_btn = ttk.Button(toolbar, text="Test alert", command=self._test_alert)
@@ -1475,16 +1491,18 @@ class AlertWatcherFrame(ttk.Frame):
         Tooltip(test_alert_btn, "Play the current alert sound and popup")
 
         workspace = ttk.PanedWindow(self, orient="horizontal")
-        workspace.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        workspace.pack(fill="both", expand=True, padx=12, pady=(0, 8))
 
-        left = ttk.Frame(workspace, style="Surface.TFrame", padding=14, width=650)
-        right = ttk.Frame(workspace, style="Surface.TFrame", padding=14, width=290)
+        left = ttk.Frame(workspace, style="Card.TFrame", padding=18, width=650)
+        right = ttk.Frame(workspace, style="Card.TFrame", padding=18, width=300)
         workspace.add(left, weight=3)
         workspace.add(right, weight=1)
 
         ttk.Label(left, text="Watched icons", style="Title.TLabel").pack(anchor="w")
+        list_frame = ttk.Frame(left, style="Surface.TFrame")
+        list_frame.pack(fill="both", expand=True, pady=(10, 8))
         self.listbox = tk.Listbox(
-            left,
+            list_frame,
             height=10,
             bg=COLORS["surface"],
             fg=COLORS["text"],
@@ -1497,7 +1515,14 @@ class AlertWatcherFrame(ttk.Frame):
             font=("Segoe UI", 10),
             exportselection=False,
         )
-        self.listbox.pack(fill="both", expand=True, pady=(10, 8))
+        list_scroll = ttk.Scrollbar(
+            list_frame,
+            orient="vertical",
+            command=self.listbox.yview,
+        )
+        self.listbox.configure(yscrollcommand=list_scroll.set)
+        self.listbox.pack(side="left", fill="both", expand=True)
+        list_scroll.pack(side="right", fill="y")
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
         self.listbox.bind("<space>", self._toggle_selected_enabled)
 
@@ -1734,6 +1759,20 @@ class AlertWatcherFrame(ttk.Frame):
             self._append_log("Global hotkeys disabled: install 'keyboard' to enable them.")
         if not HAVE_PYSTRAY:
             self._append_log("System tray disabled: install 'pystray' to enable it.")
+
+    def apply_ui_preferences(self, preferences):
+        """Apply global presentation preferences immediately in embedded mode."""
+        self.ui_preferences = preferences
+        pulse = getattr(self, "_watcher_status_pulse", None)
+        watcher = getattr(self, "watcher", None)
+        watching = watcher is not None and watcher.is_alive()
+        if pulse is None:
+            return
+        if preferences.animations_enabled and watching:
+            pulse.start()
+        else:
+            final_style = "Watching.Status.TLabel" if watching else "Idle.Status.TLabel"
+            pulse.stop(final_style)
 
     def _current_settings(self):
         return AppSettings(
@@ -2421,6 +2460,9 @@ class AlertWatcherFrame(ttk.Frame):
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.status_label.config(text="Watching", style="Watching.Status.TLabel")
+        status_pulse = getattr(self, "_watcher_status_pulse", None)
+        if self.ui_preferences.animations_enabled and status_pulse is not None:
+            status_pulse.start()
 
     def _stop_watching(self):
         watcher = self.watcher
@@ -2428,9 +2470,10 @@ class AlertWatcherFrame(ttk.Frame):
             self._set_idle_controls()
             return True
         watcher.stop()
-        if watcher is not threading.current_thread():
-            watcher.join(timeout=2.0)
         if watcher.is_alive():
+            status_pulse = getattr(self, "_watcher_status_pulse", None)
+            if status_pulse is not None:
+                status_pulse.stop("Idle.Status.TLabel")
             self.start_btn.config(state="disabled")
             self.stop_btn.config(state="disabled")
             self.status_label.config(text="Stopping…", style="Idle.Status.TLabel")
@@ -2440,6 +2483,9 @@ class AlertWatcherFrame(ttk.Frame):
         return True
 
     def _set_idle_controls(self):
+        status_pulse = getattr(self, "_watcher_status_pulse", None)
+        if status_pulse is not None:
+            status_pulse.stop("Idle.Status.TLabel")
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.status_label.config(text="Idle", style="Idle.Status.TLabel")
@@ -2450,6 +2496,9 @@ class AlertWatcherFrame(ttk.Frame):
         errored = watcher is self._errored_watcher
         self.watcher = None
         if errored:
+            status_pulse = getattr(self, "_watcher_status_pulse", None)
+            if status_pulse is not None:
+                status_pulse.stop("Error.Status.TLabel")
             self.start_btn.config(state="normal")
             self.stop_btn.config(state="disabled")
             self.status_label.config(text="Watcher stopped", style="Error.Status.TLabel")
@@ -2596,6 +2645,9 @@ class AlertWatcherFrame(ttk.Frame):
                 if ev.get("watcher") not in (None, self.watcher):
                     continue
                 self._errored_watcher = ev.get("watcher", self.watcher)
+                status_pulse = getattr(self, "_watcher_status_pulse", None)
+                if status_pulse is not None:
+                    status_pulse.stop("Error.Status.TLabel")
                 self.status_label.config(text="Watcher stopped", style="Error.Status.TLabel")
                 if not self._close_when_stopped:
                     messagebox.showwarning(
@@ -2650,6 +2702,9 @@ class AlertWatcherFrame(ttk.Frame):
 
     def shutdown(self):
         self._shutting_down = True
+        status_pulse = getattr(self, "_watcher_status_pulse", None)
+        if status_pulse is not None:
+            status_pulse.stop()
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
             self._save_settings()

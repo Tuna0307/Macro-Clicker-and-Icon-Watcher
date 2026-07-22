@@ -19,7 +19,7 @@ def _default_user_data_dir():
 
 USER_DATA_DIR = _default_user_data_dir()
 LOG_DIR = os.path.join(USER_DATA_DIR, "logs")
-LEVEL_DEBUG_DIR = os.path.join(LOG_DIR, "level_debug")
 DIAGNOSTIC_DIR = os.path.join(LOG_DIR, "diagnostics")
 STARTUP_ERROR_LOG = os.path.join(LOG_DIR, "startup_error.log")
 INSTANCE_LOCK_PATH = os.path.join(USER_DATA_DIR, "app.lock")
+UI_PREFERENCES_PATH = os.path.join(USER_DATA_DIR, "ui_preferences.json")

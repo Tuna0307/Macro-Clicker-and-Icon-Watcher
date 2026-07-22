@@ -315,6 +315,35 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertEqual(runtime_matches[0]["image_box"], (10, 6, 22, 18))
         self.assertEqual(preview_matches[0]["image_box"], (10, 6, 22, 18))
 
+    def test_larger_rival_template_can_disqualify_embedded_target(self):
+        engine = self._bare_engine()
+        rng = np.random.default_rng(47)
+        target = rng.integers(0, 256, (12, 12, 3), dtype=np.uint8)
+        rival = rng.integers(0, 256, (28, 28, 3), dtype=np.uint8)
+        rival[8:20, 8:20] = target
+        frame = np.zeros((80, 100, 3), dtype=np.uint8)
+        frame[20:48, 30:58] = rival
+        templates = {"target.png": target, "rival.png": rival}
+        engine._load_template = templates.__getitem__
+        condition = ImageCondition(
+            template_path="target.png",
+            confidence=0.99,
+            comparison_template_path="rival.png",
+            comparison_margin=0.03,
+        )
+
+        runtime_ok, runtime_matches = engine._evaluate_template_condition(
+            0, condition, frame, 0, 0, collect_all=False
+        )
+        preview_ok, preview_matches, _ = engine._preview_template_condition(
+            0, condition, frame, 0, 0, None
+        )
+
+        self.assertFalse(runtime_ok)
+        self.assertFalse(preview_ok)
+        self.assertEqual(runtime_matches, [])
+        self.assertEqual(preview_matches, [])
+
     def test_capture_retries_transient_failures_with_interruptible_backoff(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(name="capture", monitor_index=1)

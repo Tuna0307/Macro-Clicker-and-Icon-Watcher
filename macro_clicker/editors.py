@@ -37,6 +37,7 @@ from .ui_components import (
     COLORS,
     CollapsibleSection,
     action_display_summary,
+    center_window,
     condition_choice_for_index,
     condition_choices,
     condition_index_from_choice,
@@ -209,8 +210,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
                      target_window_title=""):
     win = tk.Toplevel(parent)
     win.title("Edit Condition" if cond else "Add Condition")
+    win.transient(parent)
     win.grab_set()
-    win.resizable(False, False)
+    win.resizable(True, True)
     win.configure(background=COLORS["surface"])
     result: dict[str, Optional[ImageCondition]] = {"value": None}
     captured_template_paths = []
@@ -563,6 +565,8 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     btns.grid(row=7, column=0, columnspan=3, sticky="e", padx=6, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
     ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(side="left", padx=4)
+    win.bind("<Escape>", lambda _event: win.destroy())
+    win.after_idle(lambda: center_window(win, parent))
 
     win.wait_window()
     saved_condition = result["value"]
@@ -586,8 +590,9 @@ def action_dialog(
 ):
     win = tk.Toplevel(parent)
     win.title("Edit Action" if action else "Add Action")
+    win.transient(parent)
     win.grab_set()
-    win.resizable(False, False)
+    win.resizable(True, True)
     win.configure(background=COLORS["surface"])
     result: dict[str, Optional[Action]] = {"value": None}
     a = action or Action(type="click")
@@ -678,8 +683,6 @@ def action_dialog(
     row_button_var = tk.StringVar(value=a.button)
     min_level_var = tk.StringVar(value=str(a.min_level) if a.min_level is not None else "")
     max_level_var = tk.StringVar(value=str(a.max_level) if a.max_level is not None else "")
-    level_min_digits_var = tk.IntVar(value=max(1, getattr(a, "level_min_digits", 1)))
-    level_digit_dir_var = tk.StringVar(value=a.level_digit_template_dir)
     default_level_roi = a.level_roi or [-90, -45, 220, 100]
     level_roi_x_var = tk.IntVar(value=default_level_roi[0])
     level_roi_y_var = tk.IntVar(value=default_level_roi[1])
@@ -724,45 +727,34 @@ def action_dialog(
     ttk.Entry(row_click_frame, textvariable=min_level_var, width=7).grid(row=7, column=1, sticky="w")
     ttk.Label(row_click_frame, text="Max level", style="Surface.TLabel").grid(row=7, column=2, sticky="w")
     ttk.Entry(row_click_frame, textvariable=max_level_var, width=7).grid(row=7, column=3, sticky="w")
-    ttk.Label(row_click_frame, text="Min digits", style="Surface.TLabel").grid(row=8, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=level_min_digits_var, width=7).grid(row=8, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Digit templates", style="Surface.TLabel").grid(row=9, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=level_digit_dir_var, width=28).grid(row=9, column=1, columnspan=3, sticky="we")
-
-    def browse_level_digit_dir():
-        path = filedialog.askdirectory(initialdir="templates", parent=win)
-        if path:
-            level_digit_dir_var.set(portable_project_path(path))
-
-    ttk.Button(row_click_frame, text="Browse", command=browse_level_digit_dir).grid(row=9, column=4, sticky="w", padx=4)
-    ttk.Label(row_click_frame, text="Level box x / y / w / h", style="Surface.TLabel").grid(row=10, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=level_roi_x_var, width=7).grid(row=10, column=1, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_y_var, width=7).grid(row=10, column=2, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_w_var, width=7).grid(row=10, column=3, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_h_var, width=7).grid(row=10, column=4, sticky="w")
-    ttk.Label(row_click_frame, text="No-row click", style="Surface.TLabel").grid(row=11, column=0, sticky="w", padx=4, pady=(8, 2))
+    ttk.Label(row_click_frame, text="Level box x / y / w / h", style="Surface.TLabel").grid(row=8, column=0, sticky="w", padx=4, pady=2)
+    ttk.Entry(row_click_frame, textvariable=level_roi_x_var, width=7).grid(row=8, column=1, sticky="w")
+    ttk.Entry(row_click_frame, textvariable=level_roi_y_var, width=7).grid(row=8, column=2, sticky="w")
+    ttk.Entry(row_click_frame, textvariable=level_roi_w_var, width=7).grid(row=8, column=3, sticky="w")
+    ttk.Entry(row_click_frame, textvariable=level_roi_h_var, width=7).grid(row=8, column=4, sticky="w")
+    ttk.Label(row_click_frame, text="No-row click", style="Surface.TLabel").grid(row=9, column=0, sticky="w", padx=4, pady=(8, 2))
     ttk.Combobox(
         row_click_frame,
         textvariable=no_match_cond_idx_var,
         values=["None"] + condition_values,
         state="readonly",
         width=30,
-    ).grid(row=11, column=1, columnspan=3, sticky="w")
-    ttk.Label(row_click_frame, text="Then disable", style="Surface.TLabel").grid(row=12, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=no_match_disable_steps_var, width=34).grid(row=12, column=1, columnspan=4, sticky="we")
+    ).grid(row=9, column=1, columnspan=3, sticky="w")
+    ttk.Label(row_click_frame, text="Then disable", style="Surface.TLabel").grid(row=10, column=0, sticky="w", padx=4, pady=2)
+    ttk.Entry(row_click_frame, textvariable=no_match_disable_steps_var, width=34).grid(row=10, column=1, columnspan=4, sticky="we")
     ttk.Label(
         row_click_frame,
         text="Delay after level check",
         style="Surface.TLabel",
-    ).grid(row=13, column=0, sticky="w", padx=4, pady=2)
+    ).grid(row=11, column=0, sticky="w", padx=4, pady=2)
     ttk.Entry(row_click_frame, textvariable=pre_click_delay_var, width=7).grid(
-        row=13, column=1, sticky="w"
+        row=11, column=1, sticky="w"
     )
     ttk.Label(row_click_frame, text="seconds", style="Surface.TLabel").grid(
-        row=13, column=2, sticky="w"
+        row=11, column=2, sticky="w"
     )
 
-    advanced_rows = (2, 5, 7, 8, 9, 10, 11, 12, 13)
+    advanced_rows = (2, 5, 7, 8, 9, 10, 11)
     advanced_widgets = [
         widget
         for row in advanced_rows
@@ -776,7 +768,6 @@ def action_dialog(
             a.min_level is not None,
             a.max_level is not None,
             a.level_roi is not None,
-            getattr(a, "level_min_digits", 1) != 1,
             getattr(a, "no_match_condition_index", None) is not None,
             bool(getattr(a, "no_match_disable_steps", None)),
             getattr(a, "pre_click_delay", 0.0) > 0.0,
@@ -809,7 +800,7 @@ def action_dialog(
         style="Disclosure.TButton",
         command=toggle_row_advanced,
     )
-    row_advanced_btn.grid(row=14, column=0, columnspan=5, sticky="ew", pady=(8, 0))
+    row_advanced_btn.grid(row=12, column=0, columnspan=5, sticky="ew", pady=(8, 0))
     render_row_advanced()
 
     # --- key fields ---
@@ -894,13 +885,6 @@ def action_dialog(
                 new_action.button = row_button_var.get()
                 new_action.min_level = _parse_optional_int(min_level_var.get(), "Min level")
                 new_action.max_level = _parse_optional_int(max_level_var.get(), "Max level")
-                new_action.level_digit_template_dir = portable_project_path(
-                    level_digit_dir_var.get().strip()
-                )
-                new_action.level_min_digits = max(
-                    1,
-                    _parse_required_int(level_min_digits_var.get(), "Min digits"),
-                )
                 new_action.level_roi = preserved_level_roi(
                     a.level_roi,
                     row_advanced_state["opened"],
@@ -946,6 +930,8 @@ def action_dialog(
     btns.grid(row=2, column=0, columnspan=2, sticky="e", padx=10, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
     ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(side="left", padx=4)
+    win.bind("<Escape>", lambda _event: win.destroy())
+    win.after_idle(lambda: center_window(win, parent))
 
     win.wait_window()
     return result["value"]
@@ -959,8 +945,9 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
                 monitor_index=1, target_window_title=""):
     win = tk.Toplevel(parent)
     win.title("Edit Step" if step else "Add Step")
+    win.transient(parent)
     win.grab_set()
-    win.resizable(False, False)
+    win.resizable(True, True)
     win.configure(background=COLORS["surface"])
     result: dict[str, Optional[Step]] = {"value": None}
 
@@ -1241,6 +1228,8 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
     btns.grid(row=8, column=0, columnspan=5, sticky="e", padx=6, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
     ttk.Button(btns, text="Save", style="Primary.TButton", command=on_save).pack(side="left", padx=4)
+    win.bind("<Escape>", lambda _event: win.destroy())
+    win.after_idle(lambda: center_window(win, parent))
 
     win.wait_window()
     return result["value"]

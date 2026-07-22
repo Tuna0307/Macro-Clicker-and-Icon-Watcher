@@ -2,7 +2,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -22,12 +22,26 @@ class LevelOcrReader:
     OCR reader for small game level crops.
 
     PaddleOCR is loaded lazily because it is heavy and downloads/initializes
-    models on first use. The rest of the macro can still run if OCR is not
-    installed; the engine will fall back to digit templates.
+    models on first use. If OCR is unavailable, level-filtered rows fail safe
+    and are skipped.
     """
 
     MIN_ACCEPT_CONFIDENCE = 0.70
     STRONG_ACCEPT_CONFIDENCE = 0.90
+    _VARIANTS_PER_REGION = 3
+    _FAST_REGION_INDEX = 1
+    _LEVEL_PREFIX_PATTERN = re.compile(
+        r"(?<![a-z0-9])(?:level|lv)([^a-z0-9]{0,4})(\d{1,4})"
+    )
+    _SINGLE_L_PREFIX_PATTERN = re.compile(
+        r"(?<![a-z0-9])l([^a-z0-9]{1,3})(\d{1,4})"
+    )
+    _OCR_PREFIX_CORRECTION_PATTERN = re.compile(
+        r"(?<![a-z0-9])(?:1v|iv|ly)(?=[^a-z0-9]{0,4}\d)"
+    )
+    _OCR_ROMAN_V_PREFIX_CORRECTION_PATTERN = re.compile(
+        r"(?<![a-z0-9])l\u2174(?=[^a-z0-9]{0,4}\d)"
+    )
 
     def __init__(self):
         self._engine = None
@@ -73,10 +87,41 @@ class LevelOcrReader:
         ):
             return LevelOcrResult(None, engine=self._engine_name, error="empty frame")
 
+        # The second level-text region's plain upscaled image was the fastest
+        # reliable variant in the screenshot benchmark. Try it once before the
+        # exhaustive path, but only trust a literal Lv/Level-prefixed strong
+        # result. Anything less certain continues through every prior safety
+        # check below.
+        fast_image = self._preprocess_fast_variant(frame)
+        fast_result = self._run_text_recognition(fast_image)
+        if self._is_fast_path_result(fast_result):
+            return fast_result
+
+        # Build the more expensive sharpened and threshold variants only when
+        # the fast result was not safe enough to accept.
         variants = self._preprocess_variants(frame)
-        best = LevelOcrResult(None, engine="paddleocr_rec")
+        if not variants:
+            return LevelOcrResult(None, engine="paddleocr_rec", error="no OCR variants")
+        fast_index = min(
+            self._FAST_REGION_INDEX * self._VARIANTS_PER_REGION,
+            len(variants) - 1,
+        )
+
+        best = self._better_result(
+            LevelOcrResult(None, engine="paddleocr_rec"),
+            fast_result,
+        )
         strong_levels = {}
-        for image in variants:
+        unprefixed_levels = {}
+        if self._is_strong_result(fast_result):
+            # It was not literal enough for one-read acceptance, but it still
+            # counts as one observation in the existing consensus path.
+            strong_levels[fast_result.level] = fast_result
+        else:
+            self._record_unprefixed_level(unprefixed_levels, fast_result)
+        for index, image in enumerate(variants):
+            if index == fast_index:
+                continue
             result = self._run_text_recognition(image)
             best = self._better_result(best, result)
             if self._is_strong_result(result):
@@ -84,6 +129,10 @@ class LevelOcrReader:
                 if prior is not None:
                     return self._better_result(prior, result)
                 strong_levels[result.level] = result
+            else:
+                consensus = self._record_unprefixed_level(unprefixed_levels, result)
+                if consensus is not None and self._is_confident_result(consensus):
+                    return consensus
 
         if self._is_acceptable_result(best) and self._has_level_prefix(best.text):
             return best
@@ -91,7 +140,7 @@ class LevelOcrReader:
         engine = self._get_engine()
         if engine is None:
             if self._is_acceptable_result(best):
-                return best
+                return self._as_provisional_result(best)
             return LevelOcrResult(None, best.text, best.confidence, best.engine, self.init_error)
 
         for image in variants:
@@ -102,8 +151,14 @@ class LevelOcrReader:
                 if prior is not None:
                     return self._better_result(prior, result)
                 strong_levels[result.level] = result
+            else:
+                consensus = self._record_unprefixed_level(unprefixed_levels, result)
+                if consensus is not None and self._is_confident_result(consensus):
+                    return consensus
         if self._is_acceptable_result(best):
-            return best
+            if self._has_level_prefix(best.text):
+                return best
+            return self._as_provisional_result(best)
         error = best.error
         if best.level is not None and not error:
             confidence = "unknown" if best.confidence is None else f"{best.confidence:.2f}"
@@ -111,9 +166,16 @@ class LevelOcrReader:
         return LevelOcrResult(None, best.text, best.confidence, best.engine, error)
 
     def _has_level_prefix(self, text):
-        normalized = (text or "").lower().replace(" ", "")
-        normalized = normalized.replace("lⅴ", "lv").replace("1v", "lv").replace("iv", "lv").replace("ly", "lv")
-        return bool(re.search(r"(?:lv|level|^l)[^\d]*\d", normalized))
+        normalized = self._normalize_ocr_prefix(text)
+        return bool(
+            self._LEVEL_PREFIX_PATTERN.search(normalized)
+            or self._SINGLE_L_PREFIX_PATTERN.search(normalized)
+        )
+
+    def _normalize_ocr_prefix(self, text):
+        normalized = (text or "").lower()
+        normalized = self._OCR_PREFIX_CORRECTION_PATTERN.sub("lv", normalized)
+        return self._OCR_ROMAN_V_PREFIX_CORRECTION_PATTERN.sub("lv", normalized)
 
     def _result_rank(self, result):
         has_level = result is not None and result.level is not None
@@ -150,6 +212,49 @@ class LevelOcrReader:
             and result.confidence >= self.STRONG_ACCEPT_CONFIDENCE
         )
 
+    def _is_confident_result(self, result):
+        return (
+            self._is_acceptable_result(result)
+            and result.confidence >= self.STRONG_ACCEPT_CONFIDENCE
+        )
+
+    def _record_unprefixed_level(self, observations, result):
+        if (
+            not self._is_acceptable_result(result)
+            or self._has_level_prefix(result.text)
+        ):
+            return None
+        prior = observations.get(result.level)
+        observations[result.level] = self._better_result(prior, result)
+        if prior is None:
+            return None
+        return self._better_result(prior, result)
+
+    def _as_provisional_result(self, result):
+        if not self._is_confident_result(result) or self._has_level_prefix(result.text):
+            return result
+        return LevelOcrResult(
+            result.level,
+            text=result.text,
+            confidence=self.STRONG_ACCEPT_CONFIDENCE - 0.001,
+            engine=result.engine,
+            error=result.error,
+        )
+
+    def _is_fast_path_result(self, result):
+        if (
+            result is None
+            or result.level is None
+            or result.confidence is None
+            or result.confidence < self.STRONG_ACCEPT_CONFIDENCE
+        ):
+            return False
+        # Be stricter than the exhaustive path here. OCR corrections such as
+        # "1v"/"iv"/"ly" and the generic leading-L form remain supported by
+        # the fallback, but cannot trigger the one-read fast acceptance.
+        normalized = (result.text or "").lower()
+        return bool(self._LEVEL_PREFIX_PATTERN.search(normalized))
+
     def _get_engine(self):
         if self._engine is not None:
             return self._engine
@@ -163,7 +268,7 @@ class LevelOcrReader:
             self._ocr_init_error = f"PaddleOCR import failed: {exc}"
             return None
 
-        init_attempts = [
+        init_attempts: list[dict[str, Any]] = [
             {
                 "lang": "en",
                 "use_doc_orientation_classify": False,
@@ -219,14 +324,23 @@ class LevelOcrReader:
         return None
 
     def _preprocess_variants(self, frame):
-        bgr = frame
-        if len(frame.shape) == 2:
-            bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        bgr = self._as_bgr(frame)
 
         variants = []
         for region in self._level_text_regions(bgr):
             variants.extend(self._preprocess_single_region(region))
         return variants
+
+    def _preprocess_fast_variant(self, frame):
+        bgr = self._as_bgr(frame)
+        regions = self._level_text_regions(bgr)
+        region = regions[min(self._FAST_REGION_INDEX, len(regions) - 1)]
+        return self._upscale(region)
+
+    def _as_bgr(self, frame):
+        if len(frame.shape) == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        return frame
 
     def _level_text_regions(self, bgr):
         height, width = bgr.shape[:2]
@@ -256,8 +370,7 @@ class LevelOcrReader:
         return regions
 
     def _preprocess_single_region(self, bgr):
-        scale = 4
-        upscaled = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        upscaled = self._upscale(bgr)
         sharpened = self._sharpen(upscaled)
 
         gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
@@ -273,6 +386,9 @@ class LevelOcrReader:
         threshold_bgr = cv2.cvtColor(threshold, cv2.COLOR_GRAY2BGR)
 
         return [upscaled, sharpened, threshold_bgr]
+
+    def _upscale(self, image):
+        return cv2.resize(image, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
 
     def _sharpen(self, image):
         blurred = cv2.GaussianBlur(image, (0, 0), 1.0)
@@ -462,16 +578,10 @@ class LevelOcrReader:
     def _extract_level(self, text):
         if not text:
             return None
-        normalized = text.lower().replace(" ", "")
-        normalized = (
-            normalized.replace("lⅴ", "lv")
-            .replace("1v", "lv")
-            .replace("iv", "lv")
-            .replace("ly", "lv")
-        )
+        normalized = self._normalize_ocr_prefix(text)
 
-        for pattern in (r"lv([^\d]*)(\d{1,4})", r"level([^\d]*)(\d{1,4})", r"^l([^\d]*)(\d{1,4})"):
-            match = re.search(pattern, normalized)
+        for pattern in (self._LEVEL_PREFIX_PATTERN, self._SINGLE_L_PREFIX_PATTERN):
+            match = pattern.search(normalized)
             if match:
                 separator, digits = match.group(1), match.group(2)
                 return self._normalize_level_digits(digits, lv_prefixed=True, separator=separator)

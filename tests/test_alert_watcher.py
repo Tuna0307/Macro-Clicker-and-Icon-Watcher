@@ -922,7 +922,7 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         def config(self, **kwargs):
             self.options.update(kwargs)
 
-    def test_stop_retains_reference_while_watcher_is_still_alive(self):
+    def test_stop_is_nonblocking_and_retains_live_watcher_reference(self):
         class SlowWatcher:
             def __init__(self):
                 self.stop_called = False
@@ -950,7 +950,7 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         self.assertFalse(stopped)
         self.assertIs(frame.watcher, slow)
         self.assertTrue(slow.stop_called)
-        self.assertEqual(slow.join_timeout, 2.0)
+        self.assertIsNone(slow.join_timeout)
         self.assertEqual(frame.status_label.options["text"], "Stopping…")
         self.assertEqual(frame.start_btn.options["state"], "disabled")
 
@@ -977,6 +977,23 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
             frame.event_queue.get_nowait(),
             {"type": "ui_command", "command": "toggle"},
         )
+
+    def test_global_animation_preference_applies_to_live_watcher(self):
+        from macro_clicker.ui_preferences import UiPreferences
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.watcher = Mock()
+        frame.watcher.is_alive.return_value = True
+        frame._watcher_status_pulse = Mock()
+
+        frame.apply_ui_preferences(UiPreferences(animations_enabled=False))
+        frame._watcher_status_pulse.stop.assert_called_once_with(
+            "Watching.Status.TLabel"
+        )
+
+        frame._watcher_status_pulse.reset_mock()
+        frame.apply_ui_preferences(UiPreferences(animations_enabled=True))
+        frame._watcher_status_pulse.start.assert_called_once_with()
 
     def test_finish_app_quit_destroys_toplevel_not_only_frame(self):
         frame = object.__new__(watcher.AlertWatcherFrame)

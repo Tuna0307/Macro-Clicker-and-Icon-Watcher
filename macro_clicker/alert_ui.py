@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from .detection_core import capture_bgr
+from .ui_components import COLORS
 
 
 class ScreenRegionPicker(tk.Toplevel):
@@ -189,33 +190,36 @@ class AlertPopup(tk.Toplevel):
         self.title("Icon Alert")
         self.attributes("-topmost", True)
         self.resizable(False, False)
-        self.configure(bg="#1f1f1f")
+        self.configure(bg=COLORS["border"])
+        self._fade_after_id = None
+        self._close_after_id = None
+        self._closing = False
 
-        frame = tk.Frame(self, bg="#1f1f1f", padx=14, pady=12)
-        frame.pack()
+        frame = tk.Frame(self, bg=COLORS["surface"], padx=18, pady=16)
+        frame.pack(padx=1, pady=1)
 
         if thumb_img is not None:
             tk_thumb = ImageTk.PhotoImage(thumb_img)
-            lbl_img = tk.Label(frame, image=tk_thumb, bg="#1f1f1f")
+            lbl_img = tk.Label(frame, image=tk_thumb, bg=COLORS["surface"])
             lbl_img.image = tk_thumb
             lbl_img.grid(row=0, column=0, rowspan=2, padx=(0, 12))
 
         tk.Label(
             frame,
             text=f"{name} detected!",
-            fg="white",
-            bg="#1f1f1f",
+            fg=COLORS["text"],
+            bg=COLORS["surface"],
             font=("Segoe UI", 13, "bold"),
         ).grid(row=0, column=1, sticky="w")
         tk.Label(
             frame,
             text=f"Monitor {monitor} - {time.strftime('%H:%M:%S')}",
-            fg="#aaaaaa",
-            bg="#1f1f1f",
+            fg=COLORS["muted"],
+            bg=COLORS["surface"],
             font=("Segoe UI", 9),
         ).grid(row=1, column=1, sticky="w")
 
-        ttk.Button(frame, text="Dismiss", command=self.destroy).grid(
+        ttk.Button(frame, text="Dismiss", command=self._begin_close).grid(
             row=2,
             column=0,
             columnspan=2,
@@ -231,9 +235,70 @@ class AlertPopup(tk.Toplevel):
         except Exception:
             right = self.winfo_screenwidth()
         self.geometry(f"+{right - self.winfo_width() - 40}+40")
-        self.after(8000, self._safe_destroy)
+        self.protocol("WM_DELETE_WINDOW", self._begin_close)
+        try:
+            self.attributes("-alpha", 0.0)
+            self._animate_alpha(0.0, 1.0, 0.16)
+        except tk.TclError:
+            pass
+        self._close_after_id = self.after(8000, self._begin_close)
+
+    def _animate_alpha(self, value, target, step):
+        try:
+            exists = self.winfo_exists()
+        except tk.TclError:
+            return
+        if not exists:
+            return
+        next_value = min(target, value + step) if value < target else max(target, value - step)
+        try:
+            self.attributes("-alpha", next_value)
+        except tk.TclError:
+            if target <= 0.0:
+                self._safe_destroy()
+            return
+        if next_value == target:
+            self._fade_after_id = None
+            if target <= 0.0:
+                self._safe_destroy()
+            return
+        self._fade_after_id = self.after(
+            24,
+            lambda: self._animate_alpha(next_value, target, step),
+        )
+
+    def _begin_close(self):
+        if self._closing:
+            return
+        self._closing = True
+        if self._fade_after_id is not None:
+            try:
+                self.after_cancel(self._fade_after_id)
+            except tk.TclError:
+                pass
+            self._fade_after_id = None
+        if self._close_after_id is not None:
+            try:
+                self.after_cancel(self._close_after_id)
+            except tk.TclError:
+                pass
+            self._close_after_id = None
+        try:
+            current_alpha = float(self.attributes("-alpha"))
+        except (tk.TclError, TypeError, ValueError):
+            self._safe_destroy()
+            return
+        self._animate_alpha(current_alpha, 0.0, 0.2)
 
     def _safe_destroy(self):
+        for attr in ("_fade_after_id", "_close_after_id"):
+            after_id = getattr(self, attr, None)
+            if after_id is not None:
+                try:
+                    self.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
         try:
             self.destroy()
         except tk.TclError:

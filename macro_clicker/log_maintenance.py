@@ -77,7 +77,7 @@ def maintain_logs(log_dir, main_log_path=None, max_log_bytes=DEFAULT_MAX_LOG_BYT
                   debug_max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS):
     if main_log_path:
         rotate_log_file(main_log_path, max_log_bytes, log_backups)
-    for folder in ("level_debug", "region_debug"):
+    for folder in ("region_debug",):
         cleanup_directory(
             os.path.join(log_dir, folder),
             max_files=debug_max_files,

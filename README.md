@@ -32,6 +32,15 @@ For development checks:
 .\.venv\Scripts\python -m mypy macro_clicker tools
 ```
 
+## Interface preferences
+
+The application uses a bright CustomTkinter/ttk hybrid interface.
+Open **Scenario settings** to configure the scenario Start/Stop keys and the
+global interface sound and animation preferences. Interface preferences are
+stored in the per-user data folder and apply to both Macro Builder and Icon
+Alerts. In Icon Alerts, select an item and toggle **Detect this icon** (or press
+Space) to choose exactly which saved icons are scanned.
+
 ## Project layout
 
 ```text
@@ -109,7 +118,7 @@ legacy `screen` regions remain absolute to avoid silently changing saved
 behavior.
 
 Macro matches also carry their exact x/y scale into detected-target offsets,
-matching-row tolerance, level OCR regions, and digit-template fallback sizes.
+matching-row tolerance, and level OCR regions.
 Legacy fixed `x`/`y` click actions remain absolute screen coordinates; use a
 detected condition target for portable cross-monitor actions.
 
@@ -227,7 +236,7 @@ screenshots. Events are stored under:
 The collector uses a selective policy so a long-running macro does not save a
 full screenshot for every normal check:
 
-- Unread OCR, OCR conflicts, fallback-only reads, accepted OCR below 95%, row
+- Unread OCR, provisional OCR conflicts, accepted OCR below 95%, row
   changes, and template/row near misses keep full evidence.
 - A repeated `no eligible row` result is captured at most once every five
   minutes.
@@ -238,7 +247,7 @@ full screenshot for every normal check:
 Full events are split into `critical` and `samples` directories. Each contains
 `metadata.json`, a JPEG annotated context screenshot, and lossless PNG OCR
 crops. Rally records include row and target matches, template scores, OCR
-text/confidence, digit-fallback results, all crop offsets, level limits, and the
+text/confidence, all crop offsets, level limits, and the
 final decision.
 
 Every rally decision is also appended without screenshots to the rotating
@@ -248,7 +257,3 @@ the existing overall limits of 200 events, seven days, and 500 MB. Automatic
 labels are only diagnostic classifications; determining whether an event is
 truly a false positive or false negative still requires reviewing the evidence.
 
-For digit-template tuning, accepted unread/conflict events may also place one
-curated crop in `logs\level_debug`. This flat collection is limited to one crop
-per row/decision every 15 minutes and is continuously capped at 200 files and
-seven days. It is disabled together with scenario diagnostics.

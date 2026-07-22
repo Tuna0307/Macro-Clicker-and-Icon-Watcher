@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import os
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -11,19 +10,14 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .atomic_io import atomic_write_png
 from .level_ocr import LevelOcrReader
-from .models import Action, ImageCondition, project_path
-from .runtime_paths import LEVEL_DEBUG_DIR
+from .models import Action, ImageCondition
 
 _REFERENCE_UNSET = object()
 _LEVEL_ELIGIBLE = "eligible"
 _LEVEL_INELIGIBLE = "ineligible"
 _LEVEL_UNREADABLE = "unreadable"
 _MATCHING_ROW_SNAPSHOT_KEY = object()
-_LEVEL_DEBUG_MIN_INTERVAL = 15.0 * 60.0
-_LEVEL_DEBUG_MAX_FILES = 200
-_LEVEL_DEBUG_MAX_AGE = 7.0 * 24.0 * 60.0 * 60.0
 
 
 @dataclass(frozen=True)
@@ -86,6 +80,10 @@ class RallyMatchingMixin:
         *,
         apply_level_filter: bool,
     ):
+        # A matching pass is one diagnostic generation.  Row centers are not
+        # stable identifiers across captures, so records from an earlier pass
+        # must not be reused merely because a later row has the same center.
+        self._begin_level_diagnostic_generation()
         reference_index = action.match_condition_index
         target_index = action.on_condition_index
         if reference_index is None or target_index is None:
@@ -124,6 +122,7 @@ class RallyMatchingMixin:
 
     def _revalidate_row_selections(self, action: Action, original_selections, matches: dict):
         """Re-find delayed selections near their original rows and re-check level limits."""
+        self._begin_level_diagnostic_generation()
         reference_index = action.match_condition_index
         target_index = action.on_condition_index
         if reference_index is None or target_index is None:
@@ -233,24 +232,6 @@ class RallyMatchingMixin:
         window_rect = self._get_target_window_rect()
         roi_text = tuple(roi)
         center_text = tuple(reference["center"])
-        min_digits = max(1, int(getattr(action, "level_min_digits", 1) or 1))
-        digit_templates = self._load_digit_templates(action.level_digit_template_dir)
-        digit_templates = self._scale_digit_templates_for_match(
-            digit_templates,
-            reference,
-        )
-        if not digit_templates:
-            warning_key = os.path.abspath(project_path(action.level_digit_template_dir or ""))
-            warned = getattr(self, "_missing_digit_template_warnings", None)
-            if warned is None:
-                warned = set()
-                self._missing_digit_template_warnings = warned
-            if warning_key not in warned:
-                self.log(
-                    f"  [warn] no level digit templates found in "
-                    f"{action.level_digit_template_dir}"
-                )
-                warned.add(warning_key)
 
         attempts = []
         provisional_attempts = []
@@ -265,68 +246,25 @@ class RallyMatchingMixin:
             ocr_result = self._read_level_with_ocr(frame)
             if self._stop_requested():
                 return None
-            fallback_level = None
-            if digit_templates:
-                fallback_level = self._read_level_from_frame(
-                    frame,
-                    digit_templates,
-                    min_digits=min_digits,
-                )
-            if self._stop_requested():
-                return None
 
             attempt = {
                 "frame": frame,
                 "rect": rect,
                 "base_offset": base_offset,
                 "ocr_result": ocr_result,
-                "fallback_level": fallback_level,
-                "top_scores": None,
                 "status": "unread",
             }
             attempts.append(attempt)
 
-            if (
-                ocr_result
-                and ocr_result.level is not None
-                and not self._ocr_level_meets_min_digits(ocr_result, min_digits)
-            ):
-                confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
-                self.log(
-                    f"  [level] {ocr_result.engine} ignored {ocr_result.level}{confidence_text} "
-                    f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}; need {min_digits} digit(s)"
-                )
-
-            if (
-                ocr_result
-                and ocr_result.level is not None
-                and self._ocr_level_meets_min_digits(ocr_result, min_digits)
-            ):
+            if ocr_result and ocr_result.level is not None:
                 confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
                 self.log(
                     f"  [level] {ocr_result.engine} read {ocr_result.level}{confidence_text} "
                     f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}"
                 )
-                fallback_confirms_ocr = fallback_level == ocr_result.level
-                if fallback_level is not None and not fallback_confirms_ocr:
-                    if self._should_ignore_digit_fallback_conflict(ocr_result, fallback_level):
-                        self.log(
-                            f"  [level] ignored digit_fallback={fallback_level} for row center={center_text}; "
-                            f"matches OCR level {ocr_result.level} with extra digit noise"
-                        )
-                    else:
-                        attempt["status"] = "conflict"
-                        continue
-
                 confidence = ocr_result.confidence or 0.0
-                if (
-                    confidence >= LevelOcrReader.STRONG_ACCEPT_CONFIDENCE
-                    or fallback_confirms_ocr
-                ):
-                    if fallback_confirms_ocr:
-                        self.log(
-                            f"  [level] OCR and digit fallback agree on {ocr_result.level}"
-                        )
+                if confidence >= LevelOcrReader.STRONG_ACCEPT_CONFIDENCE:
+                    attempt["status"] = "accepted"
                     if attempt_index:
                         self.log(f"  [level] recovered with alternate crop rect={rect}")
                     self._remember_level_crop_offset(
@@ -335,16 +273,11 @@ class RallyMatchingMixin:
                         window_rect,
                         base_offset,
                     )
-                    decision = (
-                        "ocr_fallback_agreement"
-                        if fallback_confirms_ocr
-                        else "strong_ocr"
-                    )
                     return self._finish_level_diagnostic(
                         action,
                         reference,
                         attempts,
-                        decision=decision,
+                        decision="strong_ocr",
                         level=ocr_result.level,
                         selected_attempt=attempt,
                     )
@@ -361,50 +294,6 @@ class RallyMatchingMixin:
                 self.log(f"  [warn] OCR unavailable: {ocr_result.error}")
                 self._level_ocr_unavailable_logged = True
 
-            if fallback_level is not None:
-                ocr_text = "" if not ocr_result or not ocr_result.text else f"; OCR text='{ocr_result.text}'"
-                self.log(
-                    f"  [level] digit_fallback read {fallback_level} from crop rect={rect} "
-                    f"roi={roi_text}{ocr_text}"
-                )
-                if attempt_index:
-                    self.log(f"  [level] recovered with alternate crop rect={rect}")
-                self._remember_level_crop_offset(
-                    action,
-                    reference,
-                    window_rect,
-                    base_offset,
-                )
-                return self._finish_level_diagnostic(
-                    action,
-                    reference,
-                    attempts,
-                    decision="fallback_only",
-                    level=fallback_level,
-                    selected_attempt=attempt,
-                )
-
-            attempt["top_scores"] = self._level_read_top_scores(frame, digit_templates)
-
-        conflict_attempt = next((attempt for attempt in attempts if attempt["status"] == "conflict"), None)
-        if conflict_attempt:
-            rect = conflict_attempt["rect"]
-            ocr_result = conflict_attempt["ocr_result"]
-            fallback_level = conflict_attempt["fallback_level"]
-            self.log(
-                f"  [skip] OCR conflict for row center={center_text}: "
-                f"{ocr_result.engine}={ocr_result.level}, digit_fallback={fallback_level}"
-            )
-            return self._finish_level_diagnostic(
-                action,
-                reference,
-                attempts,
-                decision="ocr_fallback_conflict",
-                level=None,
-                selected_attempt=conflict_attempt,
-                save_event=True,
-            )
-
         if provisional_attempts:
             counts = {}
             for attempt in provisional_attempts:
@@ -420,7 +309,7 @@ class RallyMatchingMixin:
                     f"  [skip] only one provisional OCR crop read level "
                     f"{winning_level} for row center={center_text}; need consensus"
                 )
-                debug_attempt = self._best_level_debug_attempt(provisional_attempts)
+                debug_attempt = self._best_ocr_attempt(provisional_attempts)
                 return self._finish_level_diagnostic(
                     action,
                     reference,
@@ -470,7 +359,7 @@ class RallyMatchingMixin:
                 f"  [skip] conflicting provisional OCR levels for row "
                 f"center={center_text}: {levels_text}"
             )
-            debug_attempt = self._best_level_debug_attempt(provisional_attempts)
+            debug_attempt = self._best_ocr_attempt(provisional_attempts)
             return self._finish_level_diagnostic(
                 action,
                 reference,
@@ -481,17 +370,13 @@ class RallyMatchingMixin:
                 save_event=True,
             )
 
-        debug_attempt = self._best_level_debug_attempt(attempts)
+        debug_attempt = self._best_ocr_attempt(attempts)
         if debug_attempt:
             rect = debug_attempt["rect"]
             self.log(
                 f"  [level] row center={center_text} unread from crop rect={rect} "
-                f"roi={roi_text}; need {min_digits} digit(s)"
+                f"roi={roi_text}"
             )
-            top_scores = debug_attempt["top_scores"] or []
-            if top_scores:
-                scores_text = ", ".join(f"{digit}={score:.2f}" for digit, score in top_scores)
-                self.log(f"  [debug] top digit scores: {scores_text}")
         return self._finish_level_diagnostic(
             action,
             reference,
@@ -513,6 +398,7 @@ class RallyMatchingMixin:
         selected_attempt=None,
         save_event=False,
     ):
+        generation = self._ensure_level_diagnostic_generation()
         serialized_attempts = []
         images = {}
         for index, attempt in enumerate(attempts):
@@ -522,8 +408,6 @@ class RallyMatchingMixin:
                 "base_offset": attempt.get("base_offset"),
                 "rect": attempt.get("rect"),
                 "status": attempt.get("status"),
-                "fallback_level": attempt.get("fallback_level"),
-                "top_digit_scores": attempt.get("top_scores"),
                 "ocr": None if ocr_result is None else {
                     "level": ocr_result.level,
                     "text": ocr_result.text,
@@ -543,6 +427,7 @@ class RallyMatchingMixin:
             except ValueError:
                 selected_index = None
         record = {
+            "_generation": generation,
             "decision": decision,
             "level": level,
             "selected_attempt_index": selected_index,
@@ -556,7 +441,6 @@ class RallyMatchingMixin:
             "level_limits": {
                 "min": action.min_level,
                 "max": action.max_level,
-                "min_digits": action.level_min_digits,
             },
             "level_roi": action.level_roi,
             "attempts": serialized_attempts,
@@ -571,11 +455,11 @@ class RallyMatchingMixin:
         diagnostics[tuple(reference.get("center", ()))] = record
 
         if save_event:
-            event_path = self._submit_rally_diagnostic(
+            self._submit_rally_diagnostic(
                 f"rally_level_{decision}",
                 {
                     "scenario": getattr(getattr(self, "scenario", None), "name", ""),
-                    "level_read": {key: value for key, value in record.items() if key != "images"},
+                    "level_read": self._public_level_diagnostic_record(record),
                 },
                 images,
                 reference=reference,
@@ -583,16 +467,33 @@ class RallyMatchingMixin:
                 key=f"level:{decision}:{tuple(reference.get('center', ()))}:{level}",
                 min_interval=2.0,
             )
-            if event_path and selected_attempt is not None:
-                debug_path = self._save_level_debug_crop(
-                    selected_attempt.get("frame"),
-                    selected_attempt.get("rect"),
-                    reference,
-                    decision=decision,
-                )
-                if debug_path:
-                    self.log(f"  [debug] saved curated level crop: {debug_path}")
         return level
+
+    def _begin_level_diagnostic_generation(self):
+        """Start a matching-pass scope for OCR evidence.
+
+        Diagnostic records are keyed by row center for convenient lookup.  A
+        center can recur on the next screen capture, however, so retaining the
+        previous mapping could pair new boxes with old OCR evidence.
+        """
+        generation = int(getattr(self, "_level_diagnostic_generation", 0)) + 1
+        self._level_diagnostic_generation = generation
+        self._last_level_diagnostics = {}
+        return generation
+
+    def _ensure_level_diagnostic_generation(self):
+        generation = getattr(self, "_level_diagnostic_generation", None)
+        if generation is None:
+            generation = self._begin_level_diagnostic_generation()
+        return generation
+
+    @staticmethod
+    def _public_level_diagnostic_record(record):
+        return {
+            key: value
+            for key, value in record.items()
+            if key != "images" and not str(key).startswith("_")
+        }
 
     @staticmethod
     def _template_path_key(path):
@@ -787,7 +688,10 @@ class RallyMatchingMixin:
             frame = union_frame[top:bottom, left:right]
             if frame.size == 0 or frame.shape[0] != rect[3] or frame.shape[1] != rect[2]:
                 continue
-            result.append((base_offset, rect, frame))
+            # NumPy slices retain their full backing allocation.  These crops
+            # can live until diagnostic submission, so detach each small ROI
+            # from the (potentially full-window) atomic snapshot.
+            result.append((base_offset, rect, frame.copy()))
         return result
 
     def _scaled_level_roi(self, action: Action, reference: dict):
@@ -800,23 +704,6 @@ class RallyMatchingMixin:
             max(1, round(roi[3] * scale_y)),
         ]
 
-    def _scale_digit_templates_for_match(self, digit_templates, reference):
-        scale_x, scale_y = self._match_geometry_scale(reference)
-        if abs(scale_x - 1.0) < 0.001 and abs(scale_y - 1.0) < 0.001:
-            return digit_templates
-        scaled = {}
-        for digit, template in digit_templates.items():
-            height, width = template.shape[:2]
-            scaled[digit] = cv2.resize(
-                template,
-                (
-                    max(1, round(width * scale_x)),
-                    max(1, round(height * scale_y)),
-                ),
-                interpolation=cv2.INTER_NEAREST,
-            )
-        return scaled
-
     def _constrain_level_rect(self, rect, window_rect=None):
         left, top, width, height = rect
         if window_rect:
@@ -828,12 +715,9 @@ class RallyMatchingMixin:
             width, height = right - left, bottom - top
         return (left, top, width, height)
 
-    def _best_level_debug_attempt(self, attempts):
+    def _best_ocr_attempt(self, attempts):
         if not attempts:
             return None
-        with_scores = [attempt for attempt in attempts if attempt.get("top_scores")]
-        if with_scores:
-            return max(with_scores, key=lambda attempt: attempt["top_scores"][0][1])
         with_text = [
             attempt for attempt in attempts
             if attempt.get("ocr_result") is not None and attempt["ocr_result"].text
@@ -844,61 +728,6 @@ class RallyMatchingMixin:
                 key=lambda attempt: attempt["ocr_result"].confidence or 0.0,
             )
         return attempts[0]
-
-    def _is_spurious_leading_one_conflict(self, ocr_level, fallback_level):
-        if ocr_level is None or fallback_level is None:
-            return False
-        try:
-            return int(fallback_level) == int(f"1{int(ocr_level)}")
-        except (TypeError, ValueError):
-            return False
-
-    def _should_ignore_digit_fallback_conflict(self, ocr_result, fallback_level):
-        if ocr_result is None or ocr_result.level is None or fallback_level is None:
-            return False
-        if self._is_spurious_leading_one_conflict(ocr_result.level, fallback_level):
-            return True
-        try:
-            ocr_text = str(int(ocr_result.level))
-            fallback_text = str(int(fallback_level))
-        except (TypeError, ValueError):
-            return False
-        confidence = ocr_result.confidence
-        if confidence is not None and confidence >= 0.95:
-            return True
-        if confidence is not None and confidence < 0.75:
-            return False
-        if (
-            confidence is not None
-            and confidence >= 0.75
-            and self._ocr_text_has_level_prefix(ocr_result.text)
-            and self._is_repeated_one_noise(fallback_text, ocr_text)
-        ):
-            return True
-        if confidence is not None and confidence >= 0.85 and self._ocr_text_has_level_prefix(ocr_result.text):
-            return True
-        return len(fallback_text) > len(ocr_text) and ocr_text in fallback_text
-
-    def _is_repeated_one_noise(self, fallback_text, ocr_text):
-        return (
-            len(fallback_text) > len(ocr_text)
-            and len(ocr_text) >= 2
-            and set(fallback_text) == {"1"}
-        )
-
-    def _ocr_text_has_level_prefix(self, text):
-        normalized = (text or "").lower().replace(" ", "")
-        normalized = normalized.replace("1v", "lv").replace("iv", "lv").replace("ly", "lv")
-        return bool(re.search(r"l[v\W_]*\d", normalized))
-
-    def _ocr_level_meets_min_digits(self, ocr_result, min_digits):
-        if min_digits <= 1 or ocr_result is None or ocr_result.level is None:
-            return True
-        try:
-            extracted_digits = str(abs(int(ocr_result.level)))
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return len(extracted_digits) >= min_digits
 
     def _read_level_with_ocr(self, frame):
         if self._stop_requested():
@@ -948,252 +777,6 @@ class RallyMatchingMixin:
             self.log(f"[ocr] warm-up unavailable after {elapsed:.2f}s: {error}")
         return ready
 
-    def _load_digit_templates(self, folder):
-        if self._stop_requested():
-            return {}
-        folder = project_path(folder)
-        cache_key = os.path.abspath(folder)
-        cache = getattr(self, "_digit_template_cache", None)
-        if cache is None:
-            cache = {}
-            self._digit_template_cache = cache
-        if cache_key in cache:
-            return cache[cache_key]
-
-        templates = {}
-        for digit in "0123456789":
-            if self._stop_requested():
-                return {}
-            path = os.path.join(folder, f"{digit}.png")
-            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                templates[digit] = self._preprocess_digit_image(img)
-        cache[cache_key] = templates
-        return templates
-
-    def _read_level_from_frame(
-        self,
-        frame,
-        digit_templates,
-        confidence=0.52,
-        min_digits=1,
-        min_score_margin=0.0,
-    ):
-        if self._stop_requested() or frame is None or not digit_templates:
-            return None
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-        prepared_frame = self._preprocess_digit_image(gray)
-        candidates = []
-        for digit, template in digit_templates.items():
-            if self._stop_requested():
-                return None
-            th, tw = template.shape[:2]
-            if prepared_frame.shape[0] < th or prepared_frame.shape[1] < tw:
-                continue
-            result = cv2.matchTemplate(prepared_frame, template, cv2.TM_CCOEFF_NORMED)
-            ys, xs = np.where(result >= confidence)
-            digit_candidates = sorted(
-                ((int(x), int(y), float(result[y, x])) for x, y in zip(xs, ys)),
-                key=lambda item: item[2],
-                reverse=True,
-            )
-            kept = []
-            for x, y, score in digit_candidates:
-                if self._stop_requested():
-                    return None
-                box = (x, y, x + tw, y + th)
-                if any(self._box_iou(box, existing["box"]) > 0.3 for existing in kept):
-                    continue
-                kept.append({"digit": digit, "box": box, "score": score})
-                if len(kept) >= 12:
-                    break
-            candidates.extend(kept)
-
-        candidates = self._filter_digit_candidates_by_margin(candidates, min_score_margin)
-        selected = []
-        for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
-            if self._stop_requested():
-                return None
-            if any(self._box_iou(candidate["box"], existing["box"]) > 0.3 for existing in selected):
-                continue
-            selected.append(candidate)
-        if not selected:
-            return None
-
-        selected = self._select_level_digit_run(selected, min_digits)
-        if not selected:
-            return None
-
-        digits = "".join(item["digit"] for item in selected)
-        if len(digits) < min_digits:
-            return None
-        return int(digits) if digits else None
-
-    def _filter_digit_candidates_by_margin(self, candidates, min_score_margin):
-        if not candidates or min_score_margin <= 0:
-            return candidates
-
-        groups = []
-        for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
-            if self._stop_requested():
-                return []
-            target_group = None
-            for group in groups:
-                if any(self._box_iou(candidate["box"], existing["box"]) > 0.3 for existing in group):
-                    target_group = group
-                    break
-            if target_group is None:
-                groups.append([candidate])
-            else:
-                target_group.append(candidate)
-
-        filtered = []
-        for group in groups:
-            if self._stop_requested():
-                return []
-            group = sorted(group, key=lambda item: item["score"], reverse=True)
-            if len(group) == 1 or group[0]["score"] - group[1]["score"] >= min_score_margin:
-                filtered.append(group[0])
-        return filtered
-
-    def _select_level_digit_run(self, candidates, min_digits):
-        if self._stop_requested() or not candidates:
-            return []
-
-        y_groups = []
-        for candidate in sorted(candidates, key=lambda item: self._box_center(item["box"])[1]):
-            if self._stop_requested():
-                return []
-            _, center_y = self._box_center(candidate["box"])
-            placed = False
-            for group in y_groups:
-                group_y = sum(self._box_center(item["box"])[1] for item in group) / len(group)
-                avg_height = sum(item["box"][3] - item["box"][1] for item in group) / len(group)
-                if abs(center_y - group_y) <= max(6, avg_height * 0.45):
-                    group.append(candidate)
-                    placed = True
-                    break
-            if not placed:
-                y_groups.append([candidate])
-
-        runs = []
-        for group in y_groups:
-            if self._stop_requested():
-                return []
-            group.sort(key=lambda item: item["box"][0])
-            run = []
-            for candidate in group:
-                if not run:
-                    run = [candidate]
-                    continue
-                prev = run[-1]
-                prev_width = prev["box"][2] - prev["box"][0]
-                cur_width = candidate["box"][2] - candidate["box"][0]
-                max_gap = max(8, max(prev_width, cur_width) * 0.8)
-                gap = candidate["box"][0] - prev["box"][2]
-                if gap <= max_gap:
-                    run.append(candidate)
-                else:
-                    runs.append(run)
-                    run = [candidate]
-            if run:
-                runs.append(run)
-
-        valid_runs = [run for run in runs if len(run) >= min_digits]
-        if not valid_runs:
-            return []
-
-        def run_key(run):
-            right = max(item["box"][2] for item in run)
-            baseline = sum(self._box_center(item["box"])[1] for item in run) / len(run)
-            avg_score = sum(item["score"] for item in run) / len(run)
-            return (baseline, right, len(run), avg_score)
-
-        return sorted(valid_runs, key=run_key, reverse=True)[0]
-
-    def _box_center(self, box):
-        return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-
-    def _level_read_top_scores(self, frame, digit_templates, limit=5):
-        if self._stop_requested() or frame is None or not digit_templates:
-            return []
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-        prepared_frame = self._preprocess_digit_image(gray)
-        scores = []
-        for digit, template in digit_templates.items():
-            if self._stop_requested():
-                return []
-            th, tw = template.shape[:2]
-            if prepared_frame.shape[0] < th or prepared_frame.shape[1] < tw:
-                continue
-            result = cv2.matchTemplate(prepared_frame, template, cv2.TM_CCOEFF_NORMED)
-            scores.append((digit, float(result.max())))
-        return sorted(scores, key=lambda item: item[1], reverse=True)[:limit]
-
-    def _save_level_debug_crop(self, frame, rect, reference, *, decision="unread"):
-        if (
-            frame is None
-            or rect is None
-            or not getattr(self, "diagnostics_enabled", True)
-        ):
-            return None
-        center = tuple(reference.get("center", ()))
-        rate_key = (str(decision), center)
-        now = time.monotonic()
-        last_writes = getattr(self, "_last_level_debug_writes", None)
-        if last_writes is None:
-            last_writes = {}
-            self._last_level_debug_writes = last_writes
-        last_write = last_writes.get(rate_key)
-        if last_write is not None and now - last_write < _LEVEL_DEBUG_MIN_INTERVAL:
-            return None
-        try:
-            os.makedirs(LEVEL_DEBUG_DIR, exist_ok=True)
-            left, top, width, height = rect
-            center_x, center_y = center
-            stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
-            safe_decision = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(decision))[:48]
-            filename = (
-                f"level_{stamp}_{safe_decision}_{left}_{top}_{width}x{height}_"
-                f"row{center_x}_{center_y}.png"
-            )
-            path = os.path.join(LEVEL_DEBUG_DIR, filename)
-            atomic_write_png(path, frame)
-            last_writes[rate_key] = now
-            self._prune_level_debug_crops()
-            return path
-        except Exception as e:
-            self.log(f"  [debug] could not save level crop: {e}")
-            return None
-
-    def _prune_level_debug_crops(self):
-        try:
-            now = time.time()
-            entries = []
-            for name in os.listdir(LEVEL_DEBUG_DIR):
-                if not name.startswith("level_") or not name.lower().endswith(".png"):
-                    continue
-                path = os.path.join(LEVEL_DEBUG_DIR, name)
-                try:
-                    modified = os.path.getmtime(path)
-                except OSError:
-                    continue
-                if now - modified > _LEVEL_DEBUG_MAX_AGE:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                    continue
-                entries.append((modified, path))
-            entries.sort(reverse=True)
-            for _modified, path in entries[_LEVEL_DEBUG_MAX_FILES:]:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-        except OSError as exc:
-            self.log(f"  [debug] could not prune level crops: {exc}")
-
     def _submit_rally_diagnostic(
         self,
         event_type,
@@ -1210,6 +793,7 @@ class RallyMatchingMixin:
         category="critical",
         dedupe_window=300.0,
         capture_images=True,
+        context_snapshot=None,
     ):
         collector = getattr(self, "_diagnostic_collector", None)
         if collector is None or not getattr(self, "diagnostics_enabled", True):
@@ -1244,18 +828,34 @@ class RallyMatchingMixin:
         capture_metadata = {}
         dedupe_image = None
         try:
-            window_rect = self._get_target_window_rect()
-            if window_rect:
-                capture_region = tuple(window_rect)
-            else:
-                _monitor_index, monitor = self._selected_monitor()
+            snapshot = context_snapshot
+            if snapshot is None:
+                snapshot = getattr(self, "_matching_row_snapshot", None)
+            if snapshot is not None:
+                # Boxes, template matches, and level crops were all computed
+                # from this frame.  Annotating a later live capture can make
+                # valid evidence look incorrect when the rally list moves.
+                context = snapshot.frame
+                off_x, off_y = snapshot.left, snapshot.top
                 capture_region = (
-                    int(monitor["left"]),
-                    int(monitor["top"]),
-                    int(monitor["width"]),
-                    int(monitor["height"]),
+                    snapshot.left,
+                    snapshot.top,
+                    int(snapshot.frame.shape[1]),
+                    int(snapshot.frame.shape[0]),
                 )
-            context, off_x, off_y = self._grab(capture_region)
+            else:
+                window_rect = self._get_target_window_rect()
+                if window_rect:
+                    capture_region = tuple(window_rect)
+                else:
+                    _monitor_index, monitor = self._selected_monitor()
+                    capture_region = (
+                        int(monitor["left"]),
+                        int(monitor["top"]),
+                        int(monitor["width"]),
+                        int(monitor["height"]),
+                    )
+                context, off_x, off_y = self._grab(capture_region)
             annotated = context.copy()
 
             def draw_box(box, color, label=None, xywh=False):
@@ -1304,6 +904,11 @@ class RallyMatchingMixin:
                 "capture_region": capture_region,
                 "capture_origin": [off_x, off_y],
                 "capture_shape": list(context.shape),
+                "capture_source": (
+                    "atomic_matching_snapshot"
+                    if snapshot is not None
+                    else "live_capture"
+                ),
             }
         except Exception as exc:
             capture_metadata = {"context_capture_error": str(exc)}
@@ -1334,7 +939,7 @@ class RallyMatchingMixin:
 
     def _matching_row_diagnostic_policy(self, decision, level_records, min_interval):
         if decision == "eligible_before_delay":
-            routine_decisions = {"strong_ocr", "ocr_fallback_agreement"}
+            routine_decisions = {"strong_ocr"}
             routine = bool(level_records)
             for record in level_records:
                 confidence = self._selected_level_ocr_confidence(record)
@@ -1353,7 +958,7 @@ class RallyMatchingMixin:
             return {
                 "category": "critical",
                 "min_interval": float(min_interval),
-                "capture_reason": "accepted_low_confidence_or_fallback_result",
+                "capture_reason": "accepted_lower_confidence_ocr_result",
             }
         if decision == "no_eligible_row":
             return {
@@ -1380,6 +985,7 @@ class RallyMatchingMixin:
         level_records = []
         images = {}
         stored = getattr(self, "_last_level_diagnostics", {})
+        generation = getattr(self, "_level_diagnostic_generation", None)
         diagnostic_selections = list(selections or ())
         if not diagnostic_selections:
             for reference in (matches or {}).get(action.match_condition_index, []):
@@ -1391,10 +997,13 @@ class RallyMatchingMixin:
         for selection_index, selection in enumerate(diagnostic_selections):
             center = tuple(selection.get("reference", {}).get("center", ()))
             record = stored.get(center)
-            if record:
-                level_records.append({
-                    key: value for key, value in record.items() if key != "images"
-                })
+            record_generation = record.get("_generation") if record else None
+            if record and (
+                record_generation is None
+                or generation is None
+                or record_generation == generation
+            ):
+                level_records.append(self._public_level_diagnostic_record(record))
                 for name, frame in record.get("images", {}).items():
                     images[f"row_{selection_index}_{name}"] = frame
 
@@ -1449,24 +1058,6 @@ class RallyMatchingMixin:
             min_interval=policy["min_interval"],
             category=policy["category"],
         )
-
-    def _preprocess_digit_image(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        gray = gray.astype(np.uint8, copy=False)
-        bright_cutoff = max(180, int(np.percentile(gray, 85)))
-        mask = np.where(gray >= bright_cutoff, 255, 0).astype(np.uint8)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-        cleaned = np.zeros_like(mask)
-        min_area = 4
-        min_height = 3
-        for label in range(1, num_labels):
-            if self._stop_requested():
-                return cleaned
-            area = stats[label, cv2.CC_STAT_AREA]
-            height = stats[label, cv2.CC_STAT_HEIGHT]
-            if area >= min_area and height >= min_height:
-                cleaned[labels == label] = 255
-        return cleaned
 
     def _choose_row_target(self, reference, row_targets, target_choice):
         if target_choice == "rightmost":

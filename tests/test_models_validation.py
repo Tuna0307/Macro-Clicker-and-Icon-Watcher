@@ -95,6 +95,22 @@ class ModelValidationTests(unittest.TestCase):
                 Scenario(name="Conflicting keys", start_hotkey="F12", kill_switch="f12")
             )
 
+    def test_invalid_hotkeys_and_key_actions_fail_preflight(self):
+        with self.assertRaisesRegex(ValueError, "start_hotkey is invalid"):
+            validate_scenario(
+                Scenario(name="Bad start", start_hotkey="not-a-real-hotkey")
+            )
+
+        scenario = Scenario(
+            name="Bad key action",
+            steps=[Step(
+                name="One",
+                actions=[Action(type="key", key="not-a-real-key")],
+            )],
+        )
+        with self.assertRaisesRegex(ValueError, "invalid key name"):
+            validate_scenario(scenario)
+
     def test_region_ratio_rejects_text_values_before_runtime_coordinate_math(self):
         with self.assertRaisesRegex(ValueError, "region_ratio"):
             ImageCondition.from_dict({

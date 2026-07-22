@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
+import keyboard
+
 from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
 from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
@@ -345,9 +347,7 @@ class Action:
     pre_click_delay: float = 0.0                 # wait after level selection, before revalidation/click
     min_level: Optional[int] = None             # optional level filter for click_matching_row
     max_level: Optional[int] = None
-    level_digit_template_dir: str = os.path.join(TEMPLATES_DIR, "level_digits")
     level_roi: Optional[List[int]] = None       # [x, y, w, h] relative to row reference center
-    level_min_digits: int = 1
     no_match_condition_index: Optional[int] = None  # for click_matching_row fallback
     no_match_disable_steps: List[str] = field(default_factory=list)
     x: Optional[int] = None                   # or a fixed point instead
@@ -368,9 +368,7 @@ class Action:
     set_enabled: bool = True
 
     def to_dict(self):
-        data = asdict(self)
-        data["level_digit_template_dir"] = portable_project_path(self.level_digit_template_dir)
-        return data
+        return asdict(self)
 
     @staticmethod
     def from_dict(d):
@@ -401,14 +399,10 @@ class Action:
             raise ValueError("max_level cannot be negative")
         if a.min_level is not None and a.max_level is not None and a.min_level > a.max_level:
             raise ValueError("min_level cannot be greater than max_level")
-        a.level_digit_template_dir = str(d.get("level_digit_template_dir", a.level_digit_template_dir) or "")
         a.level_roi = _validate_region(
             _optional_int_list_field(d, "level_roi", "level_roi"),
             "level_roi",
         )
-        a.level_min_digits = _int_value(d.get("level_min_digits"), a.level_min_digits)
-        if not 1 <= a.level_min_digits <= 4:
-            raise ValueError("level_min_digits must be between 1 and 4")
         a.no_match_condition_index = _optional_int(d.get("no_match_condition_index"), a.no_match_condition_index)
         a.no_match_disable_steps = _string_list(d.get("no_match_disable_steps"))
         a.x = _optional_int(d.get("x"), a.x)
@@ -662,6 +656,14 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("kill_switch cannot be blank")
     if scenario.start_hotkey.strip().casefold() == scenario.kill_switch.strip().casefold():
         raise ValueError("start_hotkey and kill_switch must use different keys")
+    for label, hotkey in (
+        ("start_hotkey", scenario.start_hotkey),
+        ("kill_switch", scenario.kill_switch),
+    ):
+        try:
+            keyboard.parse_hotkey(hotkey.strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} is invalid: {exc}") from exc
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")
     if not isinstance(scenario.diagnostics_enabled, bool):
@@ -777,8 +779,6 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 raise ValueError(f"{prefix} must be an Action")
             if action.type not in ACTION_TYPES:
                 raise ValueError(f"{prefix} has unsupported type {action.type!r}")
-            if not isinstance(action.level_digit_template_dir, str):
-                raise ValueError(f"{prefix} digit-template directory must be text")
             if (
                 isinstance(action.row_tolerance, bool)
                 or not isinstance(action.row_tolerance, int)
@@ -851,12 +851,6 @@ def validate_scenario(scenario: Scenario, require_files=False):
             ):
                 raise ValueError(f"{prefix} minimum level cannot exceed maximum level")
             _validate_region(action.level_roi, f"{prefix} level ROI")
-            if (
-                isinstance(action.level_min_digits, bool)
-                or not isinstance(action.level_min_digits, int)
-                or not 1 <= action.level_min_digits <= 4
-            ):
-                raise ValueError(f"{prefix} level_min_digits must be between 1 and 4")
             for field_name in (
                 "on_condition_index",
                 "match_condition_index",
@@ -879,17 +873,15 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     raise ValueError(
                         f"{prefix} row-reference and click-target conditions must differ"
                     )
-                if require_files and (action.min_level is not None or action.max_level is not None):
-                    digit_dir = project_path(action.level_digit_template_dir)
-                    if action.level_digit_template_dir and not os.path.isdir(digit_dir):
-                        raise ValueError(
-                            f"{prefix} digit-template directory does not exist: "
-                            f"{action.level_digit_template_dir}"
-                        )
             if action.type == "key" and (
                 not isinstance(action.key, str) or not action.key.strip()
             ):
                 raise ValueError(f"{prefix} requires a key name")
+            if action.type == "key":
+                try:
+                    keyboard.parse_hotkey(action.key.strip())
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{prefix} has an invalid key name: {exc}") from exc
             if not isinstance(action.no_match_disable_steps, list) or not all(
                 isinstance(name, str) and name.strip()
                 for name in action.no_match_disable_steps

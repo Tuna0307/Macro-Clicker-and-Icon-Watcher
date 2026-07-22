@@ -30,6 +30,7 @@ from .detection_core import (
     monitor_rect,
     physical_monitor_index,
     prepare_template_variants,
+    resolution_scale_pairs,
     resize_template,
 )
 from .diagnostics import get_diagnostic_collector
@@ -54,6 +55,7 @@ from .window_locator import (
 )
 
 _WINDOW_UNAVAILABLE = DETECTION_UNAVAILABLE
+_MATCHING_ROW_SNAPSHOT_STEP_KEY = object()
 
 
 class _StopRequested(Exception):
@@ -68,15 +70,14 @@ class MacroEngine(RallyMatchingMixin):
         self.log = log or (lambda msg: None)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._ready_event = threading.Event()
         self._last_fired = {s.name: 0.0 for s in self.scenario.steps}
         self._template_cache = {}
         self._scaled_template_cache = {}
         self._prepared_template_cache = {}
-        self._digit_template_cache = {}
         self._level_offset_cache = {}
         self._last_level_diagnostics = {}
         self._matching_row_snapshot = None
-        self._missing_digit_template_warnings = set()
         self._level_ocr_reader: Optional[LevelOcrReader] = None
         self._level_ocr_reader_lock = threading.Lock()
         self._level_ocr_unavailable_logged = False
@@ -102,6 +103,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_perf_log = {}
         self._hotkey_handle = None
         self._ever_started = False
+        self._stop_logged = False
         self._all_match_indices = {}
         self._step_lookup = {}
         self._step_names_snapshot = ()
@@ -114,6 +116,12 @@ class MacroEngine(RallyMatchingMixin):
     def is_running(self):
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def is_ready(self):
+        """True once optional OCR warm-up is complete and the run loop is ready."""
+        ready_event = getattr(self, "_ready_event", None)
+        return bool(ready_event is not None and ready_event.is_set() and self.is_running)
+
     def start(self):
         if self.is_running:
             return
@@ -122,6 +130,8 @@ class MacroEngine(RallyMatchingMixin):
             self.sct = mss.MSS()
             self._sct_closed = False
         self._stop_event.clear()
+        self._ready_event.clear()
+        self._stop_logged = False
         self._last_perf_log.clear()
         self._ever_started = True
         self._step_names_snapshot = ()
@@ -141,23 +151,38 @@ class MacroEngine(RallyMatchingMixin):
         if uses_level_ocr:
             self.log(f"Scenario '{self.scenario.name}' preparing OCR before start...")
         self._thread = threading.Thread(target=thread_target, daemon=True)
+        if not uses_level_ocr:
+            self._ready_event.set()
         self._thread.start()
         if not uses_level_ocr:
             self.log(f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}")
 
-    def stop(self):
-        running = self.is_running
-        was_active = running or self._hotkey_handle is not None or getattr(self, "_ever_started", False)
+    def request_stop(self):
+        """Signal a stop without waiting; safe to call from the Tk event loop."""
+        was_active = (
+            self.is_running
+            or self._hotkey_handle is not None
+            or getattr(self, "_ever_started", False)
+        )
         self._stop_event.set()
+        ready_event = getattr(self, "_ready_event", None)
+        if ready_event is not None:
+            ready_event.clear()
         self._remove_hotkey()
+        return was_active
+
+    def stop(self):
+        was_active = self.request_stop()
+        running = self.is_running
         thread = getattr(self, "_thread", None)
         if running and thread is not None and threading.current_thread() is not thread:
             thread.join(timeout=2.0)
             running = thread.is_alive()
         if not running:
             self._close_capture()
-        if was_active:
+        if was_active and not getattr(self, "_stop_logged", False):
             self.log("Scenario stopped.")
+            self._stop_logged = True
             self._ever_started = False
 
     def _refresh_step_caches(self):
@@ -252,11 +277,14 @@ class MacroEngine(RallyMatchingMixin):
             self._cleanup_runtime()
             return
         if not ready:
-            self.log("[ocr] continuing with digit-template fallback")
+            self.log("[ocr] unavailable; rows that require a level will be skipped")
         self.log(
             f"Scenario '{self.scenario.name}' started. "
             f"Kill switch: {self.scenario.kill_switch.upper()}"
         )
+        ready_event = getattr(self, "_ready_event", None)
+        if ready_event is not None:
+            ready_event.set()
         self._run_loop()
 
     def _evaluate_step_supports_frame_cache(self, evaluate_step):
@@ -689,23 +717,50 @@ class MacroEngine(RallyMatchingMixin):
     def _find_best_template_match_near(self, frame, template, target_match, cond=None):
         self._raise_if_stopped()
         x, y, width, height = target_match[:4]
-        padding = max(4, round(max(width, height) * 0.25))
+        matching_kwargs = (
+            self._condition_matching_kwargs(
+                cond,
+                template_path=cond.comparison_template_path,
+                explicit_reference_size=getattr(
+                    cond,
+                    "comparison_template_reference_size",
+                    None,
+                ),
+            )
+            if cond is not None
+            else {}
+        )
+        scale_pairs = resolution_scale_pairs(
+            matching_kwargs.get("reference_size"),
+            matching_kwargs.get("current_size"),
+            self.TEMPLATE_SCALE_FACTORS,
+            matching_kwargs.get("reference_sizes", ()),
+        ) or ((1.0, 1.0),)
+        template_height, template_width = template.shape[:2]
+        rival_width = max(
+            max(1, round(template_width * scale_x))
+            for scale_x, _scale_y in scale_pairs
+        )
+        rival_height = max(
+            max(1, round(template_height * scale_y))
+            for _scale_x, scale_y in scale_pairs
+        )
+        search_width = max(width, rival_width)
+        search_height = max(height, rival_height)
+        padding = max(4, round(max(search_width, search_height) * 0.25))
         frame_height, frame_width = frame.shape[:2]
         left = max(0, x - padding)
         top = max(0, y - padding)
-        right = min(frame_width, x + width + padding)
-        bottom = min(frame_height, y + height + padding)
-        local_match = self._find_best_template_match_in_frame(
+        right = min(frame_width, x + search_width + padding)
+        bottom = min(frame_height, y + search_height + padding)
+        local_matches = self._find_template_matches_in_frame(
             frame[top:bottom, left:right],
             template,
-            cond,
-            template_path=(cond.comparison_template_path if cond else None),
-            explicit_reference_size=(
-                getattr(cond, "comparison_template_reference_size", None)
-                if cond
-                else _REFERENCE_UNSET
-            ),
+            confidence=-1.0,
+            collect_all=False,
+            **matching_kwargs,
         )
+        local_match = local_matches[0] if local_matches else None
         if local_match is None:
             return None
         local_x, local_y, match_width, match_height, score, scale = local_match
@@ -981,7 +1036,13 @@ class MacroEngine(RallyMatchingMixin):
         results, points, matches = [], {}, {}
         if frame_cache is None:
             frame_cache = {}
-        self._prime_matching_row_frame_cache(step, frame_cache)
+        matching_row_snapshot = self._prime_matching_row_frame_cache(step, frame_cache)
+        if matching_row_snapshot is not None:
+            # Bind the atomic capture to the step that produced ``matches``.
+            # The cycle-level cache is shared by multiple steps, so the
+            # snapshot key alone is not enough to prove that it is safe to
+            # reuse for this step's first row action.
+            frame_cache[_MATCHING_ROW_SNAPSHOT_STEP_KEY] = step
         cached_all_match_indices = getattr(self, "_all_match_indices", None)
         all_match_indices = (
             cached_all_match_indices.get(step.name)
@@ -1099,6 +1160,7 @@ class MacroEngine(RallyMatchingMixin):
                 },
                 matches=diagnostic_matches,
                 key=f"row-miss-event:{step.name}:{reason}",
+                context_snapshot=frame_cache.get(_MATCHING_ROW_SNAPSHOT_KEY),
             )
         except Exception as exc:
             self.log(f"  [diagnostic] matching-row miss capture failed: {exc}")
@@ -1151,12 +1213,29 @@ class MacroEngine(RallyMatchingMixin):
             return True
 
         elif action.type == "click_matching_row":
-            refreshed = self._refresh_click_matching_row_matches(step, action)
-            if refreshed is None:
-                self.log(f"  [skip] '{step.name}' conditions changed before row click")
-                self._retry_current_step = True
-                return False
-            points, matches = refreshed
+            reuse_context = getattr(self, "_matching_row_reuse_context", None)
+            can_reuse_initial_evaluation = (
+                reuse_context is not None
+                and reuse_context[0] is step
+                and reuse_context[1] is action
+                and action.match_condition_index is not None
+                and action.on_condition_index is not None
+            )
+            if can_reuse_initial_evaluation:
+                assert reuse_context is not None
+                # Step evaluation already found every row anchor/target from
+                # this exact atomic capture.  Reusing it avoids a duplicate
+                # screen capture and duplicate template matching immediately
+                # before OCR.  A configured pre-click delay still takes the
+                # mandatory fresh capture/re-OCR path below.
+                self._matching_row_snapshot = reuse_context[2]
+            else:
+                refreshed = self._refresh_click_matching_row_matches(step, action)
+                if refreshed is None:
+                    self.log(f"  [skip] '{step.name}' conditions changed before row click")
+                    self._retry_current_step = True
+                    return False
+                points, matches = refreshed
             selections, had_unreadable_level = self._find_matching_row_selections(
                 action,
                 matches,
@@ -1187,19 +1266,18 @@ class MacroEngine(RallyMatchingMixin):
                 return self._run_no_match_fallback(step, action, points)
 
             pre_click_delay = max(0.0, float(getattr(action, "pre_click_delay", 0.0)))
-            diagnostic_started = time.monotonic()
-            self._record_matching_row_diagnostic(
-                step,
-                action,
-                selections,
-                matches,
-                "eligible_before_delay",
-            )
-            diagnostic_elapsed = (
-                time.monotonic() - diagnostic_started
-                if pre_click_delay > 0.0
-                else 0.0
-            )
+            diagnostic_elapsed = 0.0
+            if pre_click_delay > 0.0:
+                # Evidence work is absorbed by the user's configured delay.
+                diagnostic_started = time.monotonic()
+                self._record_matching_row_diagnostic(
+                    step,
+                    action,
+                    selections,
+                    matches,
+                    "eligible_before_delay",
+                )
+                diagnostic_elapsed = time.monotonic() - diagnostic_started
 
             delayed = False
             if pre_click_delay > 0.0:
@@ -1252,6 +1330,17 @@ class MacroEngine(RallyMatchingMixin):
                     return clicked or delayed
                 clicked = True
                 self.log(f"  click matching row ({x}, {y})")
+            if clicked and pre_click_delay <= 0.0:
+                # The evidence uses the already-frozen atomic snapshot, so it
+                # remains accurate after the click while staying off the
+                # time-critical selection-to-click path.
+                self._record_matching_row_diagnostic(
+                    step,
+                    action,
+                    selections,
+                    matches,
+                    "eligible_before_delay",
+                )
             return clicked or delayed
 
         elif action.type == "key":
@@ -1421,7 +1510,21 @@ class MacroEngine(RallyMatchingMixin):
                     if self._stop_requested():
                         return fired_any
                     self._retry_current_step = False
-                    invalidates_frame = self._run_action(step, action, points, matches)
+                    snapshot = frame_cache.get(_MATCHING_ROW_SNAPSHOT_KEY)
+                    can_reuse_matching_row_evaluation = (
+                        action.type == "click_matching_row"
+                        and snapshot is not None
+                        and frame_cache.get(_MATCHING_ROW_SNAPSHOT_STEP_KEY) is step
+                    )
+                    self._matching_row_reuse_context = (
+                        (step, action, snapshot)
+                        if can_reuse_matching_row_evaluation
+                        else None
+                    )
+                    try:
+                        invalidates_frame = self._run_action(step, action, points, matches)
+                    finally:
+                        self._matching_row_reuse_context = None
                     if invalidates_frame:
                         frame_cache.clear()
                         self._window_rect_lookup_cache = {}
@@ -1445,4 +1548,5 @@ class MacroEngine(RallyMatchingMixin):
         except _StopRequested:
             return fired_any
         finally:
+            self._matching_row_reuse_context = None
             self._window_rect_lookup_cache = None

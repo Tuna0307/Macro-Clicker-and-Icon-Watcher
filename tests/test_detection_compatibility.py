@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import threading
 import unittest
 
@@ -120,14 +121,14 @@ class DetectionCompatibilityTests(unittest.TestCase):
     def test_loading_live_data_does_not_rewrite_user_files(self):
         manifest = alert_watcher.MANIFEST_PATH
         scenario = os.path.join(PROJECT_ROOT, "scenarios", "Rally Gold Mob.json")
-        before_manifest = open(manifest, "rb").read()
-        before_scenario = open(scenario, "rb").read()
+        before_manifest = Path(manifest).read_bytes()
+        before_scenario = Path(scenario).read_bytes()
 
         alert_watcher.TemplateManager()
         load_scenario("Rally Gold Mob")
 
-        self.assertEqual(open(manifest, "rb").read(), before_manifest)
-        self.assertEqual(open(scenario, "rb").read(), before_scenario)
+        self.assertEqual(Path(manifest).read_bytes(), before_manifest)
+        self.assertEqual(Path(scenario).read_bytes(), before_scenario)
 
     def test_every_rally_condition_keeps_exact_1440p_candidate(self):
         scenario = load_scenario("Rally Gold Mob")
@@ -210,6 +211,49 @@ class DetectionCompatibilityTests(unittest.TestCase):
         self.assertIsNotNone(match)
         assert match is not None
         self.assertEqual(match[:2], (30, 20))
+
+    def test_scaled_larger_rival_fits_search_near_smaller_target(self):
+        rng = np.random.default_rng(157)
+        rival = rng.integers(0, 256, (20, 24, 3), dtype=np.uint8)
+        scale_x, scale_y = 2560 / 1608, 1440 / 940
+        rendered = cv2.resize(
+            rival,
+            (round(24 * scale_x), round(20 * scale_y)),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        frame = np.zeros((100, 140, 3), dtype=np.uint8)
+        frame[20:20 + rendered.shape[0], 30:30 + rendered.shape[1]] = rendered
+        condition = ImageCondition(
+            template_path="target.png",
+            template_reference_size=[1920, 1080],
+            comparison_template_path="rival.png",
+            comparison_template_reference_size=[1608, 940],
+        )
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="larger scaled rival",
+            target_window_title="Game",
+            steps=[Step(name="One", conditions=[condition])],
+        )
+        engine.low_variance_threshold = 1.0
+        engine._get_target_window_rect = lambda: (0, 0, 2560, 1440)
+
+        match = engine._find_best_template_match_near(
+            frame,
+            rival,
+            (30, 20, 12, 12, 1.0, 1.0),
+            condition,
+        )
+
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match[:4], (
+            30,
+            20,
+            rendered.shape[1],
+            rendered.shape[0],
+        ))
+        self.assertGreater(match[4], 0.99)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 from macro_clicker.models import Action, ImageCondition
 from macro_clicker.ui_components import (
     BUTTON_STATE_COLORS,
+    UiFeedback,
+    _tone_wave,
     action_display_summary,
     condition_choice_for_index,
     condition_choices,
@@ -75,6 +78,22 @@ class UiComponentTests(unittest.TestCase):
         }
 
         self.assertEqual(len(colors), 4)
+
+    def test_generated_ui_tone_is_a_small_wave_file(self):
+        sound = _tone_wave(((440, 20),), volume=0.1)
+
+        self.assertTrue(sound.startswith(b"RIFF"))
+        self.assertIn(b"WAVE", sound[:16])
+        self.assertGreater(len(sound), 44)
+
+    def test_disabled_ui_feedback_never_starts_audio_worker(self):
+        feedback = UiFeedback(enabled=False)
+
+        with patch("macro_clicker.ui_components.winsound") as mocked_sound:
+            feedback.play("success")
+
+        mocked_sound.PlaySound.assert_not_called()
+        self.assertIsNone(feedback._worker)
 
 
 if __name__ == "__main__":

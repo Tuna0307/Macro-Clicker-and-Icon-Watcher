@@ -2,11 +2,180 @@ import unittest
 
 import numpy as np
 
+from macro_clicker import engine as engine_module
 from macro_clicker.engine import MacroEngine
+from macro_clicker.rally_matching import _MATCHING_ROW_SNAPSHOT_KEY
 from macro_clicker.models import Action, ImageCondition, Scenario, Step
 
 
 class EnginePerformanceTests(unittest.TestCase):
+    @staticmethod
+    def _row_cycle_engine(step):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="row-perf", steps=[step])
+        engine._last_fired = {step.name: 0.0}
+        engine._stop_event = type(
+            "Stop",
+            (),
+            {
+                "is_set": lambda self: False,
+                "wait": lambda self, _seconds: False,
+            },
+        )()
+        engine._evaluate_uses_frame_cache = True
+        engine._step_names_snapshot = ()
+        engine._all_match_indices = {}
+        engine._last_perf_log = {}
+        engine._begin_level_diagnostic_generation = lambda: None
+        engine._record_matching_row_diagnostic = lambda *args, **kwargs: None
+        engine.log = lambda _message: None
+        return engine
+
+    def test_first_matching_row_action_reuses_initial_atomic_evaluation(self):
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="templates/Mob.png"),
+                ImageCondition(template_path="templates/Join.png"),
+            ],
+            actions=[action],
+            cooldown=0.0,
+        )
+        engine = self._row_cycle_engine(step)
+        evaluations = []
+        refreshes = []
+        clicks = []
+        snapshot = object()
+
+        def evaluate_step(current_step, frame_cache=None):
+            evaluations.append(current_step.name)
+            frame_cache[_MATCHING_ROW_SNAPSHOT_KEY] = snapshot
+            frame_cache[engine_module._MATCHING_ROW_SNAPSHOT_STEP_KEY] = current_step
+            return (
+                True,
+                {0: reference["center"], 1: target["center"]},
+                {0: [reference], 1: [target]},
+            )
+
+        engine._evaluate_step = evaluate_step
+        engine._refresh_click_matching_row_matches = (
+            lambda *_args: refreshes.append(True) or None
+        )
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button))
+
+        engine._cycle()
+
+        self.assertEqual(evaluations, ["Joining"])
+        self.assertEqual(refreshes, [])
+        self.assertIs(engine._matching_row_snapshot, snapshot)
+        self.assertEqual(clicks, [(260, 120, "left")])
+
+    def test_prior_screen_change_forces_matching_row_refresh(self):
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="templates/Mob.png"),
+                ImageCondition(template_path="templates/Join.png"),
+            ],
+            actions=[Action(type="wait", seconds=0.01), action],
+            cooldown=0.0,
+        )
+        engine = self._row_cycle_engine(step)
+        refreshes = []
+        clicks = []
+
+        def evaluate_step(current_step, frame_cache=None):
+            frame_cache[_MATCHING_ROW_SNAPSHOT_KEY] = object()
+            frame_cache[engine_module._MATCHING_ROW_SNAPSHOT_STEP_KEY] = current_step
+            return (
+                True,
+                {0: reference["center"], 1: target["center"]},
+                {0: [reference], 1: [target]},
+            )
+
+        def refresh(*_args):
+            refreshes.append(True)
+            return (
+                {0: reference["center"], 1: target["center"]},
+                {0: [reference], 1: [target]},
+            )
+
+        engine._evaluate_step = evaluate_step
+        engine._refresh_click_matching_row_matches = refresh
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button))
+
+        engine._cycle()
+
+        self.assertEqual(refreshes, [True])
+        self.assertEqual(clicks, [(260, 120, "left")])
+
+    def test_reused_row_evaluation_still_refreshes_and_rechecks_level_after_delay(self):
+        reference = {"center": (80, 120), "box": (40, 90, 120, 150)}
+        target = {"center": (260, 120), "box": (240, 100, 280, 140)}
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            max_level=60,
+            pre_click_delay=0.25,
+        )
+        step = Step(
+            name="Joining",
+            conditions=[
+                ImageCondition(template_path="templates/Mob.png"),
+                ImageCondition(template_path="templates/Join.png"),
+            ],
+            actions=[action],
+            cooldown=0.0,
+        )
+        engine = self._row_cycle_engine(step)
+        refreshes = []
+        level_reads = []
+        clicks = []
+
+        def evaluate_step(current_step, frame_cache=None):
+            frame_cache[_MATCHING_ROW_SNAPSHOT_KEY] = object()
+            frame_cache[engine_module._MATCHING_ROW_SNAPSHOT_STEP_KEY] = current_step
+            return (
+                True,
+                {0: reference["center"], 1: target["center"]},
+                {0: [reference], 1: [target]},
+            )
+
+        def refresh(*_args):
+            refreshes.append(True)
+            return (
+                {0: reference["center"], 1: target["center"]},
+                {0: [reference], 1: [target]},
+            )
+
+        engine._evaluate_step = evaluate_step
+        engine._refresh_click_matching_row_matches = refresh
+        engine._read_level_for_row = (
+            lambda _action, _reference: level_reads.append(True) or 45
+        )
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button))
+
+        engine._cycle()
+
+        self.assertEqual(refreshes, [True])
+        self.assertEqual(level_reads, [True, True])
+        self.assertEqual(clicks, [(260, 120, "left")])
+
     def test_evaluate_step_reuses_capture_for_conditions_in_same_region(self):
         engine = object.__new__(MacroEngine)
         engine.scenario = Scenario(name="perf")
@@ -248,115 +417,6 @@ class EnginePerformanceTests(unittest.TestCase):
         self.assertTrue(met)
         self.assertIn(0, points)
         self.assertEqual(len(matches[0]), 1)
-
-    def test_read_level_from_frame_uses_digit_templates(self):
-        engine = object.__new__(MacroEngine)
-        templates = {
-            "2": np.array(
-                [
-                    [0, 255, 255, 0],
-                    [255, 0, 0, 255],
-                    [0, 0, 255, 0],
-                    [0, 255, 0, 0],
-                    [255, 255, 255, 255],
-                ],
-                dtype=np.uint8,
-            ),
-            "7": np.array(
-                [
-                    [255, 255, 255, 255],
-                    [0, 0, 0, 255],
-                    [0, 0, 255, 0],
-                    [0, 255, 0, 0],
-                    [0, 255, 0, 0],
-                ],
-                dtype=np.uint8,
-            ),
-        }
-        frame = np.zeros((12, 18), dtype=np.uint8)
-        frame[3:8, 4:8] = templates["2"]
-        frame[3:8, 10:14] = templates["7"]
-
-        self.assertEqual(engine._read_level_from_frame(frame, templates, confidence=0.99), 27)
-
-    def test_read_level_from_frame_respects_min_digits(self):
-        engine = object.__new__(MacroEngine)
-        templates = {
-            "8": np.array(
-                [
-                    [255, 255, 255],
-                    [255, 0, 255],
-                    [255, 255, 255],
-                    [255, 0, 255],
-                    [255, 255, 255],
-                ],
-                dtype=np.uint8,
-            ),
-        }
-        frame = np.zeros((9, 9), dtype=np.uint8)
-        frame[2:7, 3:6] = templates["8"]
-
-        self.assertIsNone(engine._read_level_from_frame(frame, templates, confidence=0.99, min_digits=2))
-        self.assertEqual(engine._read_level_from_frame(frame, templates, confidence=0.99, min_digits=1), 8)
-
-    def test_digit_preprocessing_ignores_background_color(self):
-        engine = object.__new__(MacroEngine)
-        glyph = np.array(
-            [
-                [0, 0, 255, 0],
-                [0, 255, 255, 0],
-                [255, 0, 255, 0],
-                [255, 255, 255, 255],
-                [0, 0, 255, 0],
-            ],
-            dtype=np.uint8,
-        )
-        red_background = np.full(glyph.shape, 76, dtype=np.uint8)
-        red_background[glyph > 0] = 255
-        patterned_background = np.array(
-            [
-                [41, 152, 88, 121],
-                [97, 64, 139, 33],
-                [155, 45, 118, 92],
-                [68, 132, 57, 104],
-                [119, 37, 166, 73],
-            ],
-            dtype=np.uint8,
-        )
-        patterned_background[glyph > 0] = 255
-
-        red_mask = engine._preprocess_digit_image(red_background)
-        patterned_mask = engine._preprocess_digit_image(patterned_background)
-
-        self.assertGreater(int((red_mask > 0).sum()), 0)
-        self.assertGreater(int((patterned_mask > 0).sum()), 0)
-        self.assertTrue(np.array_equal(red_mask, patterned_mask))
-
-    def test_digit_preprocessing_removes_small_bright_specks(self):
-        engine = object.__new__(MacroEngine)
-        digit = np.array(
-            [
-                [0, 0, 255, 0],
-                [0, 255, 255, 0],
-                [255, 0, 255, 0],
-                [255, 255, 255, 255],
-                [0, 0, 255, 0],
-            ],
-            dtype=np.uint8,
-        )
-        noisy = np.zeros((9, 9), dtype=np.uint8)
-        noisy[2:7, 2:6] = digit
-        noisy[0, 0] = 255
-        noisy[0, 8] = 255
-        noisy[8, 0] = 255
-        clean = np.zeros((9, 9), dtype=np.uint8)
-        clean[2:7, 2:6] = digit
-
-        self.assertTrue(np.array_equal(
-            engine._preprocess_digit_image(clean),
-            engine._preprocess_digit_image(noisy),
-        ))
-
 
 if __name__ == "__main__":
     unittest.main()

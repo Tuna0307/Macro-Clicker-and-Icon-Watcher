@@ -15,7 +15,7 @@ import tkinter as tk
 import traceback
 from datetime import datetime
 from tkinter import messagebox, simpledialog, ttk
-from typing import Optional
+from typing import Optional, cast
 
 import keyboard
 from PIL import ImageDraw, ImageTk
@@ -61,10 +61,16 @@ from .models import (
 from .runtime_paths import LOG_DIR, STARTUP_ERROR_LOG
 from .ui_components import (
     COLORS,
+    StatusPulse,
     Tooltip,
+    UiFeedback,
+    action_button,
     action_display_summary,
+    center_window,
     configure_theme,
+    create_root,
 )
+from .ui_preferences import UiPreferences, load_ui_preferences, save_ui_preferences
 from .window_locator import visible_window_titles
 
 START_MACRO_HOTKEY = "f8"
@@ -74,9 +80,14 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("PC Macro Builder")
-        root.geometry("1220x820")
-        root.minsize(1024, 700)
+        root.geometry("1320x860")
+        root.minsize(1100, 720)
         self._configure_style()
+
+        self.ui_preferences = load_ui_preferences()
+        self.ui_feedback = UiFeedback(enabled=self.ui_preferences.sounds_enabled)
+        self._activity_animation_id = None
+        self.status_pulse = None
 
         self.scenario = Scenario(name="untitled")
         self.engine: Optional[MacroEngine] = None
@@ -122,13 +133,25 @@ class App:
             "Running.Status.TLabel",
             background=COLORS["surface"],
             foreground=COLORS["success"],
-            font=("Segoe UI Semibold", 9),
+            font=("Segoe UI Semibold", 10),
+        )
+        style.configure(
+            "RunningPulse.Status.TLabel",
+            background=COLORS["surface"],
+            foreground=COLORS["success_bright"],
+            font=("Segoe UI Semibold", 10),
         )
         style.configure(
             "Stopped.Status.TLabel",
             background=COLORS["surface"],
             foreground=COLORS["muted"],
-            font=("Segoe UI Semibold", 9),
+            font=("Segoe UI Semibold", 10),
+        )
+        style.configure(
+            "Preparing.Status.TLabel",
+            background=COLORS["surface"],
+            foreground=COLORS["warning"],
+            font=("Segoe UI Semibold", 10),
         )
 
     # ---- layout ----
@@ -144,8 +167,8 @@ class App:
         self.alert_tab = AlertWatcherFrame(self.notebook, embedded=True)
         self.notebook.add(self.alert_tab, text="Icon Alerts")
 
-        top = ttk.Frame(self.macro_tab, style="Toolbar.TFrame", padding=(14, 11))
-        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        top = ttk.Frame(self.macro_tab, style="Card.TFrame", padding=(18, 14))
+        top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
         top.columnconfigure(1, weight=1)
 
         ttk.Label(top, text="Scenario", style="Surface.TLabel").grid(row=0, column=0, sticky="w")
@@ -165,11 +188,21 @@ class App:
         Tooltip(save_btn, "Save the current scenario")
         Tooltip(delete_btn, "Delete the current scenario")
 
-        self.status_label = ttk.Label(top, text="Stopped", style="Stopped.Status.TLabel")
+        self.status_label = ttk.Label(top, text="● Stopped", style="Stopped.Status.TLabel")
         self.status_label.grid(row=0, column=7, padx=(8, 10))
-        self.run_btn = ttk.Button(top, text="Run", style="Primary.TButton", command=self._start_engine)
+        self.status_pulse = StatusPulse(
+            self.status_label,
+            ("Running.Status.TLabel", "RunningPulse.Status.TLabel"),
+        )
+        self.run_btn = action_button(top, text="Run", command=self._start_engine)
         self.run_btn.grid(row=0, column=8, padx=3)
-        self.stop_btn = ttk.Button(top, text="Stop", style="Danger.TButton", state="disabled", command=self._stop_engine)
+        self.stop_btn = action_button(
+            top,
+            text="Stop",
+            kind="danger",
+            state="disabled",
+            command=self._stop_engine,
+        )
         self.stop_btn.grid(row=0, column=9, padx=3)
         self.run_tooltip = Tooltip(
             self.run_btn,
@@ -177,8 +210,8 @@ class App:
         )
         Tooltip(self.stop_btn, "Stop the running scenario")
 
-        config = ttk.Frame(self.macro_tab, style="Surface.TFrame", padding=(14, 9))
-        config.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        config = ttk.Frame(self.macro_tab, style="Card.TFrame", padding=(18, 12))
+        config.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         config.columnconfigure(1, weight=1)
         ttk.Label(config, text="Target window", style="Surface.TLabel").grid(row=0, column=0, sticky="w")
         self.target_window_var = tk.StringVar(value=self.scenario.target_window_title)
@@ -198,10 +231,10 @@ class App:
         self._refresh_window_list()
 
         workspace = ttk.PanedWindow(self.macro_tab, orient="horizontal")
-        workspace.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        workspace.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
-        navigator = ttk.Frame(workspace, style="Surface.TFrame", padding=12, width=330)
-        inspector = ttk.Frame(workspace, style="Surface.TFrame", padding=14)
+        navigator = ttk.Frame(workspace, style="Card.TFrame", padding=16, width=340)
+        inspector = ttk.Frame(workspace, style="Card.TFrame", padding=18)
         workspace.add(navigator, weight=1)
         workspace.add(inspector, weight=3)
 
@@ -237,6 +270,13 @@ class App:
         self.steps_tree.column("state", width=58, anchor="center", stretch=False)
         self.steps_tree.column("counts", width=72, anchor="center", stretch=False)
         self.steps_tree.grid(row=2, column=0, sticky="nsew")
+        steps_scroll = ttk.Scrollbar(
+            navigator,
+            orient="vertical",
+            command=self.steps_tree.yview,
+        )
+        steps_scroll.grid(row=2, column=1, sticky="ns")
+        self.steps_tree.configure(yscrollcommand=steps_scroll.set)
         self.steps_tree.bind("<<TreeviewSelect>>", self._on_step_selected)
         self.steps_tree.bind("<Double-1>", lambda _event: self._edit_step())
         self.steps_tree.tag_configure("disabled", foreground=COLORS["muted"])
@@ -283,6 +323,13 @@ class App:
         self.condition_tree.column("rule", width=85, anchor="center")
         self.condition_tree.column("scope", width=78)
         self.condition_tree.grid(row=1, column=0, sticky="nsew")
+        condition_scroll = ttk.Scrollbar(
+            conditions_panel,
+            orient="vertical",
+            command=self.condition_tree.yview,
+        )
+        condition_scroll.grid(row=1, column=1, sticky="ns")
+        self.condition_tree.configure(yscrollcommand=condition_scroll.set)
         self.condition_tree.bind("<Double-1>", lambda _event: self._edit_selected_condition())
 
         actions_panel = ttk.Frame(details, style="Surface.TFrame")
@@ -300,16 +347,28 @@ class App:
         self.action_tree.column("#0", width=300, minwidth=180)
         self.action_tree.column("order", width=38, anchor="center", stretch=False)
         self.action_tree.grid(row=1, column=0, sticky="nsew")
+        action_scroll = ttk.Scrollbar(
+            actions_panel,
+            orient="vertical",
+            command=self.action_tree.yview,
+        )
+        action_scroll.grid(row=1, column=1, sticky="ns")
+        self.action_tree.configure(yscrollcommand=action_scroll.set)
         self.action_tree.bind("<Double-1>", lambda _event: self._edit_selected_action())
 
-        activity = ttk.Frame(self.macro_tab, style="Surface.TFrame", padding=(12, 8))
-        activity.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        activity = ttk.Frame(self.macro_tab, style="Card.TFrame", padding=(16, 10))
+        activity.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
         activity.columnconfigure(0, weight=1)
         activity_header = ttk.Frame(activity, style="Surface.TFrame")
         activity_header.grid(row=0, column=0, sticky="ew")
         activity_header.columnconfigure(0, weight=1)
         ttk.Label(activity_header, text="Activity", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        self.activity_toggle = ttk.Button(activity_header, text="Hide", command=self._toggle_activity)
+        self.activity_toggle = ttk.Button(
+            activity_header,
+            text="Collapse",
+            style="Toolbar.TButton",
+            command=self._toggle_activity,
+        )
         self.activity_toggle.grid(row=0, column=1)
         self.activity_body = ttk.Frame(activity, style="Surface.TFrame")
         self.activity_body.grid(row=1, column=0, sticky="ew", pady=(6, 0))
@@ -318,12 +377,15 @@ class App:
             self.activity_body,
             height=7,
             state="disabled",
-            bg=COLORS["surface"],
+            bg=COLORS["surface_alt"],
             fg=COLORS["text"],
             insertbackground=COLORS["text"],
             selectbackground=COLORS["accent_soft"],
             relief="flat",
             borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["accent"],
             font=("Cascadia Mono", 9),
             wrap="none",
         )
@@ -332,6 +394,7 @@ class App:
         self.log_text.grid(row=0, column=0, sticky="ew")
         log_scroll.grid(row=0, column=1, sticky="ns")
         self._activity_visible = True
+        self._activity_expanded_height = 7
 
     # ---- scenario management ----
     def _scenario_snapshot(self):
@@ -461,8 +524,9 @@ class App:
         win.transient(self.root)
         win.grab_set()
         win.resizable(False, False)
+        win.configure(background=COLORS["surface"])
 
-        body = ttk.Frame(win, style="Surface.TFrame", padding=18)
+        body = ttk.Frame(win, style="Surface.TFrame", padding=24)
         body.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(1, weight=1)
         poll_var = tk.DoubleVar(value=self.poll_var.get())
@@ -470,23 +534,43 @@ class App:
         start_var = tk.StringVar(value=self.start_var.get())
         kill_var = tk.StringVar(value=self.kill_var.get())
         diagnostics_var = tk.BooleanVar(value=self.diagnostics_var.get())
+        sounds_var = tk.BooleanVar(value=self.ui_preferences.sounds_enabled)
+        animations_var = tk.BooleanVar(value=self.ui_preferences.animations_enabled)
 
-        ttk.Label(body, text="Poll interval", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 18), pady=6)
-        ttk.Entry(body, textvariable=poll_var, width=12).grid(row=0, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Monitor", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 18), pady=6)
-        ttk.Entry(body, textvariable=monitor_var, width=12).grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Start key", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 18), pady=6)
-        ttk.Entry(body, textvariable=start_var, width=12).grid(row=2, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 18), pady=6)
-        ttk.Entry(body, textvariable=kill_var, width=12).grid(row=3, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Scenario", style="Section.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+        ttk.Label(body, text="Poll interval", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 24), pady=6)
+        ttk.Entry(body, textvariable=poll_var, width=14).grid(row=1, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Monitor", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 24), pady=6)
+        ttk.Entry(body, textvariable=monitor_var, width=14).grid(row=2, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Start key", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 24), pady=6)
+        ttk.Entry(body, textvariable=start_var, width=14).grid(row=3, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(row=4, column=0, sticky="w", padx=(0, 24), pady=6)
+        ttk.Entry(body, textvariable=kill_var, width=14).grid(row=4, column=1, sticky="ew", pady=6)
         ttk.Checkbutton(
             body,
             text="Collect bounded diagnostic screenshots",
             variable=diagnostics_var,
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=6)
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 4))
+
+        ttk.Separator(body).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(14, 12))
+        ttk.Label(body, text="Interface", style="Section.TLabel").grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(0, 5)
+        )
+        ttk.Checkbutton(
+            body,
+            text="Play gentle interface sounds",
+            variable=sounds_var,
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(
+            body,
+            text="Use subtle interface animations",
+            variable=animations_var,
+        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=2)
 
         buttons = ttk.Frame(body, style="Surface.TFrame")
-        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        buttons.grid(row=10, column=0, columnspan=2, sticky="e", pady=(20, 0))
 
         def save_settings():
             try:
@@ -534,20 +618,92 @@ class App:
             self.start_var.set(start_key)
             self.kill_var.set(stop_key)
             self.diagnostics_var.set(bool(diagnostics_var.get()))
+            self.ui_preferences = UiPreferences(
+                sounds_enabled=bool(sounds_var.get()),
+                animations_enabled=bool(animations_var.get()),
+            )
+            self.ui_feedback.enabled = self.ui_preferences.sounds_enabled
+            try:
+                save_ui_preferences(self.ui_preferences)
+            except (OSError, TypeError, ValueError) as exc:
+                self._queue_log(f"[warn] could not save interface preferences: {exc}")
+            if hasattr(self, "alert_tab"):
+                self.alert_tab.apply_ui_preferences(self.ui_preferences)
+            if not self.ui_preferences.animations_enabled and self.status_pulse is not None:
+                engine = self.engine
+                engine_running = engine is not None and engine.is_running
+                engine_ready = engine is not None and engine.is_ready
+                if engine_ready:
+                    final_style = "Running.Status.TLabel"
+                elif engine_running:
+                    final_style = "Preparing.Status.TLabel"
+                else:
+                    final_style = "Stopped.Status.TLabel"
+                self.status_pulse.stop(final_style)
+            elif (
+                self.ui_preferences.animations_enabled
+                and self.engine is not None
+                and self.engine.is_ready
+                and self.status_pulse is not None
+            ):
+                self.status_pulse.start()
             self._register_start_hotkey()
+            self.ui_feedback.play("success")
             win.destroy()
 
         ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="left", padx=4)
         ttk.Button(buttons, text="Save", style="Primary.TButton", command=save_settings).pack(side="left", padx=4)
+        win.bind("<Escape>", lambda _event: win.destroy())
+        win.bind("<Return>", lambda _event: save_settings())
+        win.after_idle(lambda: center_window(win, self.root))
 
     def _toggle_activity(self):
-        self._activity_visible = not self._activity_visible
-        if self._activity_visible:
+        target_visible = not self._activity_visible
+        self._activity_visible = target_visible
+        self.activity_toggle.configure(text="Collapse" if target_visible else "Expand")
+
+        after_id = getattr(self, "_activity_animation_id", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+            self._activity_animation_id = None
+
+        animate = getattr(
+            getattr(self, "ui_preferences", None),
+            "animations_enabled",
+            False,
+        )
+        if not animate:
+            if target_visible:
+                self.activity_body.grid()
+                self.log_text.configure(height=self._activity_expanded_height)
+            else:
+                self.activity_body.grid_remove()
+            return
+
+        if target_visible:
+            self.log_text.configure(height=1)
             self.activity_body.grid()
-            self.activity_toggle.configure(text="Hide")
-        else:
-            self.activity_body.grid_remove()
-            self.activity_toggle.configure(text="Show")
+
+        end_height = self._activity_expanded_height if target_visible else 1
+
+        def animate_height():
+            try:
+                current = int(self.log_text.cget("height"))
+                if current == end_height:
+                    self._activity_animation_id = None
+                    if not target_visible:
+                        self.activity_body.grid_remove()
+                    return
+                current += 1 if current < end_height else -1
+                self.log_text.configure(height=current)
+                self._activity_animation_id = self.root.after(24, animate_height)
+            except tk.TclError:
+                self._activity_animation_id = None
+
+        animate_height()
 
     def _validate_scenario_name_for_ui(self, name):
         try:
@@ -695,11 +851,12 @@ class App:
         warning = f"Permanently delete scenario '{name}'?"
         if self._has_unsaved_changes():
             warning += "\n\nIts unsaved changes will also be discarded."
-        if messagebox.askyesno("Delete", warning, parent=getattr(self, "root", None)):
+        parent = cast(tk.Misc, getattr(self, "root", None))
+        if messagebox.askyesno("Delete", warning, parent=parent):
             try:
                 delete_scenario(name)
             except Exception as exc:
-                messagebox.showerror("Delete failed", str(exc), parent=getattr(self, "root", None))
+                messagebox.showerror("Delete failed", str(exc), parent=parent)
                 return
             self._apply_scenario_to_ui(Scenario(name="untitled"), loaded_name=None, clean=True)
             self._refresh_scenario_list()
@@ -1060,10 +1217,24 @@ class App:
 
     # ---- engine control ----
     def _set_engine_stopped_ui(self):
+        was_active = getattr(self, "_engine_ui_active", False)
         self._engine_ui_active = False
+        if self.status_pulse is not None:
+            self.status_pulse.stop("Stopped.Status.TLabel")
         self.run_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
-        self.status_label.config(text="Stopped", style="Stopped.Status.TLabel")
+        self.status_label.config(text="● Stopped", style="Stopped.Status.TLabel")
+        if was_active:
+            self.ui_feedback.play("stop")
+
+    def _set_engine_running_ui(self):
+        if getattr(self, "_engine_ready_announced", False):
+            return
+        self._engine_ready_announced = True
+        self.status_label.config(text="● Running", style="Running.Status.TLabel")
+        if self.ui_preferences.animations_enabled and self.status_pulse is not None:
+            self.status_pulse.start()
+        self.ui_feedback.play("start")
 
     def _start_engine(self):
         if self.engine and self.engine.is_running:
@@ -1085,26 +1256,35 @@ class App:
                     pass
             self.engine = None
             self._set_engine_stopped_ui()
+            self.ui_feedback.play("error")
             messagebox.showerror("Failed to start", str(e))
             return
         self.engine = engine
         self._engine_ui_active = True
+        self._engine_ready_announced = False
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.status_label.config(text="Running", style="Running.Status.TLabel")
+        if engine.is_ready:
+            self._set_engine_running_ui()
+        else:
+            self.status_label.config(text="◌ Preparing OCR…", style="Preparing.Status.TLabel")
 
     def _stop_engine(self):
         if self.engine:
             try:
-                self.engine.stop()
+                self.engine.request_stop()
             except Exception as exc:
                 self._queue_log(f"[error] failed to stop engine cleanly: {exc}")
         if self.engine and self.engine.is_running:
             self._engine_ui_active = True
+            if self.status_pulse is not None:
+                self.status_pulse.stop("Preparing.Status.TLabel")
             self.run_btn.config(state="disabled")
             self.stop_btn.config(state="disabled")
-            self.status_label.config(text="Stopping...", style="Running.Status.TLabel")
+            self.status_label.config(text="◌ Stopping…", style="Preparing.Status.TLabel")
             return False
+        if self.engine:
+            self.engine.stop()
         self._set_engine_stopped_ui()
         return True
 
@@ -1189,7 +1369,15 @@ class App:
         if getattr(self, "_engine_ui_active", False) and (
             self.engine is None or not self.engine.is_running
         ):
+            if self.engine is not None:
+                self.engine.stop()
             self._set_engine_stopped_ui()
+        elif (
+            getattr(self, "_engine_ui_active", False)
+            and self.engine is not None
+            and self.engine.is_ready
+        ):
+            self._set_engine_running_ui()
         self.root.after(150, self._poll_log_queue)
 
     def _log(self, msg):
@@ -1249,6 +1437,15 @@ class App:
         if not self._confirm_save_before("closing"):
             return
         self._remove_start_hotkey()
+        if self.status_pulse is not None:
+            self.status_pulse.stop()
+        activity_animation = getattr(self, "_activity_animation_id", None)
+        if activity_animation is not None:
+            try:
+                self.root.after_cancel(activity_animation)
+            except tk.TclError:
+                pass
+            self._activity_animation_id = None
         try:
             if self.engine and self.engine.is_running:
                 self.engine.stop()
@@ -1285,7 +1482,7 @@ def main():
 
     root = None
     try:
-        root = tk.Tk()
+        root = create_root()
         try:
             App(root)
         except Exception as exc:

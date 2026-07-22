@@ -3,7 +3,7 @@
   "grayscale": true,
   "debug": false,
   "cooldown_sec": 0.5,
-  "alert_volume": 0.0457516339869281,
+  "alert_volume": 0.3,
   "scan_region": [
     5,
     769,
