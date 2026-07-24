@@ -46,12 +46,26 @@ class EngineSafetyTests(unittest.TestCase):
     def test_click_point_rechecks_stop_after_mouse_move(self):
         engine = self._bare_engine()
         engine.click_move_duration = 0.2
+        engine.sct = type(
+            "Capture",
+            (),
+            {
+                "monitors": [
+                    {"left": 0, "top": 0, "width": 100, "height": 100},
+                    {"left": 0, "top": 0, "width": 100, "height": 100},
+                ]
+            },
+        )()
 
         def stop_after_move(*_args, **_kwargs):
             engine._stop_event.set()
 
-        with patch.object(engine_module.pyautogui, "moveTo", side_effect=stop_after_move), \
-                patch.object(engine_module.pyautogui, "click") as click:
+        with (
+            patch.object(
+                engine_module.pyautogui, "moveTo", side_effect=stop_after_move
+            ),
+            patch.object(engine_module.pyautogui, "click") as click,
+        ):
             clicked = engine._click_point(10, 20, "left")
 
         self.assertFalse(clicked)
@@ -77,6 +91,99 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertFalse(result)
         click.assert_not_called()
 
+    def test_click_point_fails_closed_when_monitor_bounds_are_unavailable(self):
+        engine = self._bare_engine()
+        engine.click_move_duration = 0.0
+        engine.sct = type(
+            "BrokenCapture",
+            (),
+            {
+                "monitors": property(
+                    lambda _self: (_ for _ in ()).throw(OSError("closed"))
+                )
+            },
+        )()
+        logs = []
+        engine.log = logs.append
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            first_result = engine._click_point(10, 20, "left")
+            second_result = engine._click_point(10, 20, "left")
+
+        self.assertFalse(first_result)
+        self.assertFalse(second_result)
+        click.assert_not_called()
+        self.assertEqual(
+            sum("monitor bounds are unavailable" in message for message in logs),
+            1,
+        )
+
+    def test_malformed_monitor_geometry_fails_closed(self):
+        engine = self._bare_engine()
+        engine.click_move_duration = 0.0
+        engine.sct = type(
+            "MalformedCapture",
+            (),
+            {
+                "monitors": [
+                    {"left": 0, "top": 0, "width": 100, "height": 100},
+                    {"left": 0, "top": 0, "width": "wide", "height": 100},
+                ]
+            },
+        )()
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(10, 20, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+
+    def test_failed_generic_click_stops_actions_and_does_not_fire_step(self):
+        engine = self._bare_engine()
+        clicks = []
+        step = Step(
+            name="failed-click",
+            actions=[
+                Action(type="click", x=10, y=20),
+                Action(type="click", x=30, y=40),
+            ],
+            cooldown=0.0,
+            repeatable=False,
+        )
+        engine.scenario = Scenario(name="safety", steps=[step])
+        engine._last_fired = {step.name: 0.0}
+        engine._evaluate_step = lambda _step: (True, {}, {})
+        engine._click_point = lambda x, y, button: (
+            clicks.append((x, y, button)) or False
+        )
+
+        engine._cycle()
+
+        self.assertEqual(clicks, [(10, 20, "left")])
+        self.assertEqual(engine._last_fired[step.name], 0.0)
+        self.assertTrue(step.enabled)
+
+    def test_missing_generic_click_target_retries_without_following_actions(self):
+        engine = self._bare_engine()
+        clicks = []
+        step = Step(
+            name="missing-click",
+            actions=[
+                Action(type="click", on_condition_index=1),
+                Action(type="click", x=30, y=40),
+            ],
+            cooldown=0.0,
+        )
+        engine.scenario = Scenario(name="safety", steps=[step])
+        engine._last_fired = {step.name: 0.0}
+        engine._evaluate_step = lambda _step: (True, {0: (10, 20)}, {})
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button)) or True
+
+        engine._cycle()
+
+        self.assertEqual(clicks, [])
+        self.assertEqual(engine._last_fired[step.name], 0.0)
+
     def test_side_effect_clears_frame_cache_before_later_step(self):
         engine = self._bare_engine()
         rng = np.random.default_rng(17)
@@ -99,6 +206,7 @@ class EngineSafetyTests(unittest.TestCase):
 
         def condition():
             return ImageCondition(template_path="target.png", confidence=0.99)
+
         steps = [
             Step(
                 name="first",
@@ -179,8 +287,12 @@ class EngineSafetyTests(unittest.TestCase):
             frame, template, confidence=0.85, collect_all=True
         )
 
-        self.assertTrue(any(match[:2] == (9, 7) and match[5] == 1.0 for match in matches))
-        self.assertTrue(any(match[:2] == (82, 45) and match[5] == 1.2 for match in matches))
+        self.assertTrue(
+            any(match[:2] == (9, 7) and match[5] == 1.0 for match in matches)
+        )
+        self.assertTrue(
+            any(match[:2] == (82, 45) and match[5] == 1.2 for match in matches)
+        )
 
     def test_flat_low_variance_template_does_not_create_false_match_flood(self):
         engine = self._bare_engine()
@@ -272,12 +384,14 @@ class EngineSafetyTests(unittest.TestCase):
             def close(self):
                 pass
 
-        with patch.object(engine_module.mss, "MSS", return_value=FakeCapture()), \
-                patch.object(
-                    engine_module.keyboard,
-                    "add_hotkey",
-                    side_effect=OSError("hook unavailable"),
-                ):
+        with (
+            patch.object(engine_module.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                engine_module.keyboard,
+                "add_hotkey",
+                side_effect=OSError("hook unavailable"),
+            ),
+        ):
             runtime = MacroEngine(Scenario(name="safe"))
             with self.assertRaisesRegex(RuntimeError, "required kill switch"):
                 runtime.start()
@@ -365,7 +479,9 @@ class EngineSafetyTests(unittest.TestCase):
                 self.calls += 1
                 if self.calls < 3:
                     raise OSError("temporary BitBlt failure")
-                return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+                return np.zeros(
+                    (monitor["height"], monitor["width"], 4), dtype=np.uint8
+                )
 
         engine.sct = FlakyCapture()
 

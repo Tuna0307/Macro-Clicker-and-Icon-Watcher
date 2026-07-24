@@ -159,8 +159,8 @@ class DetectionCompatibilityTests(unittest.TestCase):
                         dtype=np.uint8,
                     )
                     frame[
-                        13:13 + rendered.shape[0],
-                        17:17 + rendered.shape[1],
+                        13 : 13 + rendered.shape[0],
+                        17 : 17 + rendered.shape[1],
                     ] = rendered
 
                     matches = engine._find_template_matches_in_frame(
@@ -185,7 +185,7 @@ class DetectionCompatibilityTests(unittest.TestCase):
             interpolation=cv2.INTER_LINEAR,
         )
         frame = np.zeros((100, 140, 3), dtype=np.uint8)
-        frame[20:20 + rendered.shape[0], 30:30 + rendered.shape[1]] = rendered
+        frame[20 : 20 + rendered.shape[0], 30 : 30 + rendered.shape[1]] = rendered
         condition = ImageCondition(
             template_path="target.png",
             template_reference_size=[1920, 1080],
@@ -222,7 +222,7 @@ class DetectionCompatibilityTests(unittest.TestCase):
             interpolation=cv2.INTER_LINEAR,
         )
         frame = np.zeros((100, 140, 3), dtype=np.uint8)
-        frame[20:20 + rendered.shape[0], 30:30 + rendered.shape[1]] = rendered
+        frame[20 : 20 + rendered.shape[0], 30 : 30 + rendered.shape[1]] = rendered
         condition = ImageCondition(
             template_path="target.png",
             template_reference_size=[1920, 1080],
@@ -247,12 +247,15 @@ class DetectionCompatibilityTests(unittest.TestCase):
 
         self.assertIsNotNone(match)
         assert match is not None
-        self.assertEqual(match[:4], (
-            30,
-            20,
-            rendered.shape[1],
-            rendered.shape[0],
-        ))
+        self.assertEqual(
+            match[:4],
+            (
+                30,
+                20,
+                rendered.shape[1],
+                rendered.shape[0],
+            ),
+        )
         self.assertGreater(match[4], 0.99)
 
 

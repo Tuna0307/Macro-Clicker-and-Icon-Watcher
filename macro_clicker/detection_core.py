@@ -19,11 +19,35 @@ Rect = tuple[int, int, int, int]
 Size = tuple[int, int]
 
 ALERT_DEFAULT_SCALES = (
-    1.00, 0.95, 1.05, 0.90, 1.10, 0.85, 1.15, 0.80, 1.20,
-    0.75, 0.70, 0.65, 0.60, 0.55, 0.50, 1.30, 1.40, 1.50,
+    1.00,
+    0.95,
+    1.05,
+    0.90,
+    1.10,
+    0.85,
+    1.15,
+    0.80,
+    1.20,
+    0.75,
+    0.70,
+    0.65,
+    0.60,
+    0.55,
+    0.50,
+    1.30,
+    1.40,
+    1.50,
 )
 MACRO_DEFAULT_SCALES = (
-    1.00, 0.95, 1.05, 0.90, 1.10, 0.85, 1.15, 0.80, 1.20,
+    1.00,
+    0.95,
+    1.05,
+    0.90,
+    1.10,
+    0.85,
+    1.15,
+    0.80,
+    1.20,
 )
 # Compatibility name used by Icon Alerts and external callers.
 DEFAULT_SCALES = ALERT_DEFAULT_SCALES
@@ -424,9 +448,8 @@ def _colored_text_mask(image_bgr, profile):
             & (hsv[:, :, 2] >= max(70.0, value * 0.45))
         )
     else:
-        selected = (
-            (hsv[:, :, 2] >= max(140.0, value * 0.65))
-            & (hsv[:, :, 1] <= min(255.0, saturation + 60.0))
+        selected = (hsv[:, :, 2] >= max(140.0, value * 0.65)) & (
+            hsv[:, :, 1] <= min(255.0, saturation + 60.0)
         )
     return selected.astype(np.uint8) * 255
 
@@ -440,7 +463,7 @@ def _spatial_deviation(image):
 def _text_shape_iou(screen, template, location):
     x, y = location
     height, width = template.shape[:2]
-    candidate = screen[y:y + height, x:x + width] > 127
+    candidate = screen[y : y + height, x : x + width] > 127
     expected = template > 127
     intersection = int(np.count_nonzero(candidate & expected))
     union = int(np.count_nonzero(candidate | expected))
@@ -474,7 +497,7 @@ def _shifted_glyph_iou(screen, expected, x, y, max_shift):
             left = x + offset_x
             if left < 0 or left + width > screen_width:
                 continue
-            candidate = screen[top:top + height, left:left + width] > 127
+            candidate = screen[top : top + height, left : left + width] > 127
             intersection = int(np.count_nonzero(candidate & expected))
             union = int(np.count_nonzero(candidate | expected))
             if union:
@@ -564,8 +587,7 @@ def _best_variant_match(screen, template, low_variance, text_shape=False):
             shape_score = _text_shape_score(screen, template, location)
             correlation = float(scores[y, x])
             if shape_score > best_score or (
-                abs(shape_score - best_score) <= 1e-9
-                and correlation > best_correlation
+                abs(shape_score - best_score) <= 1e-9 and correlation > best_correlation
             ):
                 best_score = shape_score
                 best_location = location
@@ -636,13 +658,11 @@ def prepare_template_variants(
     rotations = tuple(rotations)
     base_height, base_width = template.shape[:2]
     projected_pixels = sum(
-        max(1, round(base_width * scale_x))
-        * max(1, round(base_height * scale_y))
+        max(1, round(base_width * scale_x)) * max(1, round(base_height * scale_y))
         for scale_x, scale_y in scale_pairs
     ) * len(rotations)
-    if (
-        max_variant_pixels is not None
-        and projected_pixels > max(1, int(max_variant_pixels))
+    if max_variant_pixels is not None and projected_pixels > max(
+        1, int(max_variant_pixels)
     ):
         raise ValueError(
             "Template is too large for this detection profile; "
@@ -669,19 +689,21 @@ def prepare_template_variants(
             height = max(1, round(base_height * scale_y))
             resized = cv2.resize(rotated, (width, height), interpolation=interpolation)
             scale = math.sqrt(scale_x * scale_y)
-            variants.append({
-                "image": resized,
-                "scale": float(scale),
-                "scale_x": float(scale_x),
-                "scale_y": float(scale_y),
-                "angle": float(angle),
-                "low_variance": (
-                    _spatial_deviation(resized) < low_variance_threshold
-                ),
-                "use_grayscale": bool(use_grayscale),
-                "match_mode": match_mode,
-                "text_profile": text_profile,
-            })
+            variants.append(
+                {
+                    "image": resized,
+                    "scale": float(scale),
+                    "scale_x": float(scale_x),
+                    "scale_y": float(scale_y),
+                    "angle": float(angle),
+                    "low_variance": (
+                        _spatial_deviation(resized) < low_variance_threshold
+                    ),
+                    "use_grayscale": bool(use_grayscale),
+                    "match_mode": match_mode,
+                    "text_profile": text_profile,
+                }
+            )
     return tuple(variants)
 
 
@@ -705,8 +727,7 @@ def _coarse_multiscale_match(
         screen, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA
     )
     zero_angle = [
-        variant for variant in variants
-        if abs(float(variant.get("angle", 0))) < 1e-9
+        variant for variant in variants if abs(float(variant.get("angle", 0))) < 1e-9
     ]
     initial = zero_angle or list(variants)
     records = []
@@ -782,7 +803,10 @@ def _coarse_multiscale_match(
         tied = abs(score - best_score) <= 1e-9
         if (
             score > best_score + 1e-9
-            or (tied and abs(scale - preferred_scale) < abs(best_scale - preferred_scale))
+            or (
+                tied
+                and abs(scale - preferred_scale) < abs(best_scale - preferred_scale)
+            )
             or (
                 tied
                 and abs(scale - best_scale) <= 1e-9
@@ -850,9 +874,7 @@ def match_template_multiscale(
         match_mode = normalize_match_mode(
             variants[0].get("match_mode", match_mode), default=match_mode
         )
-        use_grayscale = bool(
-            variants[0].get("use_grayscale", use_grayscale)
-        )
+        use_grayscale = bool(variants[0].get("use_grayscale", use_grayscale))
     if match_mode == MATCH_MODE_TEXT:
         profile = variants[0].get("text_profile") if variants else None
         screen = (
@@ -865,8 +887,7 @@ def match_template_multiscale(
 
     if (
         allow_coarse
-        and
-        screen.shape[0] * screen.shape[1] >= 500_000
+        and screen.shape[0] * screen.shape[1] >= 500_000
         and min(template_bgr.shape[:2]) >= 20
         and len(variants) > 8
     ):
@@ -908,7 +929,10 @@ def match_template_multiscale(
         tied = abs(score - best_score) <= epsilon
         if (
             score > best_score + epsilon
-            or (tied and abs(scale - preferred_scale) < abs(best_scale - preferred_scale))
+            or (
+                tied
+                and abs(scale - preferred_scale) < abs(best_scale - preferred_scale)
+            )
             or (
                 tied
                 and abs(scale - best_scale) <= 1e-9
@@ -943,7 +967,11 @@ def _bounded_local_peaks(scores, threshold, width, height, limit):
         indices = indices[selected]
     result_width = scores.shape[1]
     return [
-        (int(index) % result_width, int(index) // result_width, float(flat_scores[index]))
+        (
+            int(index) % result_width,
+            int(index) // result_width,
+            float(flat_scores[index]),
+        )
         for index in indices
     ]
 
@@ -1004,17 +1032,19 @@ def find_template_matches(
             angle = float(matched_variant.get("angle", 0.0))
             scale_x = float(matched_variant.get("scale_x", scale))
             scale_y = float(matched_variant.get("scale_y", scale))
-        return [TemplateMatch(
-            location[0],
-            location[1],
-            width,
-            height,
-            score,
-            scale,
-            angle,
-            scale_x,
-            scale_y,
-        )]
+        return [
+            TemplateMatch(
+                location[0],
+                location[1],
+                width,
+                height,
+                score,
+                scale,
+                angle,
+                scale_x,
+                scale_y,
+            )
+        ]
 
     match_mode = normalize_match_mode(match_mode, LEGACY_MACRO_MATCH_MODE)
     if variants is None:
@@ -1034,9 +1064,7 @@ def find_template_matches(
         )
     variants = tuple(variants)
     if variants:
-        use_grayscale = bool(
-            variants[0].get("use_grayscale", use_grayscale)
-        )
+        use_grayscale = bool(variants[0].get("use_grayscale", use_grayscale))
     if match_mode == MATCH_MODE_TEXT:
         profile = variants[0].get("text_profile") if variants else None
         frame = (
@@ -1156,7 +1184,10 @@ def find_template_matches(
                         bool(variant["low_variance"]),
                     )
                     if variant["low_variance"] and local_scores.size > 1:
-                        if float(local_scores.max()) - float(local_scores.min()) <= 1e-6:
+                        if (
+                            float(local_scores.max()) - float(local_scores.min())
+                            <= 1e-6
+                        ):
                             continue
                     for x, y, score in _bounded_local_peaks(
                         local_scores,
@@ -1169,23 +1200,27 @@ def find_template_matches(
         else:
             peaks = full_resolution_peaks(template, variant, text_shape)
         for x, y, raw_score in peaks:
-            score = _text_shape_score(frame, template, (x, y)) if text_shape else raw_score
+            score = (
+                _text_shape_score(frame, template, (x, y)) if text_shape else raw_score
+            )
             if score < confidence:
                 continue
-            candidates.append(TemplateMatch(
-                x,
-                y,
-                width,
-                height,
-                score,
-                float(variant["scale"]),
-                float(variant["angle"]),
-                float(variant.get("scale_x", variant["scale"])),
-                float(variant.get("scale_y", variant["scale"])),
-            ))
+            candidates.append(
+                TemplateMatch(
+                    x,
+                    y,
+                    width,
+                    height,
+                    score,
+                    float(variant["scale"]),
+                    float(variant["angle"]),
+                    float(variant.get("scale_x", variant["scale"])),
+                    float(variant.get("scale_y", variant["scale"])),
+                )
+            )
 
     candidates.sort(key=lambda item: item.score, reverse=True)
-    candidates = candidates[:max(1, int(max_candidates))]
+    candidates = candidates[: max(1, int(max_candidates))]
     kept = []
     for candidate in candidates:
         if _cancelled(cancel_event, stop_check):
@@ -1200,7 +1235,8 @@ def find_template_matches(
             box_iou(
                 box,
                 (item.x, item.y, item.x + item.width, item.y + item.height),
-            ) > 0.3
+            )
+            > 0.3
             for item in kept
         ):
             continue

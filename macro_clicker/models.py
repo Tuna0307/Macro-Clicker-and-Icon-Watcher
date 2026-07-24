@@ -9,6 +9,7 @@ how sequencing ("step 1 then step 2, skip if not found") is built.
 Everything here is plain dataclasses + to_dict/from_dict, so a
 Scenario can be saved as a single JSON file under scenarios/.
 """
+
 import json
 import math
 import os
@@ -49,9 +50,9 @@ def portable_project_path(path):
         return os.path.normpath(path).replace("\\", "/")
     absolute = os.path.abspath(project_path(path))
     try:
-        if os.path.normcase(os.path.commonpath((APP_DIR, absolute))) == os.path.normcase(
-            os.path.abspath(APP_DIR)
-        ):
+        if os.path.normcase(
+            os.path.commonpath((APP_DIR, absolute))
+        ) == os.path.normcase(os.path.abspath(APP_DIR)):
             return os.path.relpath(absolute, APP_DIR).replace("\\", "/")
     except ValueError:
         pass
@@ -63,7 +64,9 @@ def _optional_int(value, default=None):
         return default
     if isinstance(value, bool):
         raise ValueError("boolean values are not valid whole numbers")
-    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+    if isinstance(value, float) and (
+        not math.isfinite(value) or not value.is_integer()
+    ):
         raise ValueError(f"expected a whole number, got {value!r}")
     try:
         return int(value)
@@ -76,7 +79,9 @@ def _int_value(value, default=0):
         return default
     if isinstance(value, bool):
         raise ValueError("boolean values are not valid whole numbers")
-    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+    if isinstance(value, float) and (
+        not math.isfinite(value) or not value.is_integer()
+    ):
         raise ValueError(f"expected a whole number, got {value!r}")
     try:
         return int(value)
@@ -136,7 +141,8 @@ def _int_list(value):
         if any(isinstance(part, bool) for part in value):
             return None
         if any(
-            isinstance(part, float) and (not math.isfinite(part) or not part.is_integer())
+            isinstance(part, float)
+            and (not math.isfinite(part) or not part.is_integer())
             for part in value
         ):
             return None
@@ -200,7 +206,9 @@ def _validate_ratio(region_ratio):
     if not all(math.isfinite(value) for value in (left, top, width, height)):
         raise ValueError("region_ratio must contain finite numbers")
     if left < 0.0 or top < 0.0 or width <= 0.0 or height <= 0.0:
-        raise ValueError("region_ratio values must describe a positive region inside the window")
+        raise ValueError(
+            "region_ratio values must describe a positive region inside the window"
+        )
     if left + width > 1.001 or top + height > 1.001:
         raise ValueError("region_ratio must stay inside the target window")
     return region_ratio
@@ -242,25 +250,33 @@ def _optional_float_list_field(data, key, label):
 
 @dataclass
 class ImageCondition:
-    condition_type: str = "template"     # OpenCV template match
+    condition_type: str = "template"  # OpenCV template match
     template_path: str = ""
     confidence: float = 0.85
-    comparison_template_path: str = ""   # optional rival template that this template must outscore
-    comparison_margin: float = 0.03       # minimum score lead over the rival template
+    comparison_template_path: str = (
+        ""  # optional rival template that this template must outscore
+    )
+    comparison_margin: float = 0.03  # minimum score lead over the rival template
     comparison_template_reference_size: Optional[List[int]] = None
     match_mode: str = LEGACY_MACRO_MATCH_MODE
     use_grayscale: bool = False
     template_reference_size: Optional[List[int]] = None
     region: Optional[List[int]] = None
-    region_mode: str = "screen"  # absolute screen, target-window, or selected-monitor relative
+    region_mode: str = (
+        "screen"  # absolute screen, target-window, or selected-monitor relative
+    )
     region_ratio: Optional[List[float]] = None
-    region_window_size: Optional[List[int]] = None  # reference window/monitor size for the region
-    negate: bool = False                  # True = condition succeeds when the image is ABSENT
+    region_window_size: Optional[List[int]] = (
+        None  # reference window/monitor size for the region
+    )
+    negate: bool = False  # True = condition succeeds when the image is ABSENT
 
     def to_dict(self):
         data = asdict(self)
         data["template_path"] = portable_project_path(self.template_path)
-        data["comparison_template_path"] = portable_project_path(self.comparison_template_path)
+        data["comparison_template_path"] = portable_project_path(
+            self.comparison_template_path
+        )
         return data
 
     @staticmethod
@@ -310,13 +326,19 @@ class ImageCondition:
                 raise ValueError(
                     "relative regions must provide both ratio and base size, or neither"
                 )
-        if region is None and (region_ratio is not None or region_window_size is not None):
+        if region is None and (
+            region_ratio is not None or region_window_size is not None
+        ):
             raise ValueError("region resize metadata requires a region")
-        if region_mode == "screen" and (region_ratio is not None or region_window_size is not None):
+        if region_mode == "screen" and (
+            region_ratio is not None or region_window_size is not None
+        ):
             raise ValueError("screen regions cannot contain resize metadata")
         template_path = d.get("template_path", "")
         comparison_template_path = d.get("comparison_template_path", "")
-        if not isinstance(template_path, str) or not isinstance(comparison_template_path, str):
+        if not isinstance(template_path, str) or not isinstance(
+            comparison_template_path, str
+        ):
             raise ValueError("template paths must be text")
         return ImageCondition(
             condition_type=condition_type,
@@ -338,18 +360,26 @@ class ImageCondition:
 
 @dataclass
 class Action:
-    type: str = "click"   # one of ACTION_TYPES
+    type: str = "click"  # one of ACTION_TYPES
 
     # click
-    on_condition_index: Optional[int] = None  # click center of this step's Nth condition match
-    match_condition_index: Optional[int] = None  # for click_matching_row: row reference condition
-    row_tolerance: int = 60                     # vertical center distance allowed for same-row matching
-    row_mode: str = "first"                     # "first" = first valid row, "all" = every valid row
-    target_choice: str = "leftmost"             # "leftmost", "rightmost", or "nearest"
-    pre_click_delay: float = 0.0                 # wait after level selection, before revalidation/click
-    min_level: Optional[int] = None             # optional level filter for click_matching_row
+    on_condition_index: Optional[int] = (
+        None  # click center of this step's Nth condition match
+    )
+    match_condition_index: Optional[int] = (
+        None  # for click_matching_row: row reference condition
+    )
+    row_tolerance: int = 60  # vertical center distance allowed for same-row matching
+    row_mode: str = "first"  # "first" = first valid row, "all" = every valid row
+    target_choice: str = "leftmost"  # "leftmost", "rightmost", or "nearest"
+    pre_click_delay: float = (
+        0.0  # wait after level selection, before revalidation/click
+    )
+    min_level: Optional[int] = None  # optional level filter for click_matching_row
     max_level: Optional[int] = None
-    level_roi: Optional[List[int]] = None       # [x, y, w, h] relative to row reference center
+    level_roi: Optional[List[int]] = (
+        None  # [x, y, w, h] relative to row reference center
+    )
     no_match_condition_index: Optional[int] = None  # for click_matching_row fallback
     no_match_disable_steps: List[str] = field(default_factory=list)
 
@@ -369,7 +399,7 @@ class Action:
     team1_busy_template_path: str = ""
     team3_busy_template_path: str = ""
     team_busy_confidence: float = 0.85
-    x: Optional[int] = None                   # or a fixed point instead
+    x: Optional[int] = None  # or a fixed point instead
     y: Optional[int] = None
     offset_x: int = 0
     offset_y: int = 0
@@ -377,7 +407,7 @@ class Action:
 
     # key
     key: str = ""
-    hold: float = 0.0   # seconds to hold down; 0 = quick tap
+    hold: float = 0.0  # seconds to hold down; 0 = quick tap
 
     # wait
     seconds: float = 0.5
@@ -416,15 +446,21 @@ class Action:
         a.type = str(d.get("type", a.type) or a.type)
         if a.type not in ACTION_TYPES:
             raise ValueError(f"unsupported action type: {a.type!r}")
-        a.on_condition_index = _optional_int(d.get("on_condition_index"), a.on_condition_index)
-        a.match_condition_index = _optional_int(d.get("match_condition_index"), a.match_condition_index)
+        a.on_condition_index = _optional_int(
+            d.get("on_condition_index"), a.on_condition_index
+        )
+        a.match_condition_index = _optional_int(
+            d.get("match_condition_index"), a.match_condition_index
+        )
         a.row_tolerance = _int_value(d.get("row_tolerance"), a.row_tolerance)
         if a.row_tolerance < 0:
             raise ValueError("row_tolerance cannot be negative")
         a.row_mode = str(d.get("row_mode", a.row_mode) or a.row_mode)
         if a.row_mode not in {"first", "all"}:
             raise ValueError("row_mode must be 'first' or 'all'")
-        a.target_choice = str(d.get("target_choice", a.target_choice) or a.target_choice)
+        a.target_choice = str(
+            d.get("target_choice", a.target_choice) or a.target_choice
+        )
         if a.target_choice not in {"leftmost", "rightmost", "nearest"}:
             raise ValueError("target_choice must be leftmost, rightmost, or nearest")
         a.pre_click_delay = _float_value(d.get("pre_click_delay"), a.pre_click_delay)
@@ -436,13 +472,19 @@ class Action:
             raise ValueError("min_level cannot be negative")
         if a.max_level is not None and a.max_level < 0:
             raise ValueError("max_level cannot be negative")
-        if a.min_level is not None and a.max_level is not None and a.min_level > a.max_level:
+        if (
+            a.min_level is not None
+            and a.max_level is not None
+            and a.min_level > a.max_level
+        ):
             raise ValueError("min_level cannot be greater than max_level")
         a.level_roi = _validate_region(
             _optional_int_list_field(d, "level_roi", "level_roi"),
             "level_roi",
         )
-        a.no_match_condition_index = _optional_int(d.get("no_match_condition_index"), a.no_match_condition_index)
+        a.no_match_condition_index = _optional_int(
+            d.get("no_match_condition_index"), a.no_match_condition_index
+        )
         a.no_match_disable_steps = _string_list(d.get("no_match_disable_steps"))
         a.team_idle_template_path = str(
             d.get("team_idle_template_path", a.team_idle_template_path) or ""
@@ -478,12 +520,8 @@ class Action:
         ):
             if value is not None and len(value) != 2:
                 raise ValueError(f"{label} must contain [x, y]")
-        a.team1_max_level = _optional_int(
-            d.get("team1_max_level"), a.team1_max_level
-        )
-        a.team3_max_level = _optional_int(
-            d.get("team3_max_level"), a.team3_max_level
-        )
+        a.team1_max_level = _optional_int(d.get("team1_max_level"), a.team1_max_level)
+        a.team3_max_level = _optional_int(d.get("team3_max_level"), a.team3_max_level)
         for label, value in (
             ("team1_max_level", a.team1_max_level),
             ("team3_max_level", a.team3_max_level),
@@ -541,33 +579,40 @@ class Action:
 
     def summary(self):
         if self.type == "click":
-            target = (f"condition #{self.on_condition_index}"
-                      if self.on_condition_index is not None else f"({self.x}, {self.y})")
+            target = (
+                f"condition #{self.on_condition_index}"
+                if self.on_condition_index is not None
+                else f"({self.x}, {self.y})"
+            )
             return f"Click {target}  [{self.button}]"
         if self.type == "click_matching_row":
             scope = "all rows" if self.row_mode == "all" else "first row"
             level_parts = []
             if self.min_level is not None:
                 level_parts.append(f">= {self.min_level}")
-            if (
-                self.max_level is not None
-                and not has_smart_rally_team_prefilter(self)
-            ):
+            if self.max_level is not None and not has_smart_rally_team_prefilter(self):
                 level_parts.append(f"<= {self.max_level}")
             level = f", level {' and '.join(level_parts)}" if level_parts else ""
             fallback = (
                 f"; no match click condition #{self.no_match_condition_index}"
-                if self.no_match_condition_index is not None else ""
+                if self.no_match_condition_index is not None
+                else ""
             )
-            delay = f"; wait {self.pre_click_delay:g}s before click" if self.pre_click_delay else ""
+            delay = (
+                f"; wait {self.pre_click_delay:g}s before click"
+                if self.pre_click_delay
+                else ""
+            )
             availability = (
                 "; adapt level to idle rally teams"
                 if self.team1_busy_template_path and self.team3_busy_template_path
                 else ""
             )
-            return (f"Click {self.target_choice} condition #{self.on_condition_index} matching "
-                    f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}"
-                    f"{availability}  [{self.button}]")
+            return (
+                f"Click {self.target_choice} condition #{self.on_condition_index} matching "
+                f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}"
+                f"{availability}  [{self.button}]"
+            )
         if self.type == "select_rally_team":
             team3_limit = (
                 "unlimited"
@@ -579,10 +624,7 @@ class Action:
                 if self.team1_max_level is None
                 else f"max level {self.team1_max_level}"
             )
-            return (
-                f"Select idle Team 3 ({team3_limit}), then "
-                f"Team 1 ({team1_limit})"
-            )
+            return f"Select idle Team 3 ({team3_limit}), then Team 1 ({team1_limit})"
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
@@ -613,7 +655,7 @@ class Step:
     name: str
     conditions: List[ImageCondition] = field(default_factory=list)
     actions: List[Action] = field(default_factory=list)
-    condition_operator: str = "AND"   # "AND" = all conditions must hold, "OR" = any one
+    condition_operator: str = "AND"  # "AND" = all conditions must hold, "OR" = any one
     enabled: bool = True
     cooldown: float = 1.0
     repeatable: bool = True
@@ -738,7 +780,14 @@ def load_scenario(name, folder=SCENARIOS_DIR):
                 f"scenario name '{scenario.name}' does not match filename '{safe_name}.json'"
             )
         return scenario
-    except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        OverflowError,
+    ) as exc:
         raise ValueError(f"Could not load scenario '{name}': {exc}") from exc
 
 
@@ -753,7 +802,9 @@ def validate_scenario_name(name):
         raise ValueError("Scenario name cannot be longer than 120 characters.")
     invalid = set('<>:"/\\|?*')
     if any(char in invalid or ord(char) < 32 for char in stripped):
-        raise ValueError('Scenario name cannot contain <>:"/\\|?* or control characters.')
+        raise ValueError(
+            'Scenario name cannot contain <>:"/\\|?* or control characters.'
+        )
     if stripped in (".", "..") or ".." in stripped.split(os.sep):
         raise ValueError("Scenario name cannot be a relative path.")
     base = stripped.split(".")[0].upper()
@@ -789,7 +840,9 @@ def validate_scenario(scenario: Scenario, require_files=False):
         or not math.isfinite(float(scenario.poll_interval))
         or scenario.poll_interval < 0.01
     ):
-        raise ValueError("poll_interval must be a finite number of at least 0.01 seconds")
+        raise ValueError(
+            "poll_interval must be a finite number of at least 0.01 seconds"
+        )
     if (
         isinstance(scenario.monitor_index, bool)
         or not isinstance(scenario.monitor_index, int)
@@ -800,7 +853,10 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("start_hotkey cannot be blank")
     if not isinstance(scenario.kill_switch, str) or not scenario.kill_switch.strip():
         raise ValueError("kill_switch cannot be blank")
-    if scenario.start_hotkey.strip().casefold() == scenario.kill_switch.strip().casefold():
+    if (
+        scenario.start_hotkey.strip().casefold()
+        == scenario.kill_switch.strip().casefold()
+    ):
         raise ValueError("start_hotkey and kill_switch must use different keys")
     for label, hotkey in (
         ("start_hotkey", scenario.start_hotkey),
@@ -820,11 +876,15 @@ def validate_scenario(scenario: Scenario, require_files=False):
     smart_rally_team_prefilter_configured = False
     for step in scenario.steps:
         if not isinstance(step.name, str) or step.name != step.name.strip():
-            raise ValueError(f"step name cannot start or end with spaces: {step.name!r}")
+            raise ValueError(
+                f"step name cannot start or end with spaces: {step.name!r}"
+            )
         if not isinstance(step.conditions, list) or not isinstance(step.actions, list):
             raise ValueError(f"step '{step.name}' conditions and actions must be lists")
         if not isinstance(step.enabled, bool) or not isinstance(step.repeatable, bool):
-            raise ValueError(f"step '{step.name}' enabled/repeatable flags must be booleans")
+            raise ValueError(
+                f"step '{step.name}' enabled/repeatable flags must be booleans"
+            )
         if step.condition_operator not in {"AND", "OR"}:
             raise ValueError(f"step '{step.name}' condition operator must be AND or OR")
         if (
@@ -833,15 +893,22 @@ def validate_scenario(scenario: Scenario, require_files=False):
             or not math.isfinite(float(step.cooldown))
             or step.cooldown < 0.0
         ):
-            raise ValueError(f"step '{step.name}' cooldown must be a non-negative finite number")
+            raise ValueError(
+                f"step '{step.name}' cooldown must be a non-negative finite number"
+            )
 
         for condition_index, condition in enumerate(step.conditions):
             prefix = f"step '{step.name}' condition #{condition_index + 1}"
             if not isinstance(condition, ImageCondition):
                 raise ValueError(f"{prefix} must be an ImageCondition")
             if condition.condition_type != "template":
-                raise ValueError(f"{prefix} has unsupported type {condition.condition_type!r}")
-            if not isinstance(condition.template_path, str) or not condition.template_path.strip():
+                raise ValueError(
+                    f"{prefix} has unsupported type {condition.condition_type!r}"
+                )
+            if (
+                not isinstance(condition.template_path, str)
+                or not condition.template_path.strip()
+            ):
                 raise ValueError(f"{prefix} requires a template image")
             if not isinstance(condition.comparison_template_path, str):
                 raise ValueError(f"{prefix} comparison template path must be text")
@@ -885,33 +952,56 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 )
             _validate_ratio(condition.region_ratio)
             _validate_window_size(condition.region_window_size)
-            if condition.region_mode == "window" and not scenario.target_window_title.strip():
-                raise ValueError(f"{prefix} is window-relative but the scenario has no target window")
-            if condition.region_mode in {"window", "monitor"} and condition.region is not None:
-                if (condition.region_ratio is None) != (condition.region_window_size is None):
+            if (
+                condition.region_mode == "window"
+                and not scenario.target_window_title.strip()
+            ):
+                raise ValueError(
+                    f"{prefix} is window-relative but the scenario has no target window"
+                )
+            if (
+                condition.region_mode in {"window", "monitor"}
+                and condition.region is not None
+            ):
+                if (condition.region_ratio is None) != (
+                    condition.region_window_size is None
+                ):
                     raise ValueError(
                         f"{prefix} must provide both proportional region and base size"
                     )
                 if condition.region_window_size is not None:
                     left, top, width, height = condition.region
                     win_width, win_height = condition.region_window_size
-                    if left < 0 or top < 0 or left + width > win_width or top + height > win_height:
-                        raise ValueError(f"{prefix} region must stay inside its base area")
+                    if (
+                        left < 0
+                        or top < 0
+                        or left + width > win_width
+                        or top + height > win_height
+                    ):
+                        raise ValueError(
+                            f"{prefix} region must stay inside its base area"
+                        )
             if condition.region is None and (
-                condition.region_ratio is not None or condition.region_window_size is not None
+                condition.region_ratio is not None
+                or condition.region_window_size is not None
             ):
                 raise ValueError(f"{prefix} has resize metadata without a region")
             if condition.region_mode == "screen" and (
-                condition.region_ratio is not None or condition.region_window_size is not None
+                condition.region_ratio is not None
+                or condition.region_window_size is not None
             ):
                 raise ValueError(f"{prefix} has resize metadata in screen mode")
             if condition.comparison_template_path:
-                target = os.path.normcase(os.path.abspath(project_path(condition.template_path)))
+                target = os.path.normcase(
+                    os.path.abspath(project_path(condition.template_path))
+                )
                 rival = os.path.normcase(
                     os.path.abspath(project_path(condition.comparison_template_path))
                 )
                 if target == rival:
-                    raise ValueError(f"{prefix} cannot compare a template against itself")
+                    raise ValueError(
+                        f"{prefix} cannot compare a template against itself"
+                    )
             if require_files:
                 for label, raw_path in (
                     ("template", condition.template_path),
@@ -934,7 +1024,9 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or not isinstance(action.row_tolerance, int)
                 or action.row_tolerance < 0
             ):
-                raise ValueError(f"{prefix} row tolerance must be a non-negative whole number")
+                raise ValueError(
+                    f"{prefix} row tolerance must be a non-negative whole number"
+                )
             if action.row_mode not in {"first", "all"}:
                 raise ValueError(f"{prefix} row mode must be first or all")
             if action.target_choice not in {"leftmost", "rightmost", "nearest"}:
@@ -952,8 +1044,14 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or not isinstance(action.y, int)
             ):
                 raise ValueError(f"{prefix} fixed point must use whole numbers")
-            if action.type == "click" and action.x is not None and action.on_condition_index is not None:
-                raise ValueError(f"{prefix} cannot use both a fixed point and a condition target")
+            if (
+                action.type == "click"
+                and action.x is not None
+                and action.on_condition_index is not None
+            ):
+                raise ValueError(
+                    f"{prefix} cannot use both a fixed point and a condition target"
+                )
             if any(
                 isinstance(value, bool) or not isinstance(value, int)
                 for value in (action.offset_x, action.offset_y)
@@ -965,7 +1063,9 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or not math.isfinite(float(action.hold))
                 or action.hold < 0.0
             ):
-                raise ValueError(f"{prefix} key hold must be a non-negative finite number")
+                raise ValueError(
+                    f"{prefix} key hold must be a non-negative finite number"
+                )
             if (
                 isinstance(action.pre_click_delay, bool)
                 or not isinstance(action.pre_click_delay, (int, float))
@@ -1029,9 +1129,7 @@ def validate_scenario(scenario: Scenario, require_files=False):
             for field_name in ("team1_max_level", "team3_max_level"):
                 value = getattr(action, field_name)
                 if value is not None and (
-                    isinstance(value, bool)
-                    or not isinstance(value, int)
-                    or value < 0
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
                 ):
                     raise ValueError(f"{prefix} {field_name} cannot be negative")
             _validate_region(action.team_status_region, f"{prefix} team status region")
@@ -1062,7 +1160,9 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 condition_index = getattr(action, field_name)
                 if condition_index is None:
                     continue
-                if isinstance(condition_index, bool) or not isinstance(condition_index, int):
+                if isinstance(condition_index, bool) or not isinstance(
+                    condition_index, int
+                ):
                     raise ValueError(f"{prefix} {field_name} must be a whole number")
                 if not 0 <= condition_index < condition_count:
                     raise ValueError(
@@ -1070,8 +1170,13 @@ def validate_scenario(scenario: Scenario, require_files=False):
                         f"the step has {condition_count} condition(s)"
                     )
             if action.type == "click_matching_row":
-                if action.match_condition_index is None or action.on_condition_index is None:
-                    raise ValueError(f"{prefix} requires row-reference and click-target conditions")
+                if (
+                    action.match_condition_index is None
+                    or action.on_condition_index is None
+                ):
+                    raise ValueError(
+                        f"{prefix} requires row-reference and click-target conditions"
+                    )
                 if action.match_condition_index == action.on_condition_index:
                     raise ValueError(
                         f"{prefix} row-reference and click-target conditions must differ"
@@ -1086,7 +1191,9 @@ def validate_scenario(scenario: Scenario, require_files=False):
                         "team3_busy_template_path",
                     ):
                         value = getattr(action, field_name)
-                        if value is None or (isinstance(value, str) and not value.strip()):
+                        if value is None or (
+                            isinstance(value, str) and not value.strip()
+                        ):
                             raise ValueError(f"{prefix} requires {field_name}")
                     if require_files:
                         for raw_path in (
@@ -1139,16 +1246,21 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 try:
                     keyboard.parse_hotkey(action.key.strip())
                 except (TypeError, ValueError) as exc:
-                    raise ValueError(f"{prefix} has an invalid key name: {exc}") from exc
+                    raise ValueError(
+                        f"{prefix} has an invalid key name: {exc}"
+                    ) from exc
             if not isinstance(action.no_match_disable_steps, list) or not all(
                 isinstance(name, str) and name.strip()
                 for name in action.no_match_disable_steps
             ):
                 raise ValueError(f"{prefix} disable-step names must be non-empty text")
             if action.type == "set_step" and (
-                not isinstance(action.step_name, str) or action.step_name not in step_names
+                not isinstance(action.step_name, str)
+                or action.step_name not in step_names
             ):
-                raise ValueError(f"{prefix} refers to missing step '{action.step_name}'")
+                raise ValueError(
+                    f"{prefix} refers to missing step '{action.step_name}'"
+                )
             missing_disable_steps = [
                 name for name in action.no_match_disable_steps if name not in step_names
             ]

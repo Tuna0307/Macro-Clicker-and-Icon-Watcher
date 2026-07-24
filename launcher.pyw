@@ -1,4 +1,5 @@
 """Windows GUI launcher that makes startup failures visible and persistent."""
+
 import ctypes
 import os
 import sys
@@ -36,14 +37,17 @@ def main():
     try:
         from macro_clicker.app import main as run_application
 
-        run_application()
-    except SystemExit:
+        return run_application()
+    except SystemExit as exc:
         # app.main() already reports expected non-zero exits (for example a
         # second instance or a GUI initialization failure).
-        pass
+        if exc.code is None:
+            return 0
+        return exc.code if isinstance(exc.code, int) else 1
     except BaseException as exc:
         _report_startup_error(exc)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

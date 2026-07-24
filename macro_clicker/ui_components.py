@@ -87,6 +87,7 @@ def center_window(window, parent=None):
 
 
 if CUSTOMTKINTER_AVAILABLE:
+
     class _CompatCTkButton(ctk.CTkButton):
         """CTk button retaining Tk's widely-used ``config`` alias."""
 
@@ -95,7 +96,9 @@ if CUSTOMTKINTER_AVAILABLE:
             if state is not None and "fg_color" not in kwargs:
                 disabled = str(state) == "disabled"
                 kwargs["fg_color"] = (
-                    self._macro_disabled_color if disabled else self._macro_enabled_color
+                    self._macro_disabled_color
+                    if disabled
+                    else self._macro_enabled_color
                 )
                 kwargs["hover_color"] = (
                     self._macro_disabled_color if disabled else self._macro_hover_color
@@ -265,7 +268,9 @@ def configure_theme(root):
     except tk.TclError:
         pass
 
-    style.configure(".", font=("Segoe UI", 10), background=COLORS["app"], foreground=COLORS["text"])
+    style.configure(
+        ".", font=("Segoe UI", 10), background=COLORS["app"], foreground=COLORS["text"]
+    )
     style.configure("TFrame", background=COLORS["app"])
     style.configure("Surface.TFrame", background=COLORS["surface"])
     style.configure("Toolbar.TFrame", background=COLORS["surface"])
@@ -279,11 +284,30 @@ def configure_theme(root):
         relief="solid",
     )
     style.configure("TLabel", background=COLORS["app"], foreground=COLORS["text"])
-    style.configure("Surface.TLabel", background=COLORS["surface"], foreground=COLORS["text"])
-    style.configure("Muted.TLabel", background=COLORS["surface"], foreground=COLORS["muted"])
-    style.configure("Title.TLabel", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI Semibold", 15))
-    style.configure("Section.TLabel", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI Semibold", 11))
-    style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], font=("Segoe UI Semibold", 10))
+    style.configure(
+        "Surface.TLabel", background=COLORS["surface"], foreground=COLORS["text"]
+    )
+    style.configure(
+        "Muted.TLabel", background=COLORS["surface"], foreground=COLORS["muted"]
+    )
+    style.configure(
+        "Title.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["text"],
+        font=("Segoe UI Semibold", 15),
+    )
+    style.configure(
+        "Section.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["text"],
+        font=("Segoe UI Semibold", 11),
+    )
+    style.configure(
+        "Status.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["muted"],
+        font=("Segoe UI Semibold", 10),
+    )
 
     style.configure(
         "TButton",
@@ -322,7 +346,12 @@ def configure_theme(root):
             ("active", COLORS["toolbar_hover"]),
         ],
     )
-    style.configure("Primary.TButton", background=COLORS["accent"], foreground="#ffffff", padding=(14, 8))
+    style.configure(
+        "Primary.TButton",
+        background=COLORS["accent"],
+        foreground="#ffffff",
+        padding=(14, 8),
+    )
     style.map(
         "Primary.TButton",
         background=[
@@ -332,7 +361,12 @@ def configure_theme(root):
         ],
         foreground=[("disabled", COLORS["muted"]), ("!disabled", "#ffffff")],
     )
-    style.configure("Danger.TButton", background=COLORS["danger"], foreground="#ffffff", padding=(14, 8))
+    style.configure(
+        "Danger.TButton",
+        background=COLORS["danger"],
+        foreground="#ffffff",
+        padding=(14, 8),
+    )
     style.map(
         "Danger.TButton",
         background=[
@@ -343,10 +377,19 @@ def configure_theme(root):
         foreground=[("disabled", COLORS["muted"]), ("!disabled", "#ffffff")],
     )
     style.configure("Icon.TButton", padding=(7, 5), width=3)
-    style.configure("Disclosure.TButton", background=COLORS["surface"], foreground=COLORS["text"], anchor="w", padding=(4, 6))
+    style.configure(
+        "Disclosure.TButton",
+        background=COLORS["surface"],
+        foreground=COLORS["text"],
+        anchor="w",
+        padding=(4, 6),
+    )
     style.map(
         "Disclosure.TButton",
-        background=[("pressed", COLORS["button_pressed"]), ("active", COLORS["button_hover"])],
+        background=[
+            ("pressed", COLORS["button_pressed"]),
+            ("active", COLORS["button_hover"]),
+        ],
     )
 
     style.configure("TEntry", fieldbackground=COLORS["surface"], padding=7)
@@ -354,7 +397,9 @@ def configure_theme(root):
     style.configure("TSpinbox", fieldbackground=COLORS["surface"], padding=6)
     style.configure("TCheckbutton", background=COLORS["surface"], padding=(3, 5))
     style.map("TCheckbutton", background=[("active", COLORS["accent_soft"])])
-    style.configure("TNotebook", background=COLORS["app"], borderwidth=0, tabmargins=(12, 10, 12, 0))
+    style.configure(
+        "TNotebook", background=COLORS["app"], borderwidth=0, tabmargins=(12, 10, 12, 0)
+    )
     style.configure("TNotebook.Tab", padding=(20, 10), font=("Segoe UI Semibold", 10))
     style.map(
         "TNotebook.Tab",
@@ -371,7 +416,10 @@ def configure_theme(root):
     )
     style.map(
         "Vertical.TScrollbar",
-        background=[("pressed", COLORS["button_pressed"]), ("active", COLORS["button_hover"])],
+        background=[
+            ("pressed", COLORS["button_pressed"]),
+            ("active", COLORS["button_hover"]),
+        ],
     )
     style.configure(
         "Horizontal.TScale",
@@ -388,18 +436,59 @@ def configure_theme(root):
         bordercolor=COLORS["border"],
         rowheight=34,
     )
-    style.map("Treeview", background=[("selected", COLORS["accent_soft"])], foreground=[("selected", COLORS["text"])])
-    style.configure("Treeview.Heading", background=COLORS["surface_alt"], foreground=COLORS["muted"], relief="flat", padding=(9, 8), font=("Segoe UI Semibold", 9))
+    style.map(
+        "Treeview",
+        background=[("selected", COLORS["accent_soft"])],
+        foreground=[("selected", COLORS["text"])],
+    )
+    style.configure(
+        "Treeview.Heading",
+        background=COLORS["surface_alt"],
+        foreground=COLORS["muted"],
+        relief="flat",
+        padding=(9, 8),
+        font=("Segoe UI Semibold", 9),
+    )
     style.map("Treeview.Heading", background=[("active", COLORS["border"])])
 
-    style.configure("TLabelframe", background=COLORS["surface"], bordercolor=COLORS["border"], padding=10)
-    style.configure("TLabelframe.Label", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI Semibold", 9))
+    style.configure(
+        "TLabelframe",
+        background=COLORS["surface"],
+        bordercolor=COLORS["border"],
+        padding=10,
+    )
+    style.configure(
+        "TLabelframe.Label",
+        background=COLORS["surface"],
+        foreground=COLORS["text"],
+        font=("Segoe UI Semibold", 9),
+    )
     style.configure("Horizontal.TSeparator", background=COLORS["border"])
 
-    style.configure("Watching.Status.TLabel", background=COLORS["surface"], foreground=COLORS["success"], font=("Segoe UI Semibold", 10))
-    style.configure("WatchingPulse.Status.TLabel", background=COLORS["surface"], foreground=COLORS["success_bright"], font=("Segoe UI Semibold", 10))
-    style.configure("Idle.Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], font=("Segoe UI Semibold", 10))
-    style.configure("Error.Status.TLabel", background=COLORS["surface"], foreground=COLORS["danger"], font=("Segoe UI Semibold", 10))
+    style.configure(
+        "Watching.Status.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["success"],
+        font=("Segoe UI Semibold", 10),
+    )
+    style.configure(
+        "WatchingPulse.Status.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["success_bright"],
+        font=("Segoe UI Semibold", 10),
+    )
+    style.configure(
+        "Idle.Status.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["muted"],
+        font=("Segoe UI Semibold", 10),
+    )
+    style.configure(
+        "Error.Status.TLabel",
+        background=COLORS["surface"],
+        foreground=COLORS["danger"],
+        font=("Segoe UI Semibold", 10),
+    )
 
     root.bind_class(
         "TButton",
@@ -515,8 +604,10 @@ class Tooltip:
 
 
 def condition_choices(conditions, include_blank=False, blank_label="None"):
-    choices = [f"{index}: {os.path.basename(condition.template_path) or 'Unnamed condition'}"
-               for index, condition in enumerate(conditions or [])]
+    choices = [
+        f"{index}: {os.path.basename(condition.template_path) or 'Unnamed condition'}"
+        for index, condition in enumerate(conditions or [])
+    ]
     return ([blank_label] + choices) if include_blank else choices
 
 
@@ -542,7 +633,10 @@ def condition_name(conditions, index, fallback="Automatic target"):
     if index is None:
         return fallback
     if 0 <= index < len(conditions or []):
-        return os.path.basename(conditions[index].template_path) or f"Condition {index + 1}"
+        return (
+            os.path.basename(conditions[index].template_path)
+            or f"Condition {index + 1}"
+        )
     return f"Missing condition {index + 1}"
 
 
@@ -581,13 +675,15 @@ def action_display_summary(action, conditions):
             target = condition_name(conditions, action.on_condition_index)
         return f"Click {target}"
     if action.type == "click_matching_row":
-        reference = condition_name(conditions, action.match_condition_index, "Unselected row")
-        target = condition_name(conditions, action.on_condition_index, "Unselected target")
+        reference = condition_name(
+            conditions, action.match_condition_index, "Unselected row"
+        )
+        target = condition_name(
+            conditions, action.on_condition_index, "Unselected target"
+        )
         rows = "all rows" if action.row_mode == "all" else "first row"
         level = ""
-        max_level = (
-            None if has_smart_rally_team_prefilter(action) else action.max_level
-        )
+        max_level = None if has_smart_rally_team_prefilter(action) else action.max_level
         if action.min_level is not None or max_level is not None:
             low = "any" if action.min_level is None else action.min_level
             high = "any" if max_level is None else max_level
@@ -604,8 +700,7 @@ def action_display_summary(action, conditions):
             else ""
         )
         return (
-            f"Click {target} on {rows} matching {reference}"
-            f"{level}{delay}{availability}"
+            f"Click {target} on {rows} matching {reference}{level}{delay}{availability}"
         )
     if action.type == "select_rally_team":
         anchor = condition_name(

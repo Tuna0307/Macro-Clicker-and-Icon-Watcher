@@ -173,17 +173,24 @@ class TemplateManagerTests(unittest.TestCase):
             cv2.imwrite(outside_path, np.zeros((8, 8, 3), dtype=np.uint8))
             manifest_path = os.path.join(templates_dir, "manifest.json")
             with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "items": [{
-                        "id": 1,
-                        "name": "unsafe",
-                        "file": "../outside.png",
-                        "threshold": 0.8,
-                    }]
-                }, f)
+                json.dump(
+                    {
+                        "items": [
+                            {
+                                "id": 1,
+                                "name": "unsafe",
+                                "file": "../outside.png",
+                                "threshold": 0.8,
+                            }
+                        ]
+                    },
+                    f,
+                )
 
-            with patch.object(watcher, "TEMPLATES_DIR", templates_dir), \
-                    patch.object(watcher, "MANIFEST_PATH", manifest_path):
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
                 tm = watcher.TemplateManager()
                 tm.remove(1)
 
@@ -199,8 +206,10 @@ class TemplateManagerTests(unittest.TestCase):
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(None, f)
 
-            with patch.object(watcher, "TEMPLATES_DIR", templates_dir), \
-                    patch.object(watcher, "MANIFEST_PATH", manifest_path):
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
                 tm = watcher.TemplateManager()
 
             self.assertEqual(tm.snapshot(), [])
@@ -216,22 +225,33 @@ class TemplateManagerTests(unittest.TestCase):
             )
             manifest_path = os.path.join(templates_dir, "manifest.json")
             with open(manifest_path, "w", encoding="utf-8") as file:
-                json.dump({
-                    "items": [{
-                        "id": 1,
-                        "name": "legacy",
-                        "file": "template_1.png",
-                        "threshold": 0.8,
-                        "match_mode": "unknown",
-                    }]
-                }, file)
+                json.dump(
+                    {
+                        "items": [
+                            {
+                                "id": 1,
+                                "name": "legacy",
+                                "file": "template_1.png",
+                                "threshold": 0.8,
+                                "match_mode": "unknown",
+                            }
+                        ]
+                    },
+                    file,
+                )
 
-            with patch.object(watcher, "TEMPLATES_DIR", templates_dir), \
-                    patch.object(watcher, "MANIFEST_PATH", manifest_path):
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
                 tm = watcher.TemplateManager()
 
-            self.assertEqual(tm.snapshot()[0]["match_mode"], watcher.MATCH_MODE_ANIMATED)
-            self.assertTrue(any("invalid match mode" in item for item in tm.load_warnings))
+            self.assertEqual(
+                tm.snapshot()[0]["match_mode"], watcher.MATCH_MODE_ANIMATED
+            )
+            self.assertTrue(
+                any("invalid match mode" in item for item in tm.load_warnings)
+            )
 
     def test_add_skips_unlisted_existing_template_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -242,8 +262,10 @@ class TemplateManagerTests(unittest.TestCase):
             cv2.imwrite(existing_path, existing)
             manifest_path = os.path.join(templates_dir, "manifest.json")
 
-            with patch.object(watcher, "TEMPLATES_DIR", templates_dir), \
-                    patch.object(watcher, "MANIFEST_PATH", manifest_path):
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
                 tm = watcher.TemplateManager()
                 tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "new")
 
@@ -259,7 +281,11 @@ class TemplateManagerTests(unittest.TestCase):
 
         self.assertEqual(tm.snapshot(), [])
         self.assertEqual(
-            [name for name in os.listdir(watcher.TEMPLATES_DIR) if name.endswith(".png")],
+            [
+                name
+                for name in os.listdir(watcher.TEMPLATES_DIR)
+                if name.endswith(".png")
+            ],
             [],
         )
 
@@ -362,6 +388,7 @@ class DetectionTests(unittest.TestCase):
 
                 self.assertGreaterEqual(score, 0.95)
                 self.assertEqual(location, (70, 25))
+
     def test_matching_finds_smaller_icon_with_small_rotation(self):
         icon = np.zeros((48, 58, 3), dtype=np.uint8)
         cv2.rectangle(icon, (8, 8), (50, 40), (40, 180, 240), -1)
@@ -372,7 +399,9 @@ class DetectionTests(unittest.TestCase):
             (int(icon.shape[1] * 0.65), int(icon.shape[0] * 0.65)),
             interpolation=cv2.INTER_AREA,
         )
-        matrix = cv2.getRotationMatrix2D((smaller.shape[1] / 2, smaller.shape[0] / 2), 5, 1.0)
+        matrix = cv2.getRotationMatrix2D(
+            (smaller.shape[1] / 2, smaller.shape[0] / 2), 5, 1.0
+        )
         rotated = cv2.warpAffine(
             smaller,
             matrix,
@@ -381,9 +410,11 @@ class DetectionTests(unittest.TestCase):
             borderMode=cv2.BORDER_REPLICATE,
         )
         screen = np.zeros((120, 160, 3), dtype=np.uint8)
-        screen[40:40 + rotated.shape[0], 50:50 + rotated.shape[1]] = rotated
+        screen[40 : 40 + rotated.shape[0], 50 : 50 + rotated.shape[1]] = rotated
 
-        score, loc, scale = watcher.match_template_multiscale(screen, icon, use_grayscale=False)
+        score, loc, scale = watcher.match_template_multiscale(
+            screen, icon, use_grayscale=False
+        )
 
         self.assertGreaterEqual(score, 0.95)
         self.assertEqual(loc, (50, 40))
@@ -447,15 +478,17 @@ class DetectionTests(unittest.TestCase):
             ) as match:
                 results = watcher.test_detection_on_screenshot(
                     path,
-                    [{
-                        "id": 2,
-                        "name": "region icon",
-                        "threshold": 0.8,
-                        "image": np.zeros((4, 4, 3), dtype=np.uint8),
-                        "region": (130, 240, 20, 25),
-                        "region_mode": "screen",
-                        "variants": sentinel.cached_variants,
-                    }],
+                    [
+                        {
+                            "id": 2,
+                            "name": "region icon",
+                            "threshold": 0.8,
+                            "image": np.zeros((4, 4, 3), dtype=np.uint8),
+                            "region": (130, 240, 20, 25),
+                            "region_mode": "screen",
+                            "variants": sentinel.cached_variants,
+                        }
+                    ],
                     region=(100, 200, 70, 70),
                     region_origin=(100, 200),
                 )
@@ -478,14 +511,16 @@ class DetectionTests(unittest.TestCase):
             cv2.imwrite(path, screen)
             results = watcher.test_detection_on_screenshot(
                 path,
-                [{
-                    "id": 1,
-                    "name": "cropped",
-                    "threshold": 0.85,
-                    "image": icon,
-                    "region": (1500, 900, 100, 80),
-                    "region_mode": "screen",
-                }],
+                [
+                    {
+                        "id": 1,
+                        "name": "cropped",
+                        "threshold": 0.85,
+                        "image": icon,
+                        "region": (1500, 900, 100, 80),
+                        "region_mode": "screen",
+                    }
+                ],
                 monitor_box=(0, 0, 1920, 1080),
                 apply_saved_regions=False,
             )
@@ -497,7 +532,9 @@ class DetectionTests(unittest.TestCase):
     def test_cancel_event_stops_between_template_variants(self):
         screen = np.zeros((30, 30, 3), dtype=np.uint8)
         icon = np.zeros((5, 5, 3), dtype=np.uint8)
-        variants = watcher.prepare_template_variants(icon, scales=[1.0, 1.1], rotations=[0])
+        variants = watcher.prepare_template_variants(
+            icon, scales=[1.0, 1.1], rotations=[0]
+        )
         cancelled = watcher.threading.Event()
         cancelled.set()
 
@@ -608,12 +645,14 @@ class WatcherThreadTests(unittest.TestCase):
 
         thread._wait_for_next_cycle = finish_after_two_cycles
         scores = iter((0.92, 0.10, 0.92, 0.10))
-        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
-                patch.object(
-                    watcher,
-                    "match_template_multiscale",
-                    side_effect=lambda *_args, **_kwargs: (next(scores), (1, 1), 1.0),
-                ):
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                side_effect=lambda *_args, **_kwargs: (next(scores), (1, 1), 1.0),
+            ),
+        ):
             thread.run()
 
         alerts = [event for event in watcher._drain_queue(events) if "id" in event]
@@ -670,12 +709,14 @@ class WatcherThreadTests(unittest.TestCase):
         )
         thread._wait_for_next_cycle = thread.stop
 
-        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
-                patch.object(
-                    watcher,
-                    "match_template_multiscale",
-                    return_value=(0.0, None, 1.0),
-                ):
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ),
+        ):
             thread.run()
 
         self.assertEqual(
@@ -713,16 +754,20 @@ class WatcherThreadTests(unittest.TestCase):
         thread = watcher.WatcherThread(FakeManager(), events, logs)
         thread._wait_for_next_cycle = thread.stop
 
-        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
-                patch.object(
-                    watcher,
-                    "match_template_multiscale",
-                    return_value=(0.0, None, 1.0),
-                ) as matcher:
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ) as matcher,
+        ):
             thread.run()
 
         self.assertEqual(matcher.call_count, 1)
-        self.assertFalse(any("Watcher error" in item for item in watcher._drain_queue(logs)))
+        self.assertFalse(
+            any("Watcher error" in item for item in watcher._drain_queue(logs))
+        )
 
     def test_target_window_automatically_follows_its_physical_monitor(self):
         item = self._template_item()
@@ -749,7 +794,9 @@ class WatcherThreadTests(unittest.TestCase):
 
             def grab(self, monitor):
                 self.requests.append(monitor)
-                return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+                return np.zeros(
+                    (monitor["height"], monitor["width"], 4), dtype=np.uint8
+                )
 
         capture = FakeCapture()
         thread = watcher.WatcherThread(
@@ -762,12 +809,14 @@ class WatcherThreadTests(unittest.TestCase):
         )
         thread._wait_for_next_cycle = thread.stop
 
-        with patch.object(watcher.mss, "MSS", return_value=capture), \
-                patch.object(
-                    watcher,
-                    "match_template_multiscale",
-                    return_value=(0.0, None, 1.0),
-                ):
+        with (
+            patch.object(watcher.mss, "MSS", return_value=capture),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ),
+        ):
             thread.run()
 
         self.assertEqual(capture.requests, [capture.monitors[2]])
@@ -824,12 +873,14 @@ class WatcherThreadTests(unittest.TestCase):
             thread.stop()
             return 0.9, (1, 1), 1.0
 
-        with patch.object(watcher.mss, "MSS", return_value=FakeCapture()), \
-                patch.object(
-                    watcher,
-                    "match_template_multiscale",
-                    side_effect=stop_during_first_match,
-                ):
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                side_effect=stop_during_first_match,
+            ),
+        ):
             thread.run()
 
         self.assertEqual(len(calls), 1)
@@ -869,17 +920,21 @@ class WatcherThreadTests(unittest.TestCase):
 
         thread = watcher.WatcherThread(Mock(), queue.Queue(), queue.Queue())
         entry = self._template_item()
-        entry.update({
-            "match_mode": watcher.MATCH_MODE_TEXT,
-            "threshold": 0.9,
-            "region": (110, 220, 30, 10),
-        })
+        entry.update(
+            {
+                "match_mode": watcher.MATCH_MODE_TEXT,
+                "threshold": 0.9,
+                "region": (110, 220, 30, 10),
+            }
+        )
         monitor = {"left": 100, "top": 200, "width": 80, "height": 60}
         capture = FakeCapture()
         config = thread._config_snapshot()
 
-        with patch.object(watcher, "TEXT_CONFIRMATION_DELAY_SEC", 0.0), \
-                patch.object(thread, "_match_entry", return_value=(0.94, (1, 1), 1.0)):
+        with (
+            patch.object(watcher, "TEXT_CONFIRMATION_DELAY_SEC", 0.0),
+            patch.object(thread, "_match_entry", return_value=(0.94, (1, 1), 1.0)),
+        ):
             result = thread._confirm_text_candidate(
                 capture,
                 monitor,
@@ -964,12 +1019,16 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
 
         frame._start_watching()
 
-        frame._append_log.assert_called_once_with("Watcher is already running or still stopping.")
+        frame._append_log.assert_called_once_with(
+            "Watcher is already running or still stopping."
+        )
 
     def test_hotkey_callback_queues_ui_work_without_calling_tk(self):
         frame = object.__new__(watcher.AlertWatcherFrame)
         frame.event_queue = queue.Queue()
-        frame.after = Mock(side_effect=AssertionError("Tk must not be called from hotkey thread"))
+        frame.after = Mock(
+            side_effect=AssertionError("Tk must not be called from hotkey thread")
+        )
 
         frame._toggle_watching_from_hotkey()
 
@@ -1061,7 +1120,10 @@ class SettingsTests(unittest.TestCase):
 
     def test_non_object_settings_json_uses_defaults(self):
         for invalid_data in (None, 7, ["not", "settings"]):
-            with self.subTest(invalid_data=invalid_data), tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                self.subTest(invalid_data=invalid_data),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
                 path = os.path.join(temp_dir, "settings.json")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(invalid_data, f)
@@ -1074,13 +1136,16 @@ class SettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "settings.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "cooldown_sec": float("nan"),
-                    "alert_volume": float("inf"),
-                    "grayscale": "yes",
-                    "scan_region": [1, 2, -3, 4],
-                    "target_window_title": 123,
-                }, f)
+                json.dump(
+                    {
+                        "cooldown_sec": float("nan"),
+                        "alert_volume": float("inf"),
+                        "grayscale": "yes",
+                        "scan_region": [1, 2, -3, 4],
+                        "target_window_title": 123,
+                    },
+                    f,
+                )
 
             loaded = watcher.load_settings(path)
 
@@ -1138,9 +1203,11 @@ class SoundTests(unittest.TestCase):
         fake_pygame.play_called = False
         fake_pygame.last_sound = None
 
-        with patch.object(watcher, "HAVE_PYGAME", True), \
-                patch.object(watcher, "pygame", fake_pygame), \
-                patch.object(watcher, "threading") as threading_module:
+        with (
+            patch.object(watcher, "HAVE_PYGAME", True),
+            patch.object(watcher, "pygame", fake_pygame),
+            patch.object(watcher, "threading") as threading_module,
+        ):
             threading_module.Thread.side_effect = FakeThread
 
             watcher.play_alert_sound(volume=0.37)
@@ -1164,8 +1231,10 @@ class SoundTests(unittest.TestCase):
         watcher._PENDING_SOUND_VOLUME = None
         self.addCleanup(setattr, watcher, "_SOUND_THREAD", None)
         self.addCleanup(setattr, watcher, "_PENDING_SOUND_VOLUME", None)
-        with patch.object(watcher.threading, "Thread", DeferredThread), \
-                patch.object(watcher, "_play_alert_once") as play_once:
+        with (
+            patch.object(watcher.threading, "Thread", DeferredThread),
+            patch.object(watcher, "_play_alert_once") as play_once,
+        ):
             watcher.play_alert_sound(0.2)
             watcher.play_alert_sound(0.3)
             watcher.play_alert_sound(0.4)
@@ -1194,7 +1263,9 @@ class WindowRegionTests(unittest.TestCase):
             "Last War",
             window_provider=lambda: [
                 InvalidWindow(),
-                FakeWindow("Last War-Survival Game", left=10, top=20, width=800, height=600),
+                FakeWindow(
+                    "Last War-Survival Game", left=10, top=20, width=800, height=600
+                ),
             ],
         )
 
@@ -1231,7 +1302,9 @@ class WindowRegionTests(unittest.TestCase):
             "region_window_size": None,
         }
 
-        self.assertIs(wt._resolve_item_scan_region(item, None), watcher.REGION_UNAVAILABLE)
+        self.assertIs(
+            wt._resolve_item_scan_region(item, None), watcher.REGION_UNAVAILABLE
+        )
         self.assertIn("Target window not found", logs.get_nowait())
 
     def test_monitor_relative_item_region_moves_and_scales(self):

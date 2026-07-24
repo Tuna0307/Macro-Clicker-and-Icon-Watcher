@@ -23,11 +23,15 @@ class StepPreviewTests(unittest.TestCase):
         engine._load_template = lambda path: template
         cond = ImageCondition(template_path="templates/Mob.png", confidence=0.99)
 
-        ok, matches, _ = engine._preview_template_condition(0, cond, frame, 100, 200, None)
+        ok, matches, _ = engine._preview_template_condition(
+            0, cond, frame, 100, 200, None
+        )
 
         self.assertTrue(ok)
         self.assertEqual(len(matches), 2)
-        self.assertEqual([m["image_box"] for m in matches], [(3, 2, 6, 5), (25, 12, 28, 15)])
+        self.assertEqual(
+            [m["image_box"] for m in matches], [(3, 2, 6, 5), (25, 12, 28, 15)]
+        )
 
     def test_preview_template_condition_matches_slightly_scaled_template(self):
         import cv2
@@ -41,7 +45,9 @@ class StepPreviewTests(unittest.TestCase):
         engine._load_template = lambda path: template
         cond = ImageCondition(template_path="templates/2_3Squad.png", confidence=0.85)
 
-        ok, matches, _ = engine._preview_template_condition(0, cond, frame, 100, 200, None)
+        ok, matches, _ = engine._preview_template_condition(
+            0, cond, frame, 100, 200, None
+        )
 
         self.assertTrue(ok)
         self.assertEqual(len(matches), 1)
@@ -182,8 +188,14 @@ class StepPreviewTests(unittest.TestCase):
 
         self.assertIs(preview["image"], image_a)
         self.assertEqual(
-            [(p["condition_index"], p["ok"], p["image"], p["capture_box"]) for p in preview["condition_previews"]],
-            [(0, True, image_a, (10, 20, 30, 40)), (1, False, image_b, (100, 200, 30, 40))],
+            [
+                (p["condition_index"], p["ok"], p["image"], p["capture_box"])
+                for p in preview["condition_previews"]
+            ],
+            [
+                (0, True, image_a, (10, 20, 30, 40)),
+                (1, False, image_b, (100, 200, 30, 40)),
+            ],
         )
 
 

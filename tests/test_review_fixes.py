@@ -55,8 +55,14 @@ class ReviewFixTests(unittest.TestCase):
             with open(existing, "wb") as f:
                 f.write(b"old")
 
-            with patch.object(capture_tool, "select_region", return_value=((0, 0, 10, 10), crop)), \
-                    patch.object(capture_tool.simpledialog, "askstring", return_value="Rally"):
+            with (
+                patch.object(
+                    capture_tool, "select_region", return_value=((0, 0, 10, 10), crop)
+                ),
+                patch.object(
+                    capture_tool.simpledialog, "askstring", return_value="Rally"
+                ),
+            ):
                 path = capture_tool.capture_template(None, save_dir=tmp)
 
             self.assertTrue(os.path.isfile(path))
@@ -102,9 +108,9 @@ class ReviewFixTests(unittest.TestCase):
         frame._close_when_stopped = False
         frame._destroy_scheduled = False
         frame._shutting_down = False
-        frame.after = lambda delay, callback: scheduled.append(
-            (delay, callback.__name__)
-        ) or f"retry-{len(scheduled)}"
+        frame.after = lambda delay, callback: (
+            scheduled.append((delay, callback.__name__)) or f"retry-{len(scheduled)}"
+        )
 
         frame._schedule_failed_settings_retry()
         frame._schedule_failed_template_retry()
@@ -196,9 +202,11 @@ class ReviewFixTests(unittest.TestCase):
         ui.scenario_var = FakeVar("Current")
         ui._save_scenario = Mock()
 
-        with patch.object(app.simpledialog, "askstring", return_value="Existing"), \
-                patch.object(app, "list_scenarios", return_value=["Existing"]), \
-                patch.object(app.messagebox, "showerror") as showerror:
+        with (
+            patch.object(app.simpledialog, "askstring", return_value="Existing"),
+            patch.object(app, "list_scenarios", return_value=["Existing"]),
+            patch.object(app.messagebox, "showerror") as showerror,
+        ):
             ui._save_scenario_as()
 
         ui._save_scenario.assert_not_called()
@@ -217,8 +225,10 @@ class ReviewFixTests(unittest.TestCase):
         ui._refresh_scenario_list = Mock()
         ui._refresh_steps = Mock()
 
-        with patch.object(app.messagebox, "askyesno", return_value=True), \
-                patch.object(app, "delete_scenario") as delete_scenario:
+        with (
+            patch.object(app.messagebox, "askyesno", return_value=True),
+            patch.object(app, "delete_scenario") as delete_scenario,
+        ):
             ui._delete_scenario()
 
         delete_scenario.assert_called_once_with("Old")
@@ -250,10 +260,34 @@ class ReviewFixTests(unittest.TestCase):
     def test_click_point_moves_only_once_when_move_duration_is_zero(self):
         engine = object.__new__(MacroEngine)
         engine.click_move_duration = 0.0
+        engine.sct = type(
+            "Capture",
+            (),
+            {
+                "monitors": [
+                    {"left": 0, "top": 0, "width": 100, "height": 100},
+                    {"left": 0, "top": 0, "width": 100, "height": 100},
+                ]
+            },
+        )()
         calls = []
 
-        with patch.object(engine_module.pyautogui, "moveTo", side_effect=lambda *args, **kwargs: calls.append(("move", args, kwargs))), \
-                patch.object(engine_module.pyautogui, "click", side_effect=lambda *args, **kwargs: calls.append(("click", args, kwargs))):
+        with (
+            patch.object(
+                engine_module.pyautogui,
+                "moveTo",
+                side_effect=lambda *args, **kwargs: calls.append(
+                    ("move", args, kwargs)
+                ),
+            ),
+            patch.object(
+                engine_module.pyautogui,
+                "click",
+                side_effect=lambda *args, **kwargs: calls.append(
+                    ("click", args, kwargs)
+                ),
+            ),
+        ):
             engine._click_point(10, 20, "left")
 
         self.assertEqual(len(calls), 1)
@@ -296,7 +330,9 @@ class ReviewFixTests(unittest.TestCase):
         ui.control_queue = queue.Queue()
         ui._start_hotkey_handle = None
 
-        with patch.object(app.keyboard, "add_hotkey", return_value="f8-handle") as add_hotkey:
+        with patch.object(
+            app.keyboard, "add_hotkey", return_value="f8-handle"
+        ) as add_hotkey:
             ui._register_start_hotkey()
             callback = add_hotkey.call_args.args[1]
             callback()
@@ -311,8 +347,12 @@ class ReviewFixTests(unittest.TestCase):
         ui._start_hotkey_handle = "old-handle"
         ui._queue_log = Mock()
 
-        with patch.object(app.keyboard, "add_hotkey", return_value="new-handle") as add_hotkey, \
-                patch.object(app.keyboard, "remove_hotkey") as remove_hotkey:
+        with (
+            patch.object(
+                app.keyboard, "add_hotkey", return_value="new-handle"
+            ) as add_hotkey,
+            patch.object(app.keyboard, "remove_hotkey") as remove_hotkey,
+        ):
             registered = ui._register_start_hotkey()
 
         self.assertTrue(registered)
@@ -339,15 +379,17 @@ class ReviewFixTests(unittest.TestCase):
         )
 
     def test_action_from_dict_coerces_saved_json_types(self):
-        action = Action.from_dict({
-            "type": "click_matching_row",
-            "on_condition_index": "2",
-            "match_condition_index": "1",
-            "row_tolerance": "45",
-            "max_level": "55",
-            "no_match_disable_steps": "Joining, Attack Confirm",
-            "set_enabled": "false",
-        })
+        action = Action.from_dict(
+            {
+                "type": "click_matching_row",
+                "on_condition_index": "2",
+                "match_condition_index": "1",
+                "row_tolerance": "45",
+                "max_level": "55",
+                "no_match_disable_steps": "Joining, Attack Confirm",
+                "set_enabled": "false",
+            }
+        )
 
         self.assertEqual(action.on_condition_index, 2)
         self.assertEqual(action.match_condition_index, 1)
@@ -358,7 +400,9 @@ class ReviewFixTests(unittest.TestCase):
 
     def test_load_scenario_reports_malformed_json_as_value_error(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with open(os.path.join(temp_dir, "Broken.json"), "w", encoding="utf-8") as f:
+            with open(
+                os.path.join(temp_dir, "Broken.json"), "w", encoding="utf-8"
+            ) as f:
                 f.write("{not json")
 
             with self.assertRaises(ValueError) as ctx:
@@ -436,8 +480,18 @@ class ReviewFixTests(unittest.TestCase):
         engine.scenario = Scenario(
             name="cache",
             steps=[
-                Step(name="one", conditions=[ImageCondition(template_path="templates/a.png", confidence=2.0)]),
-                Step(name="two", conditions=[ImageCondition(template_path="templates/b.png", confidence=2.0)]),
+                Step(
+                    name="one",
+                    conditions=[
+                        ImageCondition(template_path="templates/a.png", confidence=2.0)
+                    ],
+                ),
+                Step(
+                    name="two",
+                    conditions=[
+                        ImageCondition(template_path="templates/b.png", confidence=2.0)
+                    ],
+                ),
             ],
         )
         engine._last_fired = {"one": 0.0, "two": 0.0}
@@ -467,7 +521,9 @@ class ReviewFixTests(unittest.TestCase):
                 return False, {}, {}
 
         engine = object.__new__(CacheAwareEngine)
-        engine.scenario = Scenario(name="cache-aware", steps=[Step(name="one", cooldown=0.0)])
+        engine.scenario = Scenario(
+            name="cache-aware", steps=[Step(name="one", cooldown=0.0)]
+        )
         engine._last_fired = {"one": 0.0}
         engine._stop_event = threading.Event()
         engine.log = lambda _message: None
@@ -558,7 +614,9 @@ class ReviewFixTests(unittest.TestCase):
                 pass
 
             def index(self, *_args):
-                raise AssertionError("line counting should use the counter, not Text.index")
+                raise AssertionError(
+                    "line counting should use the counter, not Text.index"
+                )
 
         frame = object.__new__(alert_watcher.AlertWatcherFrame)
         frame.log_text = FakeText()
@@ -572,8 +630,10 @@ class ReviewFixTests(unittest.TestCase):
 
     def test_save_scenario_uses_atomic_replace(self):
         scenario = Scenario(name="Atomic")
-        with tempfile.TemporaryDirectory() as temp_dir, \
-                patch.object(models.os, "replace", wraps=models.os.replace) as replace:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(models.os, "replace", wraps=models.os.replace) as replace,
+        ):
             path = models.save_scenario(scenario, folder=temp_dir)
 
             replace.assert_called_once()
@@ -590,8 +650,12 @@ class ReviewFixTests(unittest.TestCase):
 
     def test_alert_settings_save_uses_atomic_replace(self):
         settings = alert_watcher.AppSettings(target_window_title="Game")
-        with tempfile.TemporaryDirectory() as temp_dir, \
-                patch.object(alert_watcher.os, "replace", wraps=alert_watcher.os.replace) as replace:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(
+                alert_watcher.os, "replace", wraps=alert_watcher.os.replace
+            ) as replace,
+        ):
             path = os.path.join(temp_dir, "settings.json")
 
             alert_watcher.save_settings(path, settings)
@@ -601,14 +665,20 @@ class ReviewFixTests(unittest.TestCase):
 
     def test_engine_cycle_does_not_inspect_signature_every_cycle_when_cached(self):
         engine = object.__new__(MacroEngine)
-        engine.scenario = Scenario(name="cached", steps=[Step(name="one", cooldown=0.0)])
+        engine.scenario = Scenario(
+            name="cached", steps=[Step(name="one", cooldown=0.0)]
+        )
         engine._last_fired = {"one": 0.0}
         engine._stop_event = threading.Event()
         engine.log = lambda _message: None
         engine._evaluate_uses_frame_cache = False
         engine._evaluate_step = lambda _step: (False, {}, {})
 
-        with patch.object(engine_module.inspect, "signature", side_effect=AssertionError("should be cached")):
+        with patch.object(
+            engine_module.inspect,
+            "signature",
+            side_effect=AssertionError("should be cached"),
+        ):
             engine._cycle()
 
     def test_mouse_position_fill_hides_dialog_and_writes_pointer_coordinates(self):

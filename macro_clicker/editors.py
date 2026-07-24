@@ -53,6 +53,7 @@ from .window_locator import (
     resolve_saved_capture_region,
 )
 
+
 def _monitor_box(monitor_index=1):
     with mss.MSS() as sct:
         monitors = sct.monitors
@@ -75,9 +76,7 @@ def _cleanup_captured_templates(captured_paths, keep_template_path=None):
     """Remove captures created by a dialog unless the saved condition uses one."""
     keep_path = None
     if keep_template_path:
-        keep_path = os.path.normcase(
-            os.path.abspath(project_path(keep_template_path))
-        )
+        keep_path = os.path.normcase(os.path.abspath(project_path(keep_template_path)))
     for captured_path in captured_paths:
         absolute_path = os.path.normcase(os.path.abspath(captured_path))
         if keep_path is not None and absolute_path == keep_path:
@@ -121,8 +120,12 @@ def schedule_mouse_position_fill(win, x_var, y_var, delay_ms=2000):
     win.after(delay_ms, capture_pointer)
 
 
-def resolve_condition_preview_box(cond: ImageCondition, target_window_title="", monitor_index=1,
-                                  window_rect_provider=find_window_rect):
+def resolve_condition_preview_box(
+    cond: ImageCondition,
+    target_window_title="",
+    monitor_index=1,
+    window_rect_provider=find_window_rect,
+):
     title = (target_window_title or "").strip()
     window_rect = None
 
@@ -169,7 +172,9 @@ class MultiRegionOverlay(tk.Toplevel):
         except tk.TclError:
             self.attributes("-alpha", 0.35)
 
-        self.canvas = tk.Canvas(self, bg=transparent, highlightthickness=0, cursor="hand2")
+        self.canvas = tk.Canvas(
+            self, bg=transparent, highlightthickness=0, cursor="hand2"
+        )
         self.canvas.pack(fill="both", expand=True)
 
         for box, label, color in boxes:
@@ -186,12 +191,20 @@ class MultiRegionOverlay(tk.Toplevel):
             text_y = y0 - 16 if y0 >= 28 else y1 + 16
             text = f"{label}: {w}x{h} at {x},{y}"
             self.canvas.create_text(
-                x0 + 2, text_y, text=text, fill="#000000",
-                anchor="w", font=("Segoe UI", 12, "bold"),
+                x0 + 2,
+                text_y,
+                text=text,
+                fill="#000000",
+                anchor="w",
+                font=("Segoe UI", 12, "bold"),
             )
             self.canvas.create_text(
-                x0, text_y - 2, text=text, fill=color,
-                anchor="w", font=("Segoe UI", 12, "bold"),
+                x0,
+                text_y - 2,
+                text=text,
+                fill=color,
+                anchor="w",
+                font=("Segoe UI", 12, "bold"),
             )
 
         self.bind("<Escape>", lambda _event: self.destroy())
@@ -209,8 +222,13 @@ class MultiRegionOverlay(tk.Toplevel):
 # Condition editor dialog
 # ----------------------------------------------------------------------
 
-def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_index=1,
-                     target_window_title=""):
+
+def condition_dialog(
+    parent,
+    cond: Optional[ImageCondition] = None,
+    monitor_index=1,
+    target_window_title="",
+):
     win = tk.Toplevel(parent)
     win.title("Edit Condition" if cond else "Add Condition")
     win.transient(parent)
@@ -222,7 +240,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
 
     template_var = tk.StringVar(value=cond.template_path if cond else "")
     confidence_var = tk.DoubleVar(value=cond.confidence if cond else 0.85)
-    comparison_template_var = tk.StringVar(value=cond.comparison_template_path if cond else "")
+    comparison_template_var = tk.StringVar(
+        value=cond.comparison_template_path if cond else ""
+    )
     comparison_margin_var = tk.DoubleVar(value=cond.comparison_margin if cond else 0.03)
     comparison_reference = (
         cond.comparison_template_reference_size
@@ -263,9 +283,13 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     negate_var = tk.BooleanVar(value=cond.negate if cond else False)
     region_holder = {"region": list(cond.region) if (cond and cond.region) else None}
     region_mode_holder = {"mode": cond.region_mode if cond else "screen"}
-    region_ratio_holder = {"ratio": list(cond.region_ratio) if (cond and cond.region_ratio) else None}
+    region_ratio_holder = {
+        "ratio": list(cond.region_ratio) if (cond and cond.region_ratio) else None
+    }
     region_window_size_holder = {
-        "size": list(cond.region_window_size) if (cond and cond.region_window_size) else None
+        "size": list(cond.region_window_size)
+        if (cond and cond.region_window_size)
+        else None
     }
 
     def format_region_label():
@@ -281,12 +305,16 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
 
     pad: dict[str, Any] = {"padx": 6, "pady": 4}
 
-    ttk.Label(win, text="Template", style="Surface.TLabel").grid(row=0, column=0, sticky="w", **pad)
+    ttk.Label(win, text="Template", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", **pad
+    )
     template_entry = ttk.Entry(win, textvariable=template_var, width=42)
     template_entry.grid(row=0, column=1, columnspan=2, sticky="we", **pad)
 
     def browse():
-        path = filedialog.askopenfilename(filetypes=[("PNG images", "*.png")], initialdir="templates", parent=win)
+        path = filedialog.askopenfilename(
+            filetypes=[("PNG images", "*.png")], initialdir="templates", parent=win
+        )
         if path:
             template_var.set(portable_project_path(path))
             template_reference_size_holder["size"] = None
@@ -319,7 +347,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     template_capture_btn = ttk.Button(win, text="Capture", command=capture)
     template_capture_btn.grid(row=1, column=2, sticky="we", **pad)
 
-    ttk.Label(win, text="Confidence", style="Surface.TLabel").grid(row=2, column=0, sticky="w", **pad)
+    ttk.Label(win, text="Confidence", style="Surface.TLabel").grid(
+        row=2, column=0, sticky="w", **pad
+    )
     ttk.Spinbox(
         win,
         textvariable=confidence_var,
@@ -345,7 +375,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
             or grayscale_var.get()
         ),
     )
-    advanced_matching.grid(row=3, column=0, columnspan=3, sticky="ew", padx=6, pady=(4, 2))
+    advanced_matching.grid(
+        row=3, column=0, columnspan=3, sticky="ew", padx=6, pady=(4, 2)
+    )
     advanced_matching.content.columnconfigure(1, weight=1)
     ttk.Label(
         advanced_matching.content,
@@ -414,8 +446,12 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
         variable=negate_var,
     ).grid(row=4, column=0, columnspan=3, sticky="w", **pad)
 
-    ttk.Label(win, text="Search region", style="Surface.TLabel").grid(row=5, column=0, sticky="w", **pad)
-    ttk.Label(win, textvariable=region_var, style="Muted.TLabel").grid(row=5, column=1, sticky="w", **pad)
+    ttk.Label(win, text="Search region", style="Surface.TLabel").grid(
+        row=5, column=0, sticky="w", **pad
+    )
+    ttk.Label(win, textvariable=region_var, style="Muted.TLabel").grid(
+        row=5, column=1, sticky="w", **pad
+    )
 
     def pick_region():
         try:
@@ -535,7 +571,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     def show_region():
         try:
             temp_cond = current_condition()
-            box = resolve_condition_preview_box(temp_cond, target_window_title, monitor_index)
+            box = resolve_condition_preview_box(
+                temp_cond, target_window_title, monitor_index
+            )
         except Exception as e:
             messagebox.showerror("Show region failed", str(e), parent=win)
             return
@@ -546,14 +584,26 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
                 parent=win,
             )
             return
-        label = os.path.basename(template_var.get()) if template_var.get() else "Search region"
+        label = (
+            os.path.basename(template_var.get())
+            if template_var.get()
+            else "Search region"
+        )
         if negate_var.get():
             label = f"NOT {label}"
-        MultiRegionOverlay(win, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")])
+        MultiRegionOverlay(
+            win, [(box, label, "#ff9800" if negate_var.get() else "#ffcc00")]
+        )
 
-    ttk.Button(win, text="Show", command=show_region).grid(row=6, column=0, sticky="we", **pad)
-    ttk.Button(win, text="Pick region", command=pick_region).grid(row=6, column=1, sticky="we", **pad)
-    ttk.Button(win, text="Clear", command=clear_region).grid(row=6, column=2, sticky="we", **pad)
+    ttk.Button(win, text="Show", command=show_region).grid(
+        row=6, column=0, sticky="we", **pad
+    )
+    ttk.Button(win, text="Pick region", command=pick_region).grid(
+        row=6, column=1, sticky="we", **pad
+    )
+    ttk.Button(win, text="Clear", command=clear_region).grid(
+        row=6, column=2, sticky="we", **pad
+    )
 
     def on_ok():
         try:
@@ -567,7 +617,9 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
     btns = ttk.Frame(win, style="Surface.TFrame")
     btns.grid(row=7, column=0, columnspan=3, sticky="e", padx=6, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
-    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(side="left", padx=4)
+    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(
+        side="left", padx=4
+    )
     win.bind("<Escape>", lambda _event: win.destroy())
     win.after_idle(lambda: center_window(win, parent))
 
@@ -583,6 +635,7 @@ def condition_dialog(parent, cond: Optional[ImageCondition] = None, monitor_inde
 # ----------------------------------------------------------------------
 # Action editor dialog
 # ----------------------------------------------------------------------
+
 
 def action_dialog(
     parent,
@@ -613,11 +666,17 @@ def action_dialog(
     }
     action_type_values = {label: value for value, label in action_type_labels.items()}
 
-    ttk.Label(win, text="Action type", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=10, pady=10)
+    ttk.Label(win, text="Action type", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=10, pady=10
+    )
     type_var = tk.StringVar(value=action_type_labels.get(a.type, "Click"))
-    type_combo = ttk.Combobox(win, textvariable=type_var,
-                               values=list(action_type_values.keys()),
-                               state="readonly", width=22)
+    type_combo = ttk.Combobox(
+        win,
+        textvariable=type_var,
+        values=list(action_type_values.keys()),
+        state="readonly",
+        width=22,
+    )
     type_combo.grid(row=0, column=1, sticky="w", padx=6, pady=6)
 
     body = ttk.Frame(win, style="Surface.TFrame")
@@ -640,7 +699,9 @@ def action_dialog(
 
     # --- click fields ---
     cond_idx_var = tk.StringVar(
-        value=condition_choice_for_index(conditions, a.on_condition_index, "Automatic target")
+        value=condition_choice_for_index(
+            conditions, a.on_condition_index, "Automatic target"
+        )
     )
     x_var = tk.StringVar(value=str(a.x) if a.x is not None else "")
     y_var = tk.StringVar(value=str(a.y) if a.y is not None else "")
@@ -648,7 +709,9 @@ def action_dialog(
     offy_var = tk.IntVar(value=a.offset_y)
     button_var = tk.StringVar(value=a.button)
 
-    ttk.Label(click_frame, text="Click target", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+    ttk.Label(click_frame, text="Click target", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
     ttk.Combobox(
         click_frame,
         textvariable=cond_idx_var,
@@ -656,29 +719,56 @@ def action_dialog(
         state="readonly",
         width=30,
     ).grid(row=0, column=1, columnspan=3, sticky="w", padx=4)
-    ttk.Label(click_frame, text="Fixed point x", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 2))
-    ttk.Entry(click_frame, textvariable=x_var, width=7).grid(row=2, column=1, sticky="w")
-    ttk.Label(click_frame, text="y", style="Surface.TLabel").grid(row=2, column=2, sticky="w")
-    ttk.Entry(click_frame, textvariable=y_var, width=7).grid(row=2, column=3, sticky="w")
+    ttk.Label(click_frame, text="Fixed point x", style="Surface.TLabel").grid(
+        row=2, column=0, sticky="w", padx=4, pady=(8, 2)
+    )
+    ttk.Entry(click_frame, textvariable=x_var, width=7).grid(
+        row=2, column=1, sticky="w"
+    )
+    ttk.Label(click_frame, text="y", style="Surface.TLabel").grid(
+        row=2, column=2, sticky="w"
+    )
+    ttk.Entry(click_frame, textvariable=y_var, width=7).grid(
+        row=2, column=3, sticky="w"
+    )
     ttk.Button(
         click_frame,
         text="Use mouse position (2s)",
         command=lambda: schedule_mouse_position_fill(win, x_var, y_var),
     ).grid(row=2, column=4, sticky="w", padx=(8, 4))
-    ttk.Label(click_frame, text="Offset x", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(click_frame, textvariable=offx_var, width=7).grid(row=3, column=1, sticky="w")
-    ttk.Label(click_frame, text="y", style="Surface.TLabel").grid(row=3, column=2, sticky="w")
-    ttk.Entry(click_frame, textvariable=offy_var, width=7).grid(row=3, column=3, sticky="w")
-    ttk.Label(click_frame, text="Button", style="Surface.TLabel").grid(row=4, column=0, sticky="w", padx=4, pady=2)
-    ttk.Combobox(click_frame, textvariable=button_var, values=["left", "right", "middle"],
-                 state="readonly", width=8).grid(row=4, column=1, sticky="w")
+    ttk.Label(click_frame, text="Offset x", style="Surface.TLabel").grid(
+        row=3, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(click_frame, textvariable=offx_var, width=7).grid(
+        row=3, column=1, sticky="w"
+    )
+    ttk.Label(click_frame, text="y", style="Surface.TLabel").grid(
+        row=3, column=2, sticky="w"
+    )
+    ttk.Entry(click_frame, textvariable=offy_var, width=7).grid(
+        row=3, column=3, sticky="w"
+    )
+    ttk.Label(click_frame, text="Button", style="Surface.TLabel").grid(
+        row=4, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        click_frame,
+        textvariable=button_var,
+        values=["left", "right", "middle"],
+        state="readonly",
+        width=8,
+    ).grid(row=4, column=1, sticky="w")
 
     # --- click matching row fields ---
     match_idx_var = tk.StringVar(
-        value=condition_choice_for_index(conditions, a.match_condition_index, "Select condition")
+        value=condition_choice_for_index(
+            conditions, a.match_condition_index, "Select condition"
+        )
     )
     row_cond_idx_var = tk.StringVar(
-        value=condition_choice_for_index(conditions, a.on_condition_index, "Select condition")
+        value=condition_choice_for_index(
+            conditions, a.on_condition_index, "Select condition"
+        )
     )
     row_tolerance_var = tk.IntVar(value=a.row_tolerance)
     row_mode_var = tk.StringVar(value=a.row_mode)
@@ -687,15 +777,13 @@ def action_dialog(
     row_offx_var = tk.IntVar(value=a.offset_x)
     row_offy_var = tk.IntVar(value=a.offset_y)
     row_button_var = tk.StringVar(value=a.button)
-    min_level_var = tk.StringVar(value=str(a.min_level) if a.min_level is not None else "")
+    min_level_var = tk.StringVar(
+        value=str(a.min_level) if a.min_level is not None else ""
+    )
     smart_row_limits = has_smart_rally_team_prefilter(a)
     max_level_state, max_level_label = row_max_level_editor_state(a)
     max_level_var = tk.StringVar(
-        value=(
-            ""
-            if smart_row_limits or a.max_level is None
-            else str(a.max_level)
-        )
+        value=("" if smart_row_limits or a.max_level is None else str(a.max_level))
     )
     default_level_roi = a.level_roi or [-90, -45, 220, 100]
     level_roi_x_var = tk.IntVar(value=default_level_roi[0])
@@ -711,34 +799,80 @@ def action_dialog(
         value=", ".join(getattr(a, "no_match_disable_steps", []) or [])
     )
 
-    ttk.Label(row_click_frame, text="Row reference", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+    ttk.Label(row_click_frame, text="Row reference", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
     ttk.Combobox(
-        row_click_frame, textvariable=match_idx_var, values=condition_values,
-        state="readonly", width=30,
+        row_click_frame,
+        textvariable=match_idx_var,
+        values=condition_values,
+        state="readonly",
+        width=30,
     ).grid(row=0, column=1, columnspan=3, sticky="w")
-    ttk.Label(row_click_frame, text="Click target", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+    ttk.Label(row_click_frame, text="Click target", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", padx=4, pady=2
+    )
     ttk.Combobox(
-        row_click_frame, textvariable=row_cond_idx_var, values=condition_values,
-        state="readonly", width=30,
+        row_click_frame,
+        textvariable=row_cond_idx_var,
+        values=condition_values,
+        state="readonly",
+        width=30,
     ).grid(row=1, column=1, columnspan=3, sticky="w")
-    ttk.Label(row_click_frame, text="Row tolerance", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=row_tolerance_var, width=7).grid(row=2, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Rows", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=4, pady=2)
-    ttk.Combobox(row_click_frame, textvariable=row_mode_var, values=["first", "all"],
-                 state="readonly", width=8).grid(row=3, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Target choice", style="Surface.TLabel").grid(row=4, column=0, sticky="w", padx=4, pady=2)
-    ttk.Combobox(row_click_frame, textvariable=target_choice_var,
-                 values=["leftmost", "rightmost", "nearest"],
-                 state="readonly", width=10).grid(row=4, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Offset x", style="Surface.TLabel").grid(row=5, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=row_offx_var, width=7).grid(row=5, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="y", style="Surface.TLabel").grid(row=5, column=2, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=row_offy_var, width=7).grid(row=5, column=3, sticky="w")
-    ttk.Label(row_click_frame, text="Button", style="Surface.TLabel").grid(row=6, column=0, sticky="w", padx=4, pady=2)
-    ttk.Combobox(row_click_frame, textvariable=row_button_var, values=["left", "right", "middle"],
-                 state="readonly", width=8).grid(row=6, column=1, sticky="w")
-    ttk.Label(row_click_frame, text="Min level", style="Surface.TLabel").grid(row=7, column=0, sticky="w", padx=4, pady=(8, 2))
-    ttk.Entry(row_click_frame, textvariable=min_level_var, width=7).grid(row=7, column=1, sticky="w")
+    ttk.Label(row_click_frame, text="Row tolerance", style="Surface.TLabel").grid(
+        row=2, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(row_click_frame, textvariable=row_tolerance_var, width=7).grid(
+        row=2, column=1, sticky="w"
+    )
+    ttk.Label(row_click_frame, text="Rows", style="Surface.TLabel").grid(
+        row=3, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        row_click_frame,
+        textvariable=row_mode_var,
+        values=["first", "all"],
+        state="readonly",
+        width=8,
+    ).grid(row=3, column=1, sticky="w")
+    ttk.Label(row_click_frame, text="Target choice", style="Surface.TLabel").grid(
+        row=4, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        row_click_frame,
+        textvariable=target_choice_var,
+        values=["leftmost", "rightmost", "nearest"],
+        state="readonly",
+        width=10,
+    ).grid(row=4, column=1, sticky="w")
+    ttk.Label(row_click_frame, text="Offset x", style="Surface.TLabel").grid(
+        row=5, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(row_click_frame, textvariable=row_offx_var, width=7).grid(
+        row=5, column=1, sticky="w"
+    )
+    ttk.Label(row_click_frame, text="y", style="Surface.TLabel").grid(
+        row=5, column=2, sticky="w"
+    )
+    ttk.Entry(row_click_frame, textvariable=row_offy_var, width=7).grid(
+        row=5, column=3, sticky="w"
+    )
+    ttk.Label(row_click_frame, text="Button", style="Surface.TLabel").grid(
+        row=6, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        row_click_frame,
+        textvariable=row_button_var,
+        values=["left", "right", "middle"],
+        state="readonly",
+        width=8,
+    ).grid(row=6, column=1, sticky="w")
+    ttk.Label(row_click_frame, text="Min level", style="Surface.TLabel").grid(
+        row=7, column=0, sticky="w", padx=4, pady=(8, 2)
+    )
+    ttk.Entry(row_click_frame, textvariable=min_level_var, width=7).grid(
+        row=7, column=1, sticky="w"
+    )
     ttk.Label(
         row_click_frame,
         text=max_level_label,
@@ -750,12 +884,24 @@ def action_dialog(
         width=7,
         state=max_level_state,
     ).grid(row=7, column=3, sticky="w")
-    ttk.Label(row_click_frame, text="Level box x / y / w / h", style="Surface.TLabel").grid(row=8, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=level_roi_x_var, width=7).grid(row=8, column=1, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_y_var, width=7).grid(row=8, column=2, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_w_var, width=7).grid(row=8, column=3, sticky="w")
-    ttk.Entry(row_click_frame, textvariable=level_roi_h_var, width=7).grid(row=8, column=4, sticky="w")
-    ttk.Label(row_click_frame, text="No-row click", style="Surface.TLabel").grid(row=9, column=0, sticky="w", padx=4, pady=(8, 2))
+    ttk.Label(
+        row_click_frame, text="Level box x / y / w / h", style="Surface.TLabel"
+    ).grid(row=8, column=0, sticky="w", padx=4, pady=2)
+    ttk.Entry(row_click_frame, textvariable=level_roi_x_var, width=7).grid(
+        row=8, column=1, sticky="w"
+    )
+    ttk.Entry(row_click_frame, textvariable=level_roi_y_var, width=7).grid(
+        row=8, column=2, sticky="w"
+    )
+    ttk.Entry(row_click_frame, textvariable=level_roi_w_var, width=7).grid(
+        row=8, column=3, sticky="w"
+    )
+    ttk.Entry(row_click_frame, textvariable=level_roi_h_var, width=7).grid(
+        row=8, column=4, sticky="w"
+    )
+    ttk.Label(row_click_frame, text="No-row click", style="Surface.TLabel").grid(
+        row=9, column=0, sticky="w", padx=4, pady=(8, 2)
+    )
     ttk.Combobox(
         row_click_frame,
         textvariable=no_match_cond_idx_var,
@@ -763,8 +909,12 @@ def action_dialog(
         state="readonly",
         width=30,
     ).grid(row=9, column=1, columnspan=3, sticky="w")
-    ttk.Label(row_click_frame, text="Then disable", style="Surface.TLabel").grid(row=10, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(row_click_frame, textvariable=no_match_disable_steps_var, width=34).grid(row=10, column=1, columnspan=4, sticky="we")
+    ttk.Label(row_click_frame, text="Then disable", style="Surface.TLabel").grid(
+        row=10, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(row_click_frame, textvariable=no_match_disable_steps_var, width=34).grid(
+        row=10, column=1, columnspan=4, sticky="we"
+    )
     ttk.Label(
         row_click_frame,
         text="Delay after level check",
@@ -796,7 +946,9 @@ def action_dialog(
             else:
                 widget.grid_remove()
         row_advanced_btn.configure(
-            text="Hide advanced options" if row_advanced_state["expanded"] else "Show advanced options"
+            text="Hide advanced options"
+            if row_advanced_state["expanded"]
+            else "Show advanced options"
         )
 
     def toggle_row_advanced():
@@ -829,9 +981,7 @@ def action_dialog(
     team3_idle_template_var = tk.StringVar(
         value=getattr(a, "team3_idle_template_path", "")
     )
-    idle_confidence_var = tk.DoubleVar(
-        value=getattr(a, "team_idle_confidence", 0.85)
-    )
+    idle_confidence_var = tk.DoubleVar(value=getattr(a, "team_idle_confidence", 0.85))
     team_button_var = tk.StringVar(value=a.button)
     team1_region = getattr(a, "team1_idle_region", None) or [-249, 130, 40, 36]
     team1_offset = getattr(a, "team1_click_offset", None) or [-189, 168]
@@ -862,9 +1012,7 @@ def action_dialog(
         team_frame,
         text="Shared idle template (legacy fallback)",
         style="Surface.TLabel",
-    ).grid(
-        row=1, column=0, sticky="w", padx=4, pady=2
-    )
+    ).grid(row=1, column=0, sticky="w", padx=4, pady=2)
     ttk.Entry(team_frame, textvariable=idle_template_var, width=34).grid(
         row=1, column=1, columnspan=3, sticky="we"
     )
@@ -888,9 +1036,7 @@ def action_dialog(
         team_frame,
         text="Browse",
         command=lambda: browse_idle_template(idle_template_var),
-    ).grid(
-        row=1, column=4, sticky="w", padx=4
-    )
+    ).grid(row=1, column=4, sticky="w", padx=4)
     for row, label, variable in (
         (2, "Team 1 (Murphy) idle template", team1_idle_template_var),
         (3, "Team 3 (Stetmann) idle template", team3_idle_template_var),
@@ -955,8 +1101,20 @@ def action_dialog(
             row=row + 2, column=4, sticky="w"
         )
 
-    add_team_row(5, "Team 3 (preferred for lower levels)", team3_region_vars, team3_offset_vars, team3_max_var)
-    add_team_row(9, "Team 1 (fallback and higher levels)", team1_region_vars, team1_offset_vars, team1_max_var)
+    add_team_row(
+        5,
+        "Team 3 (preferred for lower levels)",
+        team3_region_vars,
+        team3_offset_vars,
+        team3_max_var,
+    )
+    add_team_row(
+        9,
+        "Team 1 (fallback and higher levels)",
+        team1_region_vars,
+        team1_offset_vars,
+        team1_max_var,
+    )
     ttk.Label(
         team_frame,
         text=(
@@ -970,23 +1128,40 @@ def action_dialog(
     # --- key fields ---
     key_var = tk.StringVar(value=a.key)
     hold_var = tk.DoubleVar(value=a.hold)
-    ttk.Label(key_frame, text="Key", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(key_frame, textvariable=key_var, width=16).grid(row=0, column=1, sticky="w")
-    ttk.Label(key_frame, text="Hold duration", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(key_frame, textvariable=hold_var, width=8).grid(row=1, column=1, sticky="w")
+    ttk.Label(key_frame, text="Key", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(key_frame, textvariable=key_var, width=16).grid(
+        row=0, column=1, sticky="w"
+    )
+    ttk.Label(key_frame, text="Hold duration", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(key_frame, textvariable=hold_var, width=8).grid(
+        row=1, column=1, sticky="w"
+    )
 
     # --- wait fields ---
     seconds_var = tk.DoubleVar(value=a.seconds)
-    ttk.Label(wait_frame, text="Seconds", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
-    ttk.Entry(wait_frame, textvariable=seconds_var, width=8).grid(row=0, column=1, sticky="w")
+    ttk.Label(wait_frame, text="Seconds", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(wait_frame, textvariable=seconds_var, width=8).grid(
+        row=0, column=1, sticky="w"
+    )
 
     # --- set_step fields ---
     step_name_var = tk.StringVar(value=a.step_name)
     set_enabled_var = tk.BooleanVar(value=a.set_enabled)
-    ttk.Label(step_frame, text="Step", style="Surface.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
-    ttk.Combobox(step_frame, textvariable=step_name_var, values=step_names, width=22).grid(row=0, column=1, sticky="w")
-    ttk.Checkbutton(step_frame, text="Enable step",
-                    variable=set_enabled_var).grid(row=1, column=0, columnspan=2, sticky="w", padx=4)
+    ttk.Label(step_frame, text="Step", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        step_frame, textvariable=step_name_var, values=step_names, width=22
+    ).grid(row=0, column=1, sticky="w")
+    ttk.Checkbutton(step_frame, text="Enable step", variable=set_enabled_var).grid(
+        row=1, column=0, columnspan=2, sticky="w", padx=4
+    )
 
     def show_frame(*_):
         for f in frames.values():
@@ -1038,8 +1213,12 @@ def action_dialog(
                         parent=win,
                     )
                     return
-                new_action.match_condition_index = condition_index_from_choice(mi, "Row reference")
-                new_action.on_condition_index = condition_index_from_choice(ci, "Click target")
+                new_action.match_condition_index = condition_index_from_choice(
+                    mi, "Row reference"
+                )
+                new_action.on_condition_index = condition_index_from_choice(
+                    ci, "Click target"
+                )
                 new_action.row_tolerance = row_tolerance_var.get()
                 new_action.row_mode = row_mode_var.get()
                 new_action.target_choice = target_choice_var.get()
@@ -1047,7 +1226,9 @@ def action_dialog(
                 new_action.offset_x = row_offx_var.get()
                 new_action.offset_y = row_offy_var.get()
                 new_action.button = row_button_var.get()
-                new_action.min_level = _parse_optional_int(min_level_var.get(), "Min level")
+                new_action.min_level = _parse_optional_int(
+                    min_level_var.get(), "Min level"
+                )
                 new_action.max_level = (
                     None
                     if smart_row_limits
@@ -1133,7 +1314,9 @@ def action_dialog(
                 new_action.seconds = seconds_var.get()
             elif t == "set_step":
                 if not step_name_var.get().strip():
-                    messagebox.showerror("Missing step", "Choose a step name.", parent=win)
+                    messagebox.showerror(
+                        "Missing step", "Choose a step name.", parent=win
+                    )
                     return
                 new_action.step_name = step_name_var.get().strip()
                 new_action.set_enabled = set_enabled_var.get()
@@ -1149,7 +1332,9 @@ def action_dialog(
     btns = ttk.Frame(win, style="Surface.TFrame")
     btns.grid(row=2, column=0, columnspan=2, sticky="e", padx=10, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
-    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(side="left", padx=4)
+    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_ok).pack(
+        side="left", padx=4
+    )
     win.bind("<Escape>", lambda _event: win.destroy())
     win.after_idle(lambda: center_window(win, parent))
 
@@ -1161,8 +1346,15 @@ def action_dialog(
 # Step editor dialog
 # ----------------------------------------------------------------------
 
-def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_step_names=None,
-                monitor_index=1, target_window_title=""):
+
+def step_dialog(
+    parent,
+    step: Optional[Step] = None,
+    existing_names=None,
+    all_step_names=None,
+    monitor_index=1,
+    target_window_title="",
+):
     win = tk.Toplevel(parent)
     win.title("Edit Step" if step else "Add Step")
     win.transient(parent)
@@ -1186,20 +1378,35 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
     cooldown_var = tk.DoubleVar(value=s.cooldown)
     repeatable_var = tk.BooleanVar(value=s.repeatable)
 
-    ttk.Label(win, text="Step name", style="Surface.TLabel").grid(row=0, column=0, sticky="w", **pad)
-    ttk.Entry(win, textvariable=name_var, width=28).grid(row=0, column=1, sticky="w", **pad)
+    ttk.Label(win, text="Step name", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", **pad
+    )
+    ttk.Entry(win, textvariable=name_var, width=28).grid(
+        row=0, column=1, sticky="w", **pad
+    )
     ttk.Checkbutton(win, text="Enabled at scenario start", variable=enabled_var).grid(
-        row=0, column=2, columnspan=2, sticky="w", **pad)
+        row=0, column=2, columnspan=2, sticky="w", **pad
+    )
 
-    ttk.Label(win, text="Condition rule", style="Surface.TLabel").grid(row=1, column=0, sticky="w", **pad)
-    ttk.Combobox(win, textvariable=operator_var, values=["AND", "OR"], state="readonly", width=6).grid(
-        row=1, column=1, sticky="w", **pad)
-    ttk.Label(win, text="Cooldown", style="Surface.TLabel").grid(row=1, column=2, sticky="w", **pad)
-    ttk.Entry(win, textvariable=cooldown_var, width=8).grid(row=1, column=3, sticky="w", **pad)
+    ttk.Label(win, text="Condition rule", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", **pad
+    )
+    ttk.Combobox(
+        win, textvariable=operator_var, values=["AND", "OR"], state="readonly", width=6
+    ).grid(row=1, column=1, sticky="w", **pad)
+    ttk.Label(win, text="Cooldown", style="Surface.TLabel").grid(
+        row=1, column=2, sticky="w", **pad
+    )
+    ttk.Entry(win, textvariable=cooldown_var, width=8).grid(
+        row=1, column=3, sticky="w", **pad
+    )
     ttk.Checkbutton(win, text="Repeat while matched", variable=repeatable_var).grid(
-        row=1, column=4, sticky="w", **pad)
+        row=1, column=4, sticky="w", **pad
+    )
 
-    ttk.Label(win, text="Conditions", style="Section.TLabel").grid(row=2, column=0, sticky="w", **pad)
+    ttk.Label(win, text="Conditions", style="Section.TLabel").grid(
+        row=2, column=0, sticky="w", **pad
+    )
     cond_listbox = tk.Listbox(
         win,
         width=78,
@@ -1239,6 +1446,7 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
                 f"[{i}] {tag}{subject} [{mode_txt}]  "
                 f"(conf {c.confidence}{comparison_txt}, {region_txt})",
             )
+
     refresh_conditions()
 
     def add_condition():
@@ -1309,12 +1517,17 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
             return
         original = conditions[sel[0]]
         if original.condition_type != "template" or not original.template_path:
-            messagebox.showinfo("Not a template", "Select a template condition to duplicate its image.", parent=win)
+            messagebox.showinfo(
+                "Not a template",
+                "Select a template condition to duplicate its image.",
+                parent=win,
+            )
             return
         name = simpledialog.askstring(
             "Duplicate template",
             "New template image name:",
-            initialvalue=os.path.splitext(os.path.basename(original.template_path))[0] + "_copy",
+            initialvalue=os.path.splitext(os.path.basename(original.template_path))[0]
+            + "_copy",
             parent=win,
         )
         if not name:
@@ -1333,11 +1546,14 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
     cbtns.grid(row=4, column=0, columnspan=5, sticky="w", padx=6, pady=(0, 8))
     ttk.Button(cbtns, text="Add", command=add_condition).pack(side="left", padx=2)
     ttk.Button(cbtns, text="Edit", command=edit_condition).pack(side="left", padx=2)
-    ttk.Button(cbtns, text="Duplicate template", command=duplicate_condition_template).pack(side="left", padx=2)
+    ttk.Button(
+        cbtns, text="Duplicate template", command=duplicate_condition_template
+    ).pack(side="left", padx=2)
     ttk.Button(cbtns, text="Remove", command=remove_condition).pack(side="left", padx=2)
 
     ttk.Label(win, text="Actions", style="Section.TLabel").grid(
-        row=5, column=0, columnspan=3, sticky="w", **pad)
+        row=5, column=0, columnspan=3, sticky="w", **pad
+    )
     act_listbox = tk.Listbox(
         win,
         width=78,
@@ -1357,7 +1573,10 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
     def refresh_actions():
         act_listbox.delete(0, tk.END)
         for i, act in enumerate(actions):
-            act_listbox.insert(tk.END, f"{i + 1}. {action_display_summary(act, conditions)}")
+            act_listbox.insert(
+                tk.END, f"{i + 1}. {action_display_summary(act, conditions)}"
+            )
+
     refresh_actions()
 
     def add_action():
@@ -1407,8 +1626,12 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
     ttk.Button(abtns, text="Add", command=add_action).pack(side="left", padx=2)
     ttk.Button(abtns, text="Edit", command=edit_action).pack(side="left", padx=2)
     ttk.Button(abtns, text="Remove", command=remove_action).pack(side="left", padx=2)
-    ttk.Button(abtns, text="Move up", command=lambda: move_action(-1)).pack(side="left", padx=2)
-    ttk.Button(abtns, text="Move down", command=lambda: move_action(1)).pack(side="left", padx=2)
+    ttk.Button(abtns, text="Move up", command=lambda: move_action(-1)).pack(
+        side="left", padx=2
+    )
+    ttk.Button(abtns, text="Move down", command=lambda: move_action(1)).pack(
+        side="left", padx=2
+    )
 
     def on_save():
         nm = name_var.get().strip()
@@ -1438,16 +1661,22 @@ def step_dialog(parent, step: Optional[Step] = None, existing_names=None, all_st
             )
             return
         result["value"] = Step(
-            name=nm, conditions=conditions, actions=actions,
-            condition_operator=operator_var.get(), enabled=enabled_var.get(),
-            cooldown=cooldown, repeatable=repeatable_var.get(),
+            name=nm,
+            conditions=conditions,
+            actions=actions,
+            condition_operator=operator_var.get(),
+            enabled=enabled_var.get(),
+            cooldown=cooldown,
+            repeatable=repeatable_var.get(),
         )
         win.destroy()
 
     btns = ttk.Frame(win, style="Surface.TFrame")
     btns.grid(row=8, column=0, columnspan=5, sticky="e", padx=6, pady=12)
     ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
-    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_save).pack(side="left", padx=4)
+    ttk.Button(btns, text="Save", style="Primary.TButton", command=on_save).pack(
+        side="left", padx=4
+    )
     win.bind("<Escape>", lambda _event: win.destroy())
     win.after_idle(lambda: center_window(win, parent))
 

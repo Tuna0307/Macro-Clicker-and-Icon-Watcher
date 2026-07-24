@@ -40,9 +40,7 @@ class ResolutionScalingTests(unittest.TestCase):
         )
 
     def test_aspect_mismatch_keeps_uniform_width_and_height_candidates(self):
-        scales = core.resolution_scale_candidates(
-            (1608, 940), (2560, 1440), (1.0,)
-        )
+        scales = core.resolution_scale_candidates((1608, 940), (2560, 1440), (1.0,))
 
         self.assertTrue(any(abs(item - 2560 / 1608) < 1e-6 for item in scales))
         self.assertTrue(any(abs(item - 1440 / 940) < 1e-6 for item in scales))
@@ -57,7 +55,7 @@ class ResolutionScalingTests(unittest.TestCase):
             interpolation=cv2.INTER_LINEAR,
         )
         frame = np.zeros((180, 260, 3), dtype=np.uint8)
-        frame[70:70 + rendered.shape[0], 90:90 + rendered.shape[1]] = rendered
+        frame[70 : 70 + rendered.shape[0], 90 : 90 + rendered.shape[1]] = rendered
 
         match = core.find_template_matches(
             frame,
@@ -69,7 +67,9 @@ class ResolutionScalingTests(unittest.TestCase):
         )[0]
 
         self.assertEqual((match.x, match.y), (90, 70))
-        self.assertEqual((match.width, match.height), (rendered.shape[1], rendered.shape[0]))
+        self.assertEqual(
+            (match.width, match.height), (rendered.shape[1], rendered.shape[0])
+        )
         self.assertAlmostEqual(match.scale_x, scale_x)
         self.assertAlmostEqual(match.scale_y, scale_y)
 
@@ -363,7 +363,9 @@ class SharedCaptureTests(unittest.TestCase):
             def grab(self, _target):
                 return np.array([[[11, 22, 33, 255]]], dtype=np.uint8)
 
-        frame = core.capture_bgr(FakeCapture(), {"left": 0, "top": 0, "width": 1, "height": 1})
+        frame = core.capture_bgr(
+            FakeCapture(), {"left": 0, "top": 0, "width": 1, "height": 1}
+        )
 
         np.testing.assert_array_equal(frame, np.array([[[11, 22, 33]]], dtype=np.uint8))
 
@@ -374,7 +376,9 @@ class SharedCaptureTests(unittest.TestCase):
             {"left": 0, "top": 0, "width": 2560, "height": 1440},
         ]
 
-        self.assertEqual(core.monitor_index_for_rect(monitors, (-1900, 10, 1800, 1000)), 1)
+        self.assertEqual(
+            core.monitor_index_for_rect(monitors, (-1900, 10, 1800, 1000)), 1
+        )
         self.assertEqual(core.monitor_index_for_rect(monitors, (10, 10, 2500, 1400)), 2)
         self.assertEqual(
             core.intersect_region_with_monitor(monitors[1], (-1800, 100, 400, 300)),

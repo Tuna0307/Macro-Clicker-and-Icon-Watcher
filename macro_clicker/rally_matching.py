@@ -1,4 +1,5 @@
 """Rally-row matching, level OCR, and evidence capture services for the macro engine."""
+
 from __future__ import annotations
 
 import math
@@ -143,7 +144,8 @@ class RallyMatchingMixin:
             _scale_x, scale_y = self._match_geometry_scale(reference)
             row_tolerance = max(0, round(action.row_tolerance * scale_y))
             row_targets = [
-                target for target in remaining_targets
+                target
+                for target in remaining_targets
                 if abs(target["center"][1] - ref_y) <= row_tolerance
             ]
             if not row_targets:
@@ -160,14 +162,18 @@ class RallyMatchingMixin:
                     continue
                 if level_status != _LEVEL_ELIGIBLE:
                     continue
-            chosen = self._choose_row_target(reference, row_targets, action.target_choice)
+            chosen = self._choose_row_target(
+                reference, row_targets, action.target_choice
+            )
             selected.append({"reference": reference, "target": chosen, "level": level})
             remaining_targets.remove(chosen)
             if action.row_mode != "all":
                 break
         return selected, had_unreadable_level
 
-    def _revalidate_row_selections(self, action: Action, original_selections, matches: dict):
+    def _revalidate_row_selections(
+        self, action: Action, original_selections, matches: dict
+    ):
         """Re-find delayed selections near their original rows and re-check level limits."""
         self._begin_level_diagnostic_generation()
         reference_index = action.match_condition_index
@@ -268,21 +274,21 @@ class RallyMatchingMixin:
             effective_max = int(max_level_override)
         else:
             effective_max = action.max_level
-        if (
-            not smart_override
-            and action.min_level is None
-            and effective_max is None
-        ):
+        if not smart_override and action.min_level is None and effective_max is None:
             return _LEVEL_ELIGIBLE, None
 
         level = self._read_level_for_row(action, reference)
         center = tuple(reference.get("center", ()))
         limits = self._level_limit_text(action, max_level=effective_max)
         if level is None:
-            self.log(f"  [skip] row center={center} level unread; cannot compare with {limits}")
+            self.log(
+                f"  [skip] row center={center} level unread; cannot compare with {limits}"
+            )
             return _LEVEL_UNREADABLE, None
         if action.min_level is not None and level < action.min_level:
-            self.log(f"  [skip] row center={center} level read {level}; {level} < min {action.min_level}")
+            self.log(
+                f"  [skip] row center={center} level read {level}; {level} < min {action.min_level}"
+            )
             return _LEVEL_INELIGIBLE, level
         if effective_max is not None and level > effective_max:
             max_label = (
@@ -295,14 +301,18 @@ class RallyMatchingMixin:
                 f"{level} > {max_label} {effective_max}"
             )
             return _LEVEL_INELIGIBLE, level
-        self.log(f"  [level] row center={center} level read {level}; within {limits} => accepted")
+        self.log(
+            f"  [level] row center={center} level read {level}; within {limits} => accepted"
+        )
         return _LEVEL_ELIGIBLE, level
 
     def _level_limit_text(self, action: Action, *, max_level=_TEAM_LEVEL_CAP_UNSET):
         limits = []
         if action.min_level is not None:
             limits.append(f"min {action.min_level}")
-        effective_max = action.max_level if max_level is _TEAM_LEVEL_CAP_UNSET else max_level
+        effective_max = (
+            action.max_level if max_level is _TEAM_LEVEL_CAP_UNSET else max_level
+        )
         if effective_max is not None:
             limits.append(f"max {effective_max}")
         return " and ".join(limits) if limits else "no level limits"
@@ -414,9 +424,7 @@ class RallyMatchingMixin:
                 self._team_status_error_logged = str(exc)
             return _TEAM_LEVEL_CAP_UNSET
 
-        previous_availability = (
-            getattr(self, "_last_rally_team_availability", {}) or {}
-        )
+        previous_availability = getattr(self, "_last_rally_team_availability", {}) or {}
         previous_busy = previous_availability.get("busy", {})
         busy_release_threshold = 0.50
         effective_thresholds = {
@@ -497,7 +505,11 @@ class RallyMatchingMixin:
             attempts.append(attempt)
 
             if ocr_result and ocr_result.level is not None:
-                confidence_text = "" if ocr_result.confidence is None else f" conf={ocr_result.confidence:.2f}"
+                confidence_text = (
+                    ""
+                    if ocr_result.confidence is None
+                    else f" conf={ocr_result.confidence:.2f}"
+                )
                 self.log(
                     f"  [level] {ocr_result.engine} read {ocr_result.level}{confidence_text} "
                     f"text='{ocr_result.text}' from crop rect={rect} roi={roi_text}"
@@ -530,7 +542,11 @@ class RallyMatchingMixin:
                 )
                 continue
 
-            if ocr_result and ocr_result.error and not getattr(self, "_level_ocr_unavailable_logged", False):
+            if (
+                ocr_result
+                and ocr_result.error
+                and not getattr(self, "_level_ocr_unavailable_logged", False)
+            ):
                 self.log(f"  [warn] OCR unavailable: {ocr_result.error}")
                 self._level_ocr_unavailable_logged = True
 
@@ -592,8 +608,7 @@ class RallyMatchingMixin:
                 )
 
             levels_text = ", ".join(
-                f"{level} ({counts[level]} crop(s))"
-                for level in sorted(winning_levels)
+                f"{level} ({counts[level]} crop(s))" for level in sorted(winning_levels)
             )
             self.log(
                 f"  [skip] conflicting provisional OCR levels for row "
@@ -643,19 +658,23 @@ class RallyMatchingMixin:
         images = {}
         for index, attempt in enumerate(attempts):
             ocr_result = attempt.get("ocr_result")
-            serialized_attempts.append({
-                "index": index,
-                "base_offset": attempt.get("base_offset"),
-                "rect": attempt.get("rect"),
-                "status": attempt.get("status"),
-                "ocr": None if ocr_result is None else {
-                    "level": ocr_result.level,
-                    "text": ocr_result.text,
-                    "confidence": ocr_result.confidence,
-                    "engine": ocr_result.engine,
-                    "error": ocr_result.error,
-                },
-            })
+            serialized_attempts.append(
+                {
+                    "index": index,
+                    "base_offset": attempt.get("base_offset"),
+                    "rect": attempt.get("rect"),
+                    "status": attempt.get("status"),
+                    "ocr": None
+                    if ocr_result is None
+                    else {
+                        "level": ocr_result.level,
+                        "text": ocr_result.text,
+                        "confidence": ocr_result.confidence,
+                        "engine": ocr_result.engine,
+                        "error": ocr_result.error,
+                    },
+                }
+            )
             frame = attempt.get("frame")
             offset = attempt.get("base_offset")
             images[f"crop_{index:02d}_offset_{offset}"] = frame
@@ -749,12 +768,7 @@ class RallyMatchingMixin:
         global_sizes = []
 
         def add(collection, value):
-            if (
-                value
-                and len(value) == 2
-                and value[0] > 0
-                and value[1] > 0
-            ):
+            if value and len(value) == 2 and value[0] > 0 and value[1] > 0:
                 parsed = (int(value[0]), int(value[1]))
                 if parsed not in collection:
                     collection.append(parsed)
@@ -762,8 +776,7 @@ class RallyMatchingMixin:
         for step in getattr(scenario, "steps", ()):
             for condition in getattr(step, "conditions", ()):
                 condition_size = (
-                    condition.template_reference_size
-                    or condition.region_window_size
+                    condition.template_reference_size or condition.region_window_size
                 )
                 add(global_sizes, condition_size)
                 if self._template_path_key(condition.template_path) == target_key:
@@ -855,7 +868,9 @@ class RallyMatchingMixin:
             candidates.append((base_offset, rect))
         return candidates
 
-    def _level_offset_cache_key(self, action: Action, reference: dict, window_rect=None):
+    def _level_offset_cache_key(
+        self, action: Action, reference: dict, window_rect=None
+    ):
         scale_x, scale_y = self._match_geometry_scale(reference)
         window_size = None
         if window_rect:
@@ -881,7 +896,9 @@ class RallyMatchingMixin:
             self._level_offset_cache = cache
         if len(cache) >= 32:
             cache.pop(next(iter(cache)))
-        cache[self._level_offset_cache_key(action, reference, window_rect)] = base_offset
+        cache[self._level_offset_cache_key(action, reference, window_rect)] = (
+            base_offset
+        )
 
     def _capture_level_crop_candidates(
         self,
@@ -913,9 +930,7 @@ class RallyMatchingMixin:
         if snapshot is not None:
             union_frame = snapshot.crop(union_rect)
             if union_frame is None:
-                self.log(
-                    "  [skip] level crop falls outside the atomic row snapshot"
-                )
+                self.log("  [skip] level crop falls outside the atomic row snapshot")
                 return []
         else:
             union_frame, _off_x, _off_y = self._grab(union_rect)
@@ -926,7 +941,11 @@ class RallyMatchingMixin:
             right = left + rect[2]
             bottom = top + rect[3]
             frame = union_frame[top:bottom, left:right]
-            if frame.size == 0 or frame.shape[0] != rect[3] or frame.shape[1] != rect[2]:
+            if (
+                frame.size == 0
+                or frame.shape[0] != rect[3]
+                or frame.shape[1] != rect[2]
+            ):
                 continue
             # NumPy slices retain their full backing allocation.  These crops
             # can live until diagnostic submission, so detach each small ROI
@@ -959,7 +978,8 @@ class RallyMatchingMixin:
         if not attempts:
             return None
         with_text = [
-            attempt for attempt in attempts
+            attempt
+            for attempt in attempts
             if attempt.get("ocr_result") is not None and attempt["ocr_result"].text
         ]
         if with_text:
@@ -1138,8 +1158,16 @@ class RallyMatchingMixin:
             for rect in crop_rects or ():
                 draw_box(rect, (255, 0, 255), "level crop", xywh=True)
             for index, selection in enumerate(selections or ()):
-                draw_box(selection.get("reference", {}).get("box"), (0, 255, 255), f"selected {index}")
-                draw_box(selection.get("target", {}).get("box"), (0, 0, 255), f"target {index}")
+                draw_box(
+                    selection.get("reference", {}).get("box"),
+                    (0, 255, 255),
+                    f"selected {index}",
+                )
+                draw_box(
+                    selection.get("target", {}).get("box"),
+                    (0, 0, 255),
+                    f"target {index}",
+                )
 
             payload_images["context_annotated"] = annotated
             dedupe_image = annotated
@@ -1174,7 +1202,9 @@ class RallyMatchingMixin:
     def _selected_level_ocr_confidence(record):
         selected_index = record.get("selected_attempt_index")
         attempts = record.get("attempts") or ()
-        if not isinstance(selected_index, int) or not 0 <= selected_index < len(attempts):
+        if not isinstance(selected_index, int) or not 0 <= selected_index < len(
+            attempts
+        ):
             return None
         ocr = attempts[selected_index].get("ocr") or {}
         confidence = ocr.get("confidence")
@@ -1205,9 +1235,9 @@ class RallyMatchingMixin:
             }
         if decision == "no_eligible_row":
             return {
-                "category": "critical",
-                "min_interval": max(float(min_interval), 5.0 * 60.0),
-                "capture_reason": "rate_limited_no_eligible_row",
+                "category": "samples",
+                "min_interval": max(float(min_interval), 10.0 * 60.0),
+                "capture_reason": "periodic_no_eligible_row_sample",
             }
         return {
             "category": "critical",
@@ -1232,11 +1262,13 @@ class RallyMatchingMixin:
         diagnostic_selections = list(selections or ())
         if not diagnostic_selections:
             for reference in (matches or {}).get(action.match_condition_index, []):
-                diagnostic_selections.append({
-                    "reference": reference,
-                    "target": {},
-                    "level": None,
-                })
+                diagnostic_selections.append(
+                    {
+                        "reference": reference,
+                        "target": {},
+                        "level": None,
+                    }
+                )
         for selection_index, selection in enumerate(diagnostic_selections):
             center = tuple(selection.get("reference", {}).get("center", ()))
             record = stored.get(center)
@@ -1291,7 +1323,9 @@ class RallyMatchingMixin:
                 "selections": [
                     {
                         "level": selection.get("level"),
-                        "reference_center": selection.get("reference", {}).get("center"),
+                        "reference_center": selection.get("reference", {}).get(
+                            "center"
+                        ),
                         "target_center": selection.get("target", {}).get("center"),
                     }
                     for selection in selections or ()
@@ -1316,6 +1350,8 @@ class RallyMatchingMixin:
             ref_x, ref_y = reference["center"]
             return sorted(
                 row_targets,
-                key=lambda m: (m["center"][0] - ref_x) ** 2 + (m["center"][1] - ref_y) ** 2,
+                key=lambda m: (
+                    (m["center"][0] - ref_x) ** 2 + (m["center"][1] - ref_y) ** 2
+                ),
             )[0]
         return sorted(row_targets, key=lambda m: m["center"][0])[0]

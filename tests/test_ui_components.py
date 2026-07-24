@@ -28,12 +28,16 @@ class UiComponentTests(unittest.TestCase):
         choices = condition_choices(self.conditions)
 
         self.assertEqual(choices[1], "1: Join.png")
-        self.assertEqual(condition_choice_for_index(self.conditions, 2), "2: BackButton.png")
+        self.assertEqual(
+            condition_choice_for_index(self.conditions, 2), "2: BackButton.png"
+        )
         self.assertEqual(condition_index_from_choice(choices[1], "Click target"), 1)
 
     def test_optional_condition_choices_preserve_none(self):
         self.assertIsNone(
-            condition_index_from_choice("Automatic target", "Click target", allow_blank=True)
+            condition_index_from_choice(
+                "Automatic target", "Click target", allow_blank=True
+            )
         )
         self.assertIsNone(
             condition_index_from_choice("None", "Fallback", allow_blank=True)
@@ -99,7 +103,9 @@ class UiComponentTests(unittest.TestCase):
         ordinary = Action(type="click_matching_row", max_level=65)
 
         self.assertIn("levels 20-any", action_display_summary(smart, self.conditions))
-        self.assertIn("levels any-65", action_display_summary(ordinary, self.conditions))
+        self.assertIn(
+            "levels any-65", action_display_summary(ordinary, self.conditions)
+        )
 
     def test_blank_team_limits_render_as_unlimited(self):
         action = Action(

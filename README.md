@@ -29,7 +29,9 @@ For development checks:
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python -m pytest -q
 .\.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m ruff format --check .
 .\.venv\Scripts\python -m mypy macro_clicker tools
+.\.venv\Scripts\python -m tools.validate_scenarios
 ```
 
 ## Interface preferences
@@ -45,7 +47,7 @@ Space) to choose exactly which saved icons are scanned.
 
 ```text
 macro_clicker/   Application, detection, OCR, diagnostics, and UI code
-tools/           Standalone developer and OCR-tuning utilities
+tools/           Developer validation utilities
 tests/           Automated tests
 templates/       Macro image assets and level digit references
 scenarios/       Saved macro scenarios
@@ -183,12 +185,16 @@ the next poll without consuming its cooldown.
   (enable/disable another step). Actions run top to bottom once a step's
   conditions are met.
 
-## Included scenario
+## Included scenarios
 
-The repository keeps the `Rally Gold Mob` scenario. It uses `set_step`
-actions to move between rally detection, joining, confirmation, and safe
-back-out states. Its template paths are project-relative, so the folder can be
-moved to another computer without rewriting the scenario JSON.
+The repository includes one-team and two-team rally scenarios. They use
+`set_step` actions to move between rally detection, joining, confirmation, and
+safe back-out states. Their template paths are project-relative, so the folder
+can be moved to another computer without rewriting the scenario JSON.
+
+Scenario JSON files are editable runtime configuration. Personal level limits,
+delays, and similar tuning can remain as uncommitted local changes; commit them
+only when they are intended to become the project defaults.
 
 ## Detection types
 
@@ -236,10 +242,12 @@ screenshots. Events are stored under:
 The collector uses a selective policy so a long-running macro does not save a
 full screenshot for every normal check:
 
-- Unread OCR, provisional OCR conflicts, accepted OCR below 95%, row
-  changes, and template/row near misses keep full evidence.
-- A repeated `no eligible row` result is captured at most once every five
-  minutes.
+- Unread OCR, provisional OCR conflicts, accepted OCR below 95%, and row
+  changes keep full evidence in `critical`.
+- Reference/target template near misses are retained in `samples` at most once
+  every five minutes.
+- A repeated `no eligible row` result is retained in `samples` at most once
+  every ten minutes.
 - Strong successful reads (95% or higher) are sampled at most once every 30
   minutes.
 - Visually similar screenshots are deduplicated for five minutes.

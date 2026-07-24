@@ -44,7 +44,12 @@ class DuplicateTests(unittest.TestCase):
     def test_duplicate_scenario_deep_copies_and_uses_new_name(self):
         scenario = Scenario(
             name="Auto Rally",
-            steps=[Step(name="Join", conditions=[ImageCondition(template_path="templates/mob.png")])],
+            steps=[
+                Step(
+                    name="Join",
+                    conditions=[ImageCondition(template_path="templates/mob.png")],
+                )
+            ],
         )
 
         copied = duplicate_scenario(scenario, "Auto Rally copy")

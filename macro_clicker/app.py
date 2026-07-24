@@ -6,6 +6,7 @@ must/must-not be on screen) and Actions (click / key / wait / enable
 or disable another step). Run it, watch the log, stop with the button
 or your kill-switch key.
 """
+
 import json
 import math
 import os
@@ -171,24 +172,43 @@ class App:
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
         top.columnconfigure(1, weight=1)
 
-        ttk.Label(top, text="Scenario", style="Surface.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, text="Scenario", style="Surface.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         self.scenario_var = tk.StringVar()
-        self.scenario_combo = ttk.Combobox(top, textvariable=self.scenario_var, state="readonly", width=28)
+        self.scenario_combo = ttk.Combobox(
+            top, textvariable=self.scenario_var, state="readonly", width=28
+        )
         self.scenario_combo.grid(row=0, column=1, sticky="w", padx=(8, 14))
         self.scenario_combo.bind("<<ComboboxSelected>>", self._on_scenario_selected)
-        new_btn = ttk.Button(top, text="New", style="Toolbar.TButton", command=self._new_scenario)
+        new_btn = ttk.Button(
+            top, text="New", style="Toolbar.TButton", command=self._new_scenario
+        )
         new_btn.grid(row=0, column=2, padx=2)
-        save_btn = ttk.Button(top, text="Save", style="Toolbar.TButton", command=self._save_scenario)
+        save_btn = ttk.Button(
+            top, text="Save", style="Toolbar.TButton", command=self._save_scenario
+        )
         save_btn.grid(row=0, column=3, padx=2)
-        ttk.Button(top, text="Save as", style="Toolbar.TButton", command=self._save_scenario_as).grid(row=0, column=4, padx=2)
-        ttk.Button(top, text="Duplicate", style="Toolbar.TButton", command=self._duplicate_scenario).grid(row=0, column=5, padx=2)
-        delete_btn = ttk.Button(top, text="Delete", style="Toolbar.TButton", command=self._delete_scenario)
+        ttk.Button(
+            top, text="Save as", style="Toolbar.TButton", command=self._save_scenario_as
+        ).grid(row=0, column=4, padx=2)
+        ttk.Button(
+            top,
+            text="Duplicate",
+            style="Toolbar.TButton",
+            command=self._duplicate_scenario,
+        ).grid(row=0, column=5, padx=2)
+        delete_btn = ttk.Button(
+            top, text="Delete", style="Toolbar.TButton", command=self._delete_scenario
+        )
         delete_btn.grid(row=0, column=6, padx=(2, 14))
         Tooltip(new_btn, "Create a scenario")
         Tooltip(save_btn, "Save the current scenario")
         Tooltip(delete_btn, "Delete the current scenario")
 
-        self.status_label = ttk.Label(top, text="● Stopped", style="Stopped.Status.TLabel")
+        self.status_label = ttk.Label(
+            top, text="● Stopped", style="Stopped.Status.TLabel"
+        )
         self.status_label.grid(row=0, column=7, padx=(8, 10))
         self.status_pulse = StatusPulse(
             self.status_label,
@@ -213,13 +233,21 @@ class App:
         config = ttk.Frame(self.macro_tab, style="Card.TFrame", padding=(18, 12))
         config.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         config.columnconfigure(1, weight=1)
-        ttk.Label(config, text="Target window", style="Surface.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(config, text="Target window", style="Surface.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         self.target_window_var = tk.StringVar(value=self.scenario.target_window_title)
-        self.target_window_combo = ttk.Combobox(config, textvariable=self.target_window_var, width=48)
+        self.target_window_combo = ttk.Combobox(
+            config, textvariable=self.target_window_var, width=48
+        )
         self.target_window_combo.grid(row=0, column=1, sticky="ew", padx=(10, 6))
-        refresh_btn = ttk.Button(config, text="Refresh", command=self._refresh_window_list)
+        refresh_btn = ttk.Button(
+            config, text="Refresh", command=self._refresh_window_list
+        )
         refresh_btn.grid(row=0, column=2, padx=3)
-        settings_btn = ttk.Button(config, text="Scenario settings", command=self._open_scenario_settings)
+        settings_btn = ttk.Button(
+            config, text="Scenario settings", command=self._open_scenario_settings
+        )
         settings_btn.grid(row=0, column=3, padx=(8, 0))
         Tooltip(refresh_btn, "Refresh visible windows")
 
@@ -240,7 +268,9 @@ class App:
 
         navigator.columnconfigure(0, weight=1)
         navigator.rowconfigure(2, weight=1)
-        ttk.Label(navigator, text="Steps", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(navigator, text="Steps", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         nav_tools = ttk.Frame(navigator, style="Surface.TFrame")
         nav_tools.grid(row=1, column=0, sticky="ew", pady=(8, 8))
         add_step_btn = ttk.Button(nav_tools, text="Add step", command=self._add_step)
@@ -252,7 +282,9 @@ class App:
             ("\u2193", lambda: self._move_step(1), "Move step down"),
             ("X", self._remove_step, "Remove selected step"),
         ):
-            button = ttk.Button(nav_tools, text=text, style="Icon.TButton", command=command)
+            button = ttk.Button(
+                nav_tools, text=text, style="Icon.TButton", command=command
+            )
             button.pack(side="left", padx=(5, 0))
             Tooltip(button, tip)
 
@@ -288,16 +320,24 @@ class App:
         header.columnconfigure(0, weight=1)
         self.selected_step_name_var = tk.StringVar(value="Select a step")
         self.selected_step_meta_var = tk.StringVar(value="")
-        ttk.Label(header, textvariable=self.selected_step_name_var, style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(header, textvariable=self.selected_step_meta_var, style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
-        ttk.Button(header, text="Edit step", command=self._edit_step).grid(row=0, column=1, rowspan=2, padx=(8, 4))
+        ttk.Label(
+            header, textvariable=self.selected_step_name_var, style="Title.TLabel"
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            header, textvariable=self.selected_step_meta_var, style="Muted.TLabel"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Button(header, text="Edit step", command=self._edit_step).grid(
+            row=0, column=1, rowspan=2, padx=(8, 4)
+        )
         self.test_step_btn = ttk.Button(
             header,
             text="Test",
             command=self._test_step,
         )
         self.test_step_btn.grid(row=0, column=2, rowspan=2, padx=4)
-        ttk.Button(header, text="Show regions", command=self._show_step_regions).grid(row=0, column=3, rowspan=2, padx=(4, 0))
+        ttk.Button(header, text="Show regions", command=self._show_step_regions).grid(
+            row=0, column=3, rowspan=2, padx=(4, 0)
+        )
 
         ttk.Separator(inspector).grid(row=1, column=0, sticky="ew", pady=12)
         details = ttk.Frame(inspector, style="Surface.TFrame")
@@ -313,9 +353,18 @@ class App:
         cond_header = ttk.Frame(conditions_panel, style="Surface.TFrame")
         cond_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         cond_header.columnconfigure(0, weight=1)
-        ttk.Label(cond_header, text="Conditions", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(cond_header, text="Edit", command=self._edit_selected_condition).grid(row=0, column=1)
-        self.condition_tree = ttk.Treeview(conditions_panel, columns=("rule", "scope"), show="tree headings", selectmode="browse")
+        ttk.Label(cond_header, text="Conditions", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(
+            cond_header, text="Edit", command=self._edit_selected_condition
+        ).grid(row=0, column=1)
+        self.condition_tree = ttk.Treeview(
+            conditions_panel,
+            columns=("rule", "scope"),
+            show="tree headings",
+            selectmode="browse",
+        )
         self.condition_tree.heading("#0", text="Template")
         self.condition_tree.heading("rule", text="Match")
         self.condition_tree.heading("scope", text="Scope")
@@ -330,7 +379,9 @@ class App:
         )
         condition_scroll.grid(row=1, column=1, sticky="ns")
         self.condition_tree.configure(yscrollcommand=condition_scroll.set)
-        self.condition_tree.bind("<Double-1>", lambda _event: self._edit_selected_condition())
+        self.condition_tree.bind(
+            "<Double-1>", lambda _event: self._edit_selected_condition()
+        )
 
         actions_panel = ttk.Frame(details, style="Surface.TFrame")
         actions_panel.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(7, 0))
@@ -339,9 +390,15 @@ class App:
         action_header = ttk.Frame(actions_panel, style="Surface.TFrame")
         action_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         action_header.columnconfigure(0, weight=1)
-        ttk.Label(action_header, text="Actions", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(action_header, text="Edit", command=self._edit_selected_action).grid(row=0, column=1)
-        self.action_tree = ttk.Treeview(actions_panel, columns=("order",), show="tree headings", selectmode="browse")
+        ttk.Label(action_header, text="Actions", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(action_header, text="Edit", command=self._edit_selected_action).grid(
+            row=0, column=1
+        )
+        self.action_tree = ttk.Treeview(
+            actions_panel, columns=("order",), show="tree headings", selectmode="browse"
+        )
         self.action_tree.heading("#0", text="Action")
         self.action_tree.heading("order", text="#")
         self.action_tree.column("#0", width=300, minwidth=180)
@@ -362,7 +419,9 @@ class App:
         activity_header = ttk.Frame(activity, style="Surface.TFrame")
         activity_header.grid(row=0, column=0, sticky="ew")
         activity_header.columnconfigure(0, weight=1)
-        ttk.Label(activity_header, text="Activity", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(activity_header, text="Activity", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         self.activity_toggle = ttk.Button(
             activity_header,
             text="Collapse",
@@ -389,7 +448,9 @@ class App:
             font=("Cascadia Mono", 9),
             wrap="none",
         )
-        log_scroll = ttk.Scrollbar(self.activity_body, orient="vertical", command=self.log_text.yview)
+        log_scroll = ttk.Scrollbar(
+            self.activity_body, orient="vertical", command=self.log_text.yview
+        )
         self.log_text.configure(yscrollcommand=log_scroll.set)
         self.log_text.grid(row=0, column=0, sticky="ew")
         log_scroll.grid(row=0, column=1, sticky="ns")
@@ -413,7 +474,9 @@ class App:
 
     def _has_unsaved_changes(self):
         try:
-            return self._scenario_snapshot() != getattr(self, "_clean_scenario_snapshot", None)
+            return self._scenario_snapshot() != getattr(
+                self, "_clean_scenario_snapshot", None
+            )
         except (TypeError, ValueError, tk.TclError):
             # Invalid text in a Tk variable is still an unsaved edit and must
             # not be discarded silently.
@@ -501,16 +564,22 @@ class App:
             poll_interval = float(self.poll_var.get())
             monitor_index = int(self.monitor_var.get())
         except (TypeError, ValueError, tk.TclError) as exc:
-            raise ValueError("Poll interval and monitor must be valid numbers.") from exc
+            raise ValueError(
+                "Poll interval and monitor must be valid numbers."
+            ) from exc
         if not math.isfinite(poll_interval) or poll_interval < 0.01:
-            raise ValueError("Poll interval must be a finite number of at least 0.01 seconds.")
+            raise ValueError(
+                "Poll interval must be a finite number of at least 0.01 seconds."
+            )
         if monitor_index < 1:
             raise ValueError("Monitor must be 1 or greater.")
         self.scenario.poll_interval = poll_interval
         self.scenario.monitor_index = monitor_index
         start_var = getattr(self, "start_var", None)
         self.scenario.start_hotkey = (
-            start_var.get().strip() if start_var is not None else self.scenario.start_hotkey
+            start_var.get().strip()
+            if start_var is not None
+            else self.scenario.start_hotkey
         ) or START_MACRO_HOTKEY
         self.scenario.kill_switch = self.kill_var.get().strip() or "f12"
         self.scenario.target_window_title = self.target_window_var.get().strip()
@@ -540,21 +609,39 @@ class App:
         ttk.Label(body, text="Scenario", style="Section.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
         )
-        ttk.Label(body, text="Poll interval", style="Surface.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 24), pady=6)
-        ttk.Entry(body, textvariable=poll_var, width=14).grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Monitor", style="Surface.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 24), pady=6)
-        ttk.Entry(body, textvariable=monitor_var, width=14).grid(row=2, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Start key", style="Surface.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 24), pady=6)
-        ttk.Entry(body, textvariable=start_var, width=14).grid(row=3, column=1, sticky="ew", pady=6)
-        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(row=4, column=0, sticky="w", padx=(0, 24), pady=6)
-        ttk.Entry(body, textvariable=kill_var, width=14).grid(row=4, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="Poll interval", style="Surface.TLabel").grid(
+            row=1, column=0, sticky="w", padx=(0, 24), pady=6
+        )
+        ttk.Entry(body, textvariable=poll_var, width=14).grid(
+            row=1, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(body, text="Monitor", style="Surface.TLabel").grid(
+            row=2, column=0, sticky="w", padx=(0, 24), pady=6
+        )
+        ttk.Entry(body, textvariable=monitor_var, width=14).grid(
+            row=2, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(body, text="Start key", style="Surface.TLabel").grid(
+            row=3, column=0, sticky="w", padx=(0, 24), pady=6
+        )
+        ttk.Entry(body, textvariable=start_var, width=14).grid(
+            row=3, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(body, text="Stop key", style="Surface.TLabel").grid(
+            row=4, column=0, sticky="w", padx=(0, 24), pady=6
+        )
+        ttk.Entry(body, textvariable=kill_var, width=14).grid(
+            row=4, column=1, sticky="ew", pady=6
+        )
         ttk.Checkbutton(
             body,
             text="Collect bounded diagnostic screenshots",
             variable=diagnostics_var,
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
-        ttk.Separator(body).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(14, 12))
+        ttk.Separator(body).grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(14, 12)
+        )
         ttk.Label(body, text="Interface", style="Section.TLabel").grid(
             row=7, column=0, columnspan=2, sticky="w", pady=(0, 5)
         )
@@ -577,7 +664,11 @@ class App:
                 poll = float(poll_var.get())
                 monitor = int(monitor_var.get())
             except (tk.TclError, ValueError):
-                messagebox.showerror("Invalid settings", "Poll interval and monitor must be numbers.", parent=win)
+                messagebox.showerror(
+                    "Invalid settings",
+                    "Poll interval and monitor must be numbers.",
+                    parent=win,
+                )
                 return
             if not math.isfinite(poll) or poll < 0.01:
                 messagebox.showerror(
@@ -587,7 +678,9 @@ class App:
                 )
                 return
             if monitor < 1:
-                messagebox.showerror("Invalid settings", "Monitor must be 1 or greater.", parent=win)
+                messagebox.showerror(
+                    "Invalid settings", "Monitor must be 1 or greater.", parent=win
+                )
                 return
             start_key = start_var.get().strip() or START_MACRO_HOTKEY
             stop_key = kill_var.get().strip() or "f12"
@@ -629,7 +722,10 @@ class App:
                 self._queue_log(f"[warn] could not save interface preferences: {exc}")
             if hasattr(self, "alert_tab"):
                 self.alert_tab.apply_ui_preferences(self.ui_preferences)
-            if not self.ui_preferences.animations_enabled and self.status_pulse is not None:
+            if (
+                not self.ui_preferences.animations_enabled
+                and self.status_pulse is not None
+            ):
                 engine = self.engine
                 engine_running = engine is not None and engine.is_running
                 engine_ready = engine is not None and engine.is_ready
@@ -651,8 +747,12 @@ class App:
             self.ui_feedback.play("success")
             win.destroy()
 
-        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="left", padx=4)
-        ttk.Button(buttons, text="Save", style="Primary.TButton", command=save_settings).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(
+            side="left", padx=4
+        )
+        ttk.Button(
+            buttons, text="Save", style="Primary.TButton", command=save_settings
+        ).pack(side="left", padx=4)
         win.bind("<Escape>", lambda _event: win.destroy())
         win.bind("<Return>", lambda _event: save_settings())
         win.after_idle(lambda: center_window(win, self.root))
@@ -715,7 +815,9 @@ class App:
     def _new_scenario(self):
         if not self._require_stopped_for_scenario_change():
             return
-        name = simpledialog.askstring("New scenario", "Scenario name:", parent=self.root)
+        name = simpledialog.askstring(
+            "New scenario", "Scenario name:", parent=self.root
+        )
         if not name:
             return
         name = self._validate_scenario_name_for_ui(name)
@@ -769,8 +871,12 @@ class App:
     def _save_scenario_as(self):
         if not self._require_stopped_for_scenario_change():
             return
-        name = simpledialog.askstring("Save as", "New scenario name:",
-                                       initialvalue=self.scenario.name, parent=self.root)
+        name = simpledialog.askstring(
+            "Save as",
+            "New scenario name:",
+            initialvalue=self.scenario.name,
+            parent=self.root,
+        )
         if not name:
             return
         name = self._validate_scenario_name_for_ui(name)
@@ -858,7 +964,9 @@ class App:
             except Exception as exc:
                 messagebox.showerror("Delete failed", str(exc), parent=parent)
                 return
-            self._apply_scenario_to_ui(Scenario(name="untitled"), loaded_name=None, clean=True)
+            self._apply_scenario_to_ui(
+                Scenario(name="untitled"), loaded_name=None, clean=True
+            )
             self._refresh_scenario_list()
 
     # ---- step management ----
@@ -888,7 +996,11 @@ class App:
                 tags=() if step.enabled else ("disabled",),
             )
         if self.scenario.steps:
-            selected = previous if previous is not None and previous < len(self.scenario.steps) else 0
+            selected = (
+                previous
+                if previous is not None and previous < len(self.scenario.steps)
+                else 0
+            )
             self.steps_tree.selection_set(str(selected))
             self.steps_tree.focus(str(selected))
             self.steps_tree.see(str(selected))
@@ -931,7 +1043,9 @@ class App:
                 }.get(condition.region_mode, "Absolute screen")
             else:
                 scope = "Target" if self.scenario.target_window_title else "Full screen"
-            self.condition_tree.insert("", "end", iid=str(condition_index), text=name, values=(rule, scope))
+            self.condition_tree.insert(
+                "", "end", iid=str(condition_index), text=name, values=(rule, scope)
+            )
         for action_index, action in enumerate(step.actions):
             self.action_tree.insert(
                 "",
@@ -981,9 +1095,13 @@ class App:
     def _add_step(self):
         existing = {s.name for s in self.scenario.steps}
         all_names = [s.name for s in self.scenario.steps]
-        s = step_dialog(self.root, existing_names=existing, all_step_names=all_names,
-                         monitor_index=self.monitor_var.get(),
-                         target_window_title=self.target_window_var.get().strip())
+        s = step_dialog(
+            self.root,
+            existing_names=existing,
+            all_step_names=all_names,
+            monitor_index=self.monitor_var.get(),
+            target_window_title=self.target_window_var.get().strip(),
+        )
         if s:
             self.scenario.steps.append(s)
             self._refresh_steps()
@@ -998,9 +1116,14 @@ class App:
         old_name = self.scenario.steps[idx].name
         existing = {s.name for s in self.scenario.steps}
         all_names = [s.name for s in self.scenario.steps]
-        s = step_dialog(self.root, step=self.scenario.steps[idx], existing_names=existing,
-                         all_step_names=all_names, monitor_index=self.monitor_var.get(),
-                         target_window_title=self.target_window_var.get().strip())
+        s = step_dialog(
+            self.root,
+            step=self.scenario.steps[idx],
+            existing_names=existing,
+            all_step_names=all_names,
+            monitor_index=self.monitor_var.get(),
+            target_window_title=self.target_window_var.get().strip(),
+        )
         if s:
             self.scenario.steps[idx] = s
             if s.name != old_name:
@@ -1009,7 +1132,9 @@ class App:
 
     def _remove_step(self):
         index = self._selected_step_index()
-        if index is not None and messagebox.askyesno("Remove step", "Remove the selected step?"):
+        if index is not None and messagebox.askyesno(
+            "Remove step", "Remove the selected step?"
+        ):
             removed_name = self.scenario.steps[index].name
             del self.scenario.steps[index]
             changes = rewrite_step_references(self.scenario.steps, removed_name, None)
@@ -1033,7 +1158,9 @@ class App:
 
     def _test_step(self):
         if self.engine and self.engine.is_running:
-            messagebox.showwarning("Macro running", "Stop the macro before testing a step.")
+            messagebox.showwarning(
+                "Macro running", "Stop the macro before testing a step."
+            )
             return
         if self._step_test_running:
             return
@@ -1145,7 +1272,9 @@ class App:
 
         previews = preview.get("condition_previews") or []
         if not previews:
-            tk.Label(win, text="No screenshot available.").pack(anchor="w", padx=8, pady=4)
+            tk.Label(win, text="No screenshot available.").pack(
+                anchor="w", padx=8, pady=4
+            )
         else:
             images_frame = tk.Frame(win)
             images_frame.pack(fill="x", padx=8, pady=4)
@@ -1167,7 +1296,9 @@ class App:
 
                 image = condition_preview.get("image")
                 if image is None:
-                    tk.Label(images_frame, text="No screenshot available for this condition.").pack(anchor="w")
+                    tk.Label(
+                        images_frame, text="No screenshot available for this condition."
+                    ).pack(anchor="w")
                     continue
 
                 display_image = image.copy()
@@ -1179,10 +1310,15 @@ class App:
                     draw.text(text_pos, match["label"], fill="lime")
 
                 max_w, max_h = 860, 180
-                scale = min(max_w / display_image.width, max_h / display_image.height, 1.0)
+                scale = min(
+                    max_w / display_image.width, max_h / display_image.height, 1.0
+                )
                 if scale < 1.0:
                     display_image = display_image.resize(
-                        (int(display_image.width * scale), int(display_image.height * scale))
+                        (
+                            int(display_image.width * scale),
+                            int(display_image.height * scale),
+                        )
                     )
 
                 photo = ImageTk.PhotoImage(display_image)
@@ -1267,7 +1403,9 @@ class App:
         if engine.is_ready:
             self._set_engine_running_ui()
         else:
-            self.status_label.config(text="◌ Preparing OCR…", style="Preparing.Status.TLabel")
+            self.status_label.config(
+                text="◌ Preparing OCR…", style="Preparing.Status.TLabel"
+            )
 
     def _stop_engine(self):
         if self.engine:
@@ -1281,7 +1419,9 @@ class App:
                 self.status_pulse.stop("Preparing.Status.TLabel")
             self.run_btn.config(state="disabled")
             self.stop_btn.config(state="disabled")
-            self.status_label.config(text="◌ Stopping…", style="Preparing.Status.TLabel")
+            self.status_label.config(
+                text="◌ Stopping…", style="Preparing.Status.TLabel"
+            )
             return False
         if self.engine:
             self.engine.stop()
@@ -1299,8 +1439,7 @@ class App:
             new_handle = keyboard.add_hotkey(hotkey, self._request_start_from_hotkey)
         except Exception as exc:
             self._queue_log(
-                f"[warn] could not register start hotkey "
-                f"{hotkey.upper()}: {exc}"
+                f"[warn] could not register start hotkey {hotkey.upper()}: {exc}"
             )
             return False
         old_handle = getattr(self, "_start_hotkey_handle", None)
@@ -1400,7 +1539,9 @@ class App:
     def _write_log_file(self, line):
         try:
             if self._log_file_handle is None:
-                rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
+                rotate_log_file(
+                    self.log_file_path, self.log_max_bytes, self.log_backups
+                )
                 self._log_file_handle = open(self.log_file_path, "a", encoding="utf-8")
             self._log_file_handle.write(line + "\n")
             self._log_write_count += 1
@@ -1409,7 +1550,9 @@ class App:
             if self._log_write_count % 100 == 0 and os.path.exists(self.log_file_path):
                 if os.path.getsize(self.log_file_path) >= self.log_max_bytes:
                     self._close_log_file()
-                    rotate_log_file(self.log_file_path, self.log_max_bytes, self.log_backups)
+                    rotate_log_file(
+                        self.log_file_path, self.log_max_bytes, self.log_backups
+                    )
         except Exception:
             pass
 
@@ -1489,7 +1632,9 @@ def main():
             try:
                 os.makedirs(os.path.dirname(STARTUP_ERROR_LOG), exist_ok=True)
                 with open(STARTUP_ERROR_LOG, "a", encoding="utf-8") as handle:
-                    handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n")
+                    handle.write(
+                        f"\n[{datetime.now().isoformat(timespec='seconds')}]\n"
+                    )
                     handle.write(traceback.format_exc())
             except OSError:
                 pass

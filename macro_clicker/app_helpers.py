@@ -63,7 +63,11 @@ def remap_condition_references(actions, removed_index):
     point at the condition that shifted into its place. References above the
     deleted position are decremented.
     """
-    if isinstance(removed_index, bool) or not isinstance(removed_index, int) or removed_index < 0:
+    if (
+        isinstance(removed_index, bool)
+        or not isinstance(removed_index, int)
+        or removed_index < 0
+    ):
         raise ValueError("removed_index must be a non-negative integer")
 
     cleared = 0
@@ -96,7 +100,10 @@ def rewrite_step_references(steps, old_name, new_name=None):
     for step in steps:
         kept_actions = []
         for action in step.actions:
-            if getattr(action, "type", None) == "set_step" and getattr(action, "step_name", "") == old_name:
+            if (
+                getattr(action, "type", None) == "set_step"
+                and getattr(action, "step_name", "") == old_name
+            ):
                 if new_name is None:
                     removed_actions += 1
                     continue

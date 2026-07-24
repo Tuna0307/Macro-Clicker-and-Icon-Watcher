@@ -20,10 +20,7 @@ from macro_clicker.rally_matching import _MATCHING_ROW_SNAPSHOT_KEY
 class DiagnosticCollectorTests(unittest.TestCase):
     @staticmethod
     def _event_dirs(folder):
-        return sorted(
-            path.parent
-            for path in Path(folder).glob("*/*/metadata.json")
-        )
+        return sorted(path.parent for path in Path(folder).glob("*/*/metadata.json"))
 
     def test_event_contains_compressed_context_and_structured_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -41,14 +38,18 @@ class DiagnosticCollectorTests(unittest.TestCase):
             )
 
             self.assertTrue(os.path.isfile(os.path.join(event_path, "context.jpg")))
-            with open(os.path.join(event_path, "metadata.json"), encoding="utf-8") as handle:
+            with open(
+                os.path.join(event_path, "metadata.json"), encoding="utf-8"
+            ) as handle:
                 metadata = json.load(handle)
             self.assertEqual(metadata["event_type"], "rally test")
             self.assertEqual(metadata["decision"], "accepted")
             self.assertEqual(metadata["center"], [10, 20])
             self.assertEqual(metadata["category"], "critical")
             self.assertEqual(metadata["images"], ["context.jpg"])
-            with open(os.path.join(folder, "decisions.jsonl"), encoding="utf-8") as handle:
+            with open(
+                os.path.join(folder, "decisions.jsonl"), encoding="utf-8"
+            ) as handle:
                 decision = json.loads(handle.readline())
             self.assertEqual(decision["decision"], "accepted")
 
@@ -268,7 +269,9 @@ class DiagnosticCollectorTests(unittest.TestCase):
                 force=True,
             )
 
-            with open(os.path.join(event_path, "metadata.json"), encoding="utf-8") as handle:
+            with open(
+                os.path.join(event_path, "metadata.json"), encoding="utf-8"
+            ) as handle:
                 metadata = json.load(handle)
             self.assertEqual(metadata["schema_version"], 1)
             self.assertEqual(metadata["event_type"], "real-event")
@@ -295,13 +298,15 @@ class DiagnosticCollectorTests(unittest.TestCase):
                     "decision": "strong_ocr",
                     "level": 45,
                     "selected_attempt_index": 0,
-                    "attempts": [{
-                        "ocr": {
-                            "level": 45,
-                            "text": "Lv.45",
-                            "confidence": 0.98,
+                    "attempts": [
+                        {
+                            "ocr": {
+                                "level": 45,
+                                "text": "Lv.45",
+                                "confidence": 0.98,
+                            }
                         }
-                    }],
+                    ],
                     "images": {
                         "crop_00_offset_0": np.zeros((45, 150, 3), dtype=np.uint8),
                     },
@@ -342,7 +347,9 @@ class DiagnosticCollectorTests(unittest.TestCase):
                 "eligible_before_delay",
             )
             self.assertEqual(len(self._event_dirs(folder)), 1)
-            with open(os.path.join(folder, "decisions.jsonl"), encoding="utf-8") as handle:
+            with open(
+                os.path.join(folder, "decisions.jsonl"), encoding="utf-8"
+            ) as handle:
                 decisions = [json.loads(line) for line in handle]
             self.assertEqual(len(decisions), 2)
             self.assertTrue(decisions[0]["screenshot_policy"]["selected"])
@@ -359,12 +366,14 @@ class DiagnosticCollectorTests(unittest.TestCase):
                 return None
 
             def submit(self, event_type, metadata, images, **kwargs):
-                submitted.update({
-                    "event_type": event_type,
-                    "metadata": metadata,
-                    "images": images,
-                    "kwargs": kwargs,
-                })
+                submitted.update(
+                    {
+                        "event_type": event_type,
+                        "metadata": metadata,
+                        "images": images,
+                        "kwargs": kwargs,
+                    }
+                )
                 return "submitted"
 
         engine = object.__new__(MacroEngine)
@@ -440,8 +449,8 @@ class DiagnosticCollectorTests(unittest.TestCase):
             1.0,
         )
         submitted = {}
-        engine._submit_rally_diagnostic = lambda event, metadata, **kwargs: submitted.update(
-            {"event": event, "metadata": metadata, "kwargs": kwargs}
+        engine._submit_rally_diagnostic = lambda event, metadata, **kwargs: (
+            submitted.update({"event": event, "metadata": metadata, "kwargs": kwargs})
         )
 
         action = Action(
@@ -475,6 +484,8 @@ class DiagnosticCollectorTests(unittest.TestCase):
             "rally_template_reference_missing_with_target_present",
         )
         self.assertIs(submitted["kwargs"]["context_snapshot"], snapshot)
+        self.assertEqual(submitted["kwargs"]["category"], "samples")
+        self.assertEqual(submitted["kwargs"]["min_interval"], 5.0 * 60.0)
 
     def test_matching_row_diagnostic_ignores_same_center_from_older_generation(self):
         submitted = []
@@ -493,8 +504,8 @@ class DiagnosticCollectorTests(unittest.TestCase):
                 },
             }
         }
-        engine._submit_rally_diagnostic = lambda event, metadata, images, **kwargs: submitted.append(
-            (event, metadata, images, kwargs)
+        engine._submit_rally_diagnostic = lambda event, metadata, images, **kwargs: (
+            submitted.append((event, metadata, images, kwargs))
         )
         reference = {"center": (80, 100), "box": (50, 70, 110, 130)}
         target = {"center": (250, 100), "box": (230, 80, 270, 120)}
@@ -520,16 +531,35 @@ class DiagnosticCollectorTests(unittest.TestCase):
         engine = object.__new__(MacroEngine)
         policy = engine._matching_row_diagnostic_policy(
             "eligible_before_delay",
-            [{
-                "decision": "strong_ocr",
-                "selected_attempt_index": 0,
-                "attempts": [{"ocr": {"confidence": 0.94}}],
-            }],
+            [
+                {
+                    "decision": "strong_ocr",
+                    "selected_attempt_index": 0,
+                    "attempts": [{"ocr": {"confidence": 0.94}}],
+                }
+            ],
             0.0,
         )
 
         self.assertEqual(policy["category"], "critical")
         self.assertEqual(policy["min_interval"], 0.0)
+
+    def test_no_eligible_row_is_a_rate_limited_sample(self):
+        engine = object.__new__(MacroEngine)
+
+        policy = engine._matching_row_diagnostic_policy(
+            "no_eligible_row",
+            [{"decision": "above_available_team_cap"}],
+            2.0,
+        )
+
+        self.assertEqual(policy["category"], "samples")
+        self.assertEqual(policy["min_interval"], 10.0 * 60.0)
+        self.assertEqual(
+            policy["capture_reason"],
+            "periodic_no_eligible_row_sample",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

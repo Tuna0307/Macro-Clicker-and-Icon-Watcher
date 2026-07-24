@@ -32,9 +32,13 @@ class LogMaintenanceTests(unittest.TestCase):
 
             rotate_log_file(path, max_bytes=1, backups=2)
 
-            with open(os.path.join(tmp, "pc_macro_builder.1.log"), encoding="utf-8") as f:
+            with open(
+                os.path.join(tmp, "pc_macro_builder.1.log"), encoding="utf-8"
+            ) as f:
                 self.assertTrue(f.read().startswith("new"))
-            with open(os.path.join(tmp, "pc_macro_builder.2.log"), encoding="utf-8") as f:
+            with open(
+                os.path.join(tmp, "pc_macro_builder.2.log"), encoding="utf-8"
+            ) as f:
                 self.assertTrue(f.read().startswith("old1"))
 
     def test_cleanup_directory_removes_old_files_and_caps_count(self):

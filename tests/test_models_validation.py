@@ -37,26 +37,36 @@ class ModelValidationTests(unittest.TestCase):
 
     def test_invalid_detection_profile_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "match_mode"):
-            ImageCondition.from_dict({
-                "template_path": "templates/icon.png",
-                "match_mode": "spinning_text",
-            })
+            ImageCondition.from_dict(
+                {
+                    "template_path": "templates/icon.png",
+                    "match_mode": "spinning_text",
+                }
+            )
         with self.assertRaisesRegex(ValueError, "template_reference_size"):
-            ImageCondition.from_dict({
-                "template_path": "templates/icon.png",
-                "template_reference_size": [0, 1080],
-            })
+            ImageCondition.from_dict(
+                {
+                    "template_path": "templates/icon.png",
+                    "template_reference_size": [0, 1080],
+                }
+            )
         with self.assertRaisesRegex(ValueError, "without a comparison template"):
-            validate_scenario(Scenario(
-                name="Invalid rival metadata",
-                steps=[Step(
-                    name="One",
-                    conditions=[ImageCondition(
-                        template_path="templates/icon.png",
-                        comparison_template_reference_size=[1920, 1080],
-                    )],
-                )],
-            ))
+            validate_scenario(
+                Scenario(
+                    name="Invalid rival metadata",
+                    steps=[
+                        Step(
+                            name="One",
+                            conditions=[
+                                ImageCondition(
+                                    template_path="templates/icon.png",
+                                    comparison_template_reference_size=[1920, 1080],
+                                )
+                            ],
+                        )
+                    ],
+                )
+            )
 
     def test_monitor_relative_region_round_trips_and_validates(self):
         condition = ImageCondition(
@@ -103,36 +113,44 @@ class ModelValidationTests(unittest.TestCase):
 
         scenario = Scenario(
             name="Bad key action",
-            steps=[Step(
-                name="One",
-                actions=[Action(type="key", key="not-a-real-key")],
-            )],
+            steps=[
+                Step(
+                    name="One",
+                    actions=[Action(type="key", key="not-a-real-key")],
+                )
+            ],
         )
         with self.assertRaisesRegex(ValueError, "invalid key name"):
             validate_scenario(scenario)
 
     def test_region_ratio_rejects_text_values_before_runtime_coordinate_math(self):
         with self.assertRaisesRegex(ValueError, "region_ratio"):
-            ImageCondition.from_dict({
-                "template_path": "templates/icon.png",
-                "region": [10, 20, 30, 40],
-                "region_mode": "monitor",
-                "region_ratio": ["0.1", "0.2", "0.3", "0.4"],
-                "region_window_size": [100, 100],
-            })
+            ImageCondition.from_dict(
+                {
+                    "template_path": "templates/icon.png",
+                    "region": [10, 20, 30, 40],
+                    "region_mode": "monitor",
+                    "region_ratio": ["0.1", "0.2", "0.3", "0.4"],
+                    "region_window_size": [100, 100],
+                }
+            )
 
         scenario = Scenario(
             name="Invalid ratio",
-            steps=[Step(
-                name="One",
-                conditions=[ImageCondition(
-                    template_path="templates/icon.png",
-                    region=[10, 20, 30, 40],
-                    region_mode="monitor",
-                    region_ratio=["0.1", "0.2", "0.3", "0.4"],
-                    region_window_size=[100, 100],
-                )],
-            )],
+            steps=[
+                Step(
+                    name="One",
+                    conditions=[
+                        ImageCondition(
+                            template_path="templates/icon.png",
+                            region=[10, 20, 30, 40],
+                            region_mode="monitor",
+                            region_ratio=["0.1", "0.2", "0.3", "0.4"],
+                            region_window_size=[100, 100],
+                        )
+                    ],
+                )
+            ],
         )
         with self.assertRaisesRegex(ValueError, "region_ratio"):
             validate_scenario(scenario)
@@ -147,7 +165,9 @@ class ModelValidationTests(unittest.TestCase):
         self.assertEqual(Action.from_dict(action.to_dict()).pre_click_delay, 1.5)
         for value in (-0.1, float("nan"), float("inf"), True):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                Action.from_dict({"type": "click_matching_row", "pre_click_delay": value})
+                Action.from_dict(
+                    {"type": "click_matching_row", "pre_click_delay": value}
+                )
 
     def test_rally_team_maximums_default_to_unlimited_and_round_trip_null(self):
         defaults = Action(type="select_rally_team")
@@ -217,12 +237,20 @@ class ModelValidationTests(unittest.TestCase):
                 ("NullStep", {"name": "NullStep", "steps": [None]}),
                 (
                     "NullCondition",
-                    {"name": "NullCondition", "steps": [{"name": "Step", "conditions": [None]}]},
+                    {
+                        "name": "NullCondition",
+                        "steps": [{"name": "Step", "conditions": [None]}],
+                    },
                 ),
             ):
-                with open(os.path.join(folder, f"{name}.json"), "w", encoding="utf-8") as handle:
+                with open(
+                    os.path.join(folder, f"{name}.json"), "w", encoding="utf-8"
+                ) as handle:
                     json.dump(data, handle)
-                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Could not load scenario"):
+                with (
+                    self.subTest(name=name),
+                    self.assertRaisesRegex(ValueError, "Could not load scenario"),
+                ):
                     load_scenario(name, folder=folder)
 
     def test_non_finite_and_too_fast_poll_intervals_are_rejected(self):
@@ -252,14 +280,18 @@ class ModelValidationTests(unittest.TestCase):
     def test_set_step_enabled_flag_must_be_boolean(self):
         scenario = Scenario(
             name="Invalid set flag",
-            steps=[Step(
-                name="One",
-                actions=[Action(
-                    type="set_step",
-                    step_name="One",
-                    set_enabled="false",
-                )],
-            )],
+            steps=[
+                Step(
+                    name="One",
+                    actions=[
+                        Action(
+                            type="set_step",
+                            step_name="One",
+                            set_enabled="false",
+                        )
+                    ],
+                )
+            ],
         )
 
         with self.assertRaisesRegex(ValueError, "set_enabled must be a boolean"):
@@ -294,7 +326,9 @@ class ModelValidationTests(unittest.TestCase):
             steps=[
                 Step(
                     name="One",
-                    conditions=[ImageCondition(template_path="templates/does-not-exist.png")],
+                    conditions=[
+                        ImageCondition(template_path="templates/does-not-exist.png")
+                    ],
                 )
             ],
         )
@@ -304,10 +338,12 @@ class ModelValidationTests(unittest.TestCase):
 
     def test_step_names_are_case_insensitively_unique(self):
         with self.assertRaisesRegex(ValueError, "duplicate step name"):
-            Scenario.from_dict({
-                "name": "rally",
-                "steps": [{"name": "Join"}, {"name": "join"}],
-            })
+            Scenario.from_dict(
+                {
+                    "name": "rally",
+                    "steps": [{"name": "Join"}, {"name": "join"}],
+                }
+            )
 
     def test_file_name_must_match_scenario_name(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -317,6 +353,39 @@ class ModelValidationTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "does not match filename"):
                 load_scenario("Rally", folder=folder)
+
+    def test_terminal_rally_steps_disable_both_back_steps(self):
+        for scenario_name in ("Rally Gold Mob", "Rally gold mob_ 2 team"):
+            scenario = load_scenario(scenario_name)
+            for step_name in ("Attack Confirm", "Back if wrong mob"):
+                with self.subTest(scenario=scenario_name, step=step_name):
+                    terminal_step = next(
+                        step for step in scenario.steps if step.name == step_name
+                    )
+                    disabled_steps = {
+                        action.step_name
+                        for action in terminal_step.actions
+                        if action.type == "set_step" and not action.set_enabled
+                    }
+
+                    self.assertIn("Back if wrong mob", disabled_steps)
+                    self.assertIn("Back if no slot", disabled_steps)
+
+    def test_no_row_recovery_disables_both_back_steps(self):
+        for scenario_name in ("Rally Gold Mob", "Rally gold mob_ 2 team"):
+            with self.subTest(scenario=scenario_name):
+                scenario = load_scenario(scenario_name)
+                joining = next(
+                    step for step in scenario.steps if step.name == "Joining"
+                )
+                row_action = next(
+                    action
+                    for action in joining.actions
+                    if action.type == "click_matching_row"
+                )
+
+                self.assertIn("Back if wrong mob", row_action.no_match_disable_steps)
+                self.assertIn("Back if no slot", row_action.no_match_disable_steps)
 
 
 if __name__ == "__main__":

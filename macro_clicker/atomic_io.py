@@ -56,4 +56,3 @@ def atomic_write_png(path, image_bgr):
         except OSError:
             pass
         raise
-

@@ -32,7 +32,9 @@ class WindowRegionTests(unittest.TestCase):
             (0.1, 0.2, 0.25, 0.2),
         )
 
-    def test_converts_proportional_window_region_to_screen_coordinates_after_resize(self):
+    def test_converts_proportional_window_region_to_screen_coordinates_after_resize(
+        self,
+    ):
         resized_window_rect = (300, 400, 1600, 1200)
         proportional_region = [0.1, 0.2, 0.25, 0.2]
 
@@ -49,11 +51,15 @@ class WindowRegionTests(unittest.TestCase):
         base_size = [800, 600]
 
         self.assertEqual(
-            resolve_window_region(relative_region, moved_window, proportional_region, base_size),
+            resolve_window_region(
+                relative_region, moved_window, proportional_region, base_size
+            ),
             (380, 520, 200, 120),
         )
         self.assertEqual(
-            resolve_window_region(relative_region, resized_window, proportional_region, base_size),
+            resolve_window_region(
+                relative_region, resized_window, proportional_region, base_size
+            ),
             (460, 640, 400, 240),
         )
 
@@ -89,7 +95,9 @@ class WindowRegionTests(unittest.TestCase):
             [0.0125, 0.0333333333, 0.0375, 0.0666666667],
         )
         restored_condition = ImageCondition.from_dict(condition.to_dict())
-        self.assertEqual(restored_condition.comparison_template_path, "templates/full.png")
+        self.assertEqual(
+            restored_condition.comparison_template_path, "templates/full.png"
+        )
         self.assertEqual(restored_condition.comparison_margin, 0.06)
 
     def test_engine_resolves_window_relative_condition_region(self):

@@ -14,12 +14,12 @@ class CombinedAppTests(unittest.TestCase):
         root = tk.Tk()
         root.withdraw()
         try:
-            with patch.object(app, "maintain_logs"), patch.object(app.App, "_write_log_file"):
+            with (
+                patch.object(app, "maintain_logs"),
+                patch.object(app.App, "_write_log_file"),
+            ):
                 ui = app.App(root)
-            tabs = [
-                ui.notebook.tab(tab_id, "text")
-                for tab_id in ui.notebook.tabs()
-            ]
+            tabs = [ui.notebook.tab(tab_id, "text") for tab_id in ui.notebook.tabs()]
             detection_modes = tuple(ui.alert_tab.match_mode_combo["values"])
         finally:
             root.destroy()

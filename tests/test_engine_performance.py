@@ -65,8 +65,8 @@ class EnginePerformanceTests(unittest.TestCase):
             )
 
         engine._evaluate_step = evaluate_step
-        engine._refresh_click_matching_row_matches = (
-            lambda *_args: refreshes.append(True) or None
+        engine._refresh_click_matching_row_matches = lambda *_args: (
+            refreshes.append(True) or None
         )
         engine._click_point = lambda x, y, button: clicks.append((x, y, button))
 
@@ -165,8 +165,8 @@ class EnginePerformanceTests(unittest.TestCase):
 
         engine._evaluate_step = evaluate_step
         engine._refresh_click_matching_row_matches = refresh
-        engine._read_level_for_row = (
-            lambda _action, _reference: level_reads.append(True) or 45
+        engine._read_level_for_row = lambda _action, _reference: (
+            level_reads.append(True) or 45
         )
         engine._click_point = lambda x, y, button: clicks.append((x, y, button))
 
@@ -260,7 +260,9 @@ class EnginePerformanceTests(unittest.TestCase):
 
             def grab(self, monitor):
                 grabbed.append(monitor)
-                return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+                return np.zeros(
+                    (monitor["height"], monitor["width"], 4), dtype=np.uint8
+                )
 
         engine.sct = FakeCapture()
         engine.log = logs.append
@@ -304,8 +306,16 @@ class EnginePerformanceTests(unittest.TestCase):
 
         from macro_clicker import engine as engine_module
 
-        with patch.object(engine_module.time, "monotonic", return_value=10.0) as monotonic, \
-                patch.object(engine_module.time, "time", side_effect=AssertionError("wall clock used")):
+        with (
+            patch.object(
+                engine_module.time, "monotonic", return_value=10.0
+            ) as monotonic,
+            patch.object(
+                engine_module.time,
+                "time",
+                side_effect=AssertionError("wall clock used"),
+            ),
+        ):
             engine._cycle()
 
         monotonic.assert_called_once()
@@ -318,7 +328,9 @@ class EnginePerformanceTests(unittest.TestCase):
 
         from macro_clicker import engine as engine_module
 
-        with patch.object(engine_module.cv2, "resize", wraps=engine_module.cv2.resize) as resize:
+        with patch.object(
+            engine_module.cv2, "resize", wraps=engine_module.cv2.resize
+        ) as resize:
             first = engine._scaled_template(template, 1.2)
             second = engine._scaled_template(template, 1.2)
 
@@ -425,12 +437,16 @@ class EnginePerformanceTests(unittest.TestCase):
         engine._load_template = lambda path: template
 
         def fail_if_collecting_all_matches(*args, **kwargs):
-            raise AssertionError("simple click conditions should not collect every match")
+            raise AssertionError(
+                "simple click conditions should not collect every match"
+            )
 
         engine._find_template_matches = fail_if_collecting_all_matches
         step = Step(
             name="simple-click",
-            conditions=[ImageCondition(template_path="templates/a.png", confidence=0.5)],
+            conditions=[
+                ImageCondition(template_path="templates/a.png", confidence=0.5)
+            ],
             actions=[Action(type="click", on_condition_index=0)],
         )
 
@@ -439,6 +455,7 @@ class EnginePerformanceTests(unittest.TestCase):
         self.assertTrue(met)
         self.assertIn(0, points)
         self.assertEqual(len(matches[0]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,7 +42,9 @@ def proportional_region_from_window(region: Sequence[int], window_rect: Rect):
     )
 
 
-def absolute_region_from_window_ratio(region_ratio: Sequence[float], window_rect: Rect) -> Rect:
+def absolute_region_from_window_ratio(
+    region_ratio: Sequence[float], window_rect: Rect
+) -> Rect:
     """Convert proportional window coordinates to absolute screen coordinates."""
     left, top, win_width, win_height = window_rect
     rel_left, rel_top, rel_width, rel_height = region_ratio
@@ -54,9 +56,12 @@ def absolute_region_from_window_ratio(region_ratio: Sequence[float], window_rect
     )
 
 
-def resolve_window_region(region: Sequence[int], window_rect: Rect,
-                          region_ratio: Optional[Sequence[float]] = None,
-                          region_window_size: Optional[Sequence[int]] = None) -> Rect:
+def resolve_window_region(
+    region: Sequence[int],
+    window_rect: Rect,
+    region_ratio: Optional[Sequence[float]] = None,
+    region_window_size: Optional[Sequence[int]] = None,
+) -> Rect:
     """
     Resolve a saved window-relative region against the current window.
 
@@ -115,7 +120,9 @@ def relative_region_from_window(region: Sequence[int], window_rect: Rect) -> Rec
     return (abs_left - left, abs_top - top, width, height)
 
 
-def find_window_rect(title_contains: str, window_provider: Optional[Callable] = None) -> Optional[Rect]:
+def find_window_rect(
+    title_contains: str, window_provider: Optional[Callable] = None
+) -> Optional[Rect]:
     """
     Return the first visible window whose title contains the provided text.
 

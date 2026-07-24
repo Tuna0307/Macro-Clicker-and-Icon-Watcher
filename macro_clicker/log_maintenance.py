@@ -31,13 +31,21 @@ def rotate_log_file(path, max_bytes=DEFAULT_MAX_LOG_BYTES, backups=DEFAULT_LOG_B
         return False
 
 
-def cleanup_directory(path, max_files=DEFAULT_DEBUG_MAX_FILES,
-                      max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS, now=None,
-                      preserve_names=None):
+def cleanup_directory(
+    path,
+    max_files=DEFAULT_DEBUG_MAX_FILES,
+    max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS,
+    now=None,
+    preserve_names=None,
+):
     if not os.path.isdir(path):
         return 0
     now = time.time() if now is None else now
-    cutoff = now - (max_age_days * 86400) if max_age_days is not None and max_age_days >= 0 else None
+    cutoff = (
+        now - (max_age_days * 86400)
+        if max_age_days is not None and max_age_days >= 0
+        else None
+    )
     removed = 0
     files = []
     preserved = {str(name).casefold() for name in (preserve_names or ())}
@@ -72,9 +80,14 @@ def cleanup_directory(path, max_files=DEFAULT_DEBUG_MAX_FILES,
     return removed
 
 
-def maintain_logs(log_dir, main_log_path=None, max_log_bytes=DEFAULT_MAX_LOG_BYTES,
-                  log_backups=DEFAULT_LOG_BACKUPS, debug_max_files=DEFAULT_DEBUG_MAX_FILES,
-                  debug_max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS):
+def maintain_logs(
+    log_dir,
+    main_log_path=None,
+    max_log_bytes=DEFAULT_MAX_LOG_BYTES,
+    log_backups=DEFAULT_LOG_BACKUPS,
+    debug_max_files=DEFAULT_DEBUG_MAX_FILES,
+    debug_max_age_days=DEFAULT_DEBUG_MAX_AGE_DAYS,
+):
     if main_log_path:
         rotate_log_file(main_log_path, max_log_bytes, log_backups)
     for folder in ("region_debug",):

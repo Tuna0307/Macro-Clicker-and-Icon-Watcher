@@ -1,4 +1,5 @@
 """Writable per-user runtime paths shared by GUI and background components."""
+
 import os
 
 APP_FOLDER_NAME = "Macro Clicker and Icon Watcher"

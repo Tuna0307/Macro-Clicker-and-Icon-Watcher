@@ -22,7 +22,9 @@ class UiPreferencesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "ui.json")
             with open(path, "w", encoding="utf-8") as handle:
-                json.dump({"sounds_enabled": "yes", "animations_enabled": False}, handle)
+                json.dump(
+                    {"sounds_enabled": "yes", "animations_enabled": False}, handle
+                )
             self.assertEqual(
                 load_ui_preferences(path),
                 UiPreferences(sounds_enabled=True, animations_enabled=False),

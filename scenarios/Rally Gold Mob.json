@@ -326,7 +326,8 @@
           "no_match_disable_steps": [
             "Joining",
             "Attack Confirm",
-            "Back if wrong mob"
+            "Back if wrong mob",
+            "Back if no slot"
           ],
           "x": null,
           "y": null,
@@ -527,6 +528,30 @@
           "seconds": 0.5,
           "step_name": "Back if wrong mob",
           "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "on_condition_index": null,
+          "match_condition_index": null,
+          "row_tolerance": 60,
+          "row_mode": "first",
+          "target_choice": "leftmost",
+          "pre_click_delay": 0.0,
+          "min_level": null,
+          "max_level": null,
+          "level_roi": null,
+          "no_match_condition_index": null,
+          "no_match_disable_steps": [],
+          "x": null,
+          "y": null,
+          "offset_x": 0,
+          "offset_y": 0,
+          "button": "left",
+          "key": "",
+          "hold": 0.0,
+          "seconds": 0.5,
+          "step_name": "Back if no slot",
+          "set_enabled": false
         }
       ],
       "condition_operator": "AND",
@@ -720,6 +745,30 @@
           "hold": 0.0,
           "seconds": 0.5,
           "step_name": "Back if wrong mob",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "on_condition_index": null,
+          "match_condition_index": null,
+          "row_tolerance": 60,
+          "row_mode": "first",
+          "target_choice": "leftmost",
+          "pre_click_delay": 0.0,
+          "min_level": null,
+          "max_level": null,
+          "level_roi": null,
+          "no_match_condition_index": null,
+          "no_match_disable_steps": [],
+          "x": null,
+          "y": null,
+          "offset_x": 0,
+          "offset_y": 0,
+          "button": "left",
+          "key": "",
+          "hold": 0.0,
+          "seconds": 0.5,
+          "step_name": "Back if no slot",
           "set_enabled": false
         }
       ],

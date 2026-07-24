@@ -4,6 +4,7 @@ executes their actions -- the same model as game_macro.py, but driven
 by a Scenario object and running on a background thread (with a log
 callback instead of print) so it plays nicely with a GUI.
 """
+
 import inspect
 import math
 import os
@@ -80,9 +81,9 @@ class MacroEngine(RallyMatchingMixin):
         self._last_level_diagnostics = {}
         self._matching_row_snapshot = None
         self._pending_rally_level = None
-        self._last_rally_team_busy_state: Optional[
-            tuple[bool, bool, Optional[int]]
-        ] = None
+        self._last_rally_team_busy_state: Optional[tuple[bool, bool, Optional[int]]] = (
+            None
+        )
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
         self._abort_current_step = False
@@ -93,6 +94,8 @@ class MacroEngine(RallyMatchingMixin):
         self._target_window_rect = None
         self._target_window_missing_logged = False
         self._monitor_index_warning_logged = None
+        self._monitor_bounds_warning_logged = False
+        self._monitor_bounds_validation_failed = False
         self._window_rect_provider = find_window_rect
         self._window_rect_lookup_cache: Optional[dict] = None
         self.sct = mss.MSS()
@@ -116,7 +119,9 @@ class MacroEngine(RallyMatchingMixin):
         self._all_match_indices = {}
         self._step_lookup = {}
         self._step_names_snapshot = ()
-        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
+        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(
+            self._evaluate_step
+        )
         self.diagnostics_enabled = self.scenario.diagnostics_enabled
         self._diagnostic_collector = get_diagnostic_collector(log=self.log)
 
@@ -129,7 +134,9 @@ class MacroEngine(RallyMatchingMixin):
     def is_ready(self):
         """True once optional OCR warm-up is complete and the run loop is ready."""
         ready_event = getattr(self, "_ready_event", None)
-        return bool(ready_event is not None and ready_event.is_set() and self.is_running)
+        return bool(
+            ready_event is not None and ready_event.is_set() and self.is_running
+        )
 
     def start(self):
         if self.is_running:
@@ -151,11 +158,15 @@ class MacroEngine(RallyMatchingMixin):
         self._ever_started = True
         self._step_names_snapshot = ()
         self._refresh_step_caches()
-        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
+        self._evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(
+            self._evaluate_step
+        )
         for s in self.scenario.steps:
             self._last_fired[s.name] = 0.0
         try:
-            self._hotkey_handle = keyboard.add_hotkey(self.scenario.kill_switch, self.stop)
+            self._hotkey_handle = keyboard.add_hotkey(
+                self.scenario.kill_switch, self.stop
+            )
         except Exception as e:
             self._close_capture()
             raise RuntimeError(
@@ -170,7 +181,9 @@ class MacroEngine(RallyMatchingMixin):
             self._ready_event.set()
         self._thread.start()
         if not uses_level_ocr:
-            self.log(f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}")
+            self.log(
+                f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}"
+            )
 
     def request_stop(self):
         """Signal a stop without waiting; safe to call from the Tk event loop."""
@@ -273,14 +286,19 @@ class MacroEngine(RallyMatchingMixin):
             while not self._stop_event.is_set():
                 fired = self._cycle()
                 if fired:
-                    delay = min(self.scenario.poll_interval, getattr(self, "fast_poll_after_fire", 0.03))
+                    delay = min(
+                        self.scenario.poll_interval,
+                        getattr(self, "fast_poll_after_fire", 0.03),
+                    )
                 else:
                     delay = self.scenario.poll_interval
                 self._sleep_until_stop(delay)
         except _StopRequested:
             pass
         except pyautogui.FailSafeException:
-            self.log("[safety] scenario stopped because the mouse reached a fail-safe corner")
+            self.log(
+                "[safety] scenario stopped because the mouse reached a fail-safe corner"
+            )
         except Exception as e:
             self.log(f"[error] engine stopped ({type(e).__name__}): {e}")
         finally:
@@ -307,9 +325,8 @@ class MacroEngine(RallyMatchingMixin):
             parameters = inspect.signature(evaluate_step).parameters
         except (TypeError, ValueError):
             return False
-        return (
-            "frame_cache" in parameters
-            or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+        return "frame_cache" in parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
         )
 
     def _load_template(self, path):
@@ -363,7 +380,7 @@ class MacroEngine(RallyMatchingMixin):
                     f"[warn] screen capture failed; retrying "
                     f"({attempt + 1}/{attempts - 1}): {exc}"
                 )
-                if self._sleep_until_stop(backoff * (2 ** attempt)):
+                if self._sleep_until_stop(backoff * (2**attempt)):
                     raise _StopRequested() from exc
         self._raise_if_stopped()
         return frame, monitor["left"], monitor["top"]
@@ -446,9 +463,12 @@ class MacroEngine(RallyMatchingMixin):
             if reference_region is None:
                 return snapshot_regions
             left, top, width, height = reference_region
-            roi_left, roi_top, roi_width, roi_height = (
-                action.level_roi or [-90, -45, 220, 100]
-            )
+            roi_left, roi_top, roi_width, roi_height = action.level_roi or [
+                -90,
+                -45,
+                220,
+                100,
+            ]
             x_edges = (
                 roi_left,
                 roi_left + roi_width,
@@ -457,10 +477,18 @@ class MacroEngine(RallyMatchingMixin):
                 roi_top + retry_offsets[0],
                 roi_top + roi_height + retry_offsets[1],
             )
-            min_x = math.floor(min(value * scale for value in x_edges for scale in scale_bounds))
-            max_x = math.ceil(max(value * scale for value in x_edges for scale in scale_bounds))
-            min_y = math.floor(min(value * scale for value in y_edges for scale in scale_bounds))
-            max_y = math.ceil(max(value * scale for value in y_edges for scale in scale_bounds))
+            min_x = math.floor(
+                min(value * scale for value in x_edges for scale in scale_bounds)
+            )
+            max_x = math.ceil(
+                max(value * scale for value in x_edges for scale in scale_bounds)
+            )
+            min_y = math.floor(
+                min(value * scale for value in y_edges for scale in scale_bounds)
+            )
+            max_y = math.ceil(
+                max(value * scale for value in y_edges for scale in scale_bounds)
+            )
             expanded_left = left + min_x
             expanded_top = top + min_y
             expanded_right = left + width + max_x
@@ -572,25 +600,33 @@ class MacroEngine(RallyMatchingMixin):
         try:
             for i, cond in enumerate(step.conditions):
                 self._raise_if_stopped()
-                ok, condition_matches, image, capture_box = self._preview_condition(i, cond)
+                ok, condition_matches, image, capture_box = self._preview_condition(
+                    i, cond
+                )
                 results.append(ok)
                 matches.extend(condition_matches)
                 if preview_image is None and image is not None:
                     preview_image = image
-                condition_previews.append({
-                    "condition_index": i,
-                    "ok": ok,
-                    "image": image,
-                    "capture_box": capture_box,
-                    "matches": condition_matches,
-                    "template_path": cond.template_path,
-                    "negate": cond.negate,
-                })
+                condition_previews.append(
+                    {
+                        "condition_index": i,
+                        "ok": ok,
+                        "image": image,
+                        "capture_box": capture_box,
+                        "matches": condition_matches,
+                        "template_path": cond.template_path,
+                        "negate": cond.negate,
+                    }
+                )
         finally:
             self._window_rect_lookup_cache = previous_cache
             self._preview_all_match_indices = previous_all_matches
 
-        met = True if not results else (any(results) if step.condition_operator == "OR" else all(results))
+        met = (
+            True
+            if not results
+            else (any(results) if step.condition_operator == "OR" else all(results))
+        )
         return {
             "met": met,
             "matches": matches,
@@ -621,16 +657,22 @@ class MacroEngine(RallyMatchingMixin):
         )
         return ok, matches, image, capture_box
 
-    def _evaluate_condition(self, index: int, cond: ImageCondition, frame_cache, collect_all=True):
+    def _evaluate_condition(
+        self, index: int, cond: ImageCondition, frame_cache, collect_all=True
+    ):
         if self._stop_requested():
             return False, []
         region, frame, off_x, off_y = self._capture_for_condition(cond, frame_cache)
         if region is _WINDOW_UNAVAILABLE:
             return False, []
 
-        return self._evaluate_template_condition(index, cond, frame, off_x, off_y, collect_all)
+        return self._evaluate_template_condition(
+            index, cond, frame, off_x, off_y, collect_all
+        )
 
-    def _evaluate_template_condition(self, index, cond, frame, off_x, off_y, collect_all):
+    def _evaluate_template_condition(
+        self, index, cond, frame, off_x, off_y, collect_all
+    ):
         if self._stop_requested():
             return False, []
         template = self._load_template(cond.template_path)
@@ -650,7 +692,9 @@ class MacroEngine(RallyMatchingMixin):
             )
             found = bool(template_matches)
             ok = found
-            return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
+            return ok, self._template_matches_to_runtime_matches(
+                index, cond, template_matches, off_x, off_y
+            )
 
         template_matches = self._find_template_matches_in_frame(
             frame,
@@ -666,7 +710,9 @@ class MacroEngine(RallyMatchingMixin):
         if not found or cond.negate:
             return ok, []
 
-        return ok, self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
+        return ok, self._template_matches_to_runtime_matches(
+            index, cond, template_matches, off_x, off_y
+        )
 
     def _evaluate_competing_template_condition(
         self,
@@ -757,8 +803,7 @@ class MacroEngine(RallyMatchingMixin):
         ) or ((1.0, 1.0),)
         template_height, template_width = template.shape[:2]
         rival_width = max(
-            max(1, round(template_width * scale_x))
-            for scale_x, _scale_y in scale_pairs
+            max(1, round(template_width * scale_x)) for scale_x, _scale_y in scale_pairs
         )
         rival_height = max(
             max(1, round(template_height * scale_y))
@@ -853,10 +898,14 @@ class MacroEngine(RallyMatchingMixin):
         if not found:
             return ok, [], image
 
-        matches = self._template_matches_to_runtime_matches(index, cond, template_matches, off_x, off_y)
+        matches = self._template_matches_to_runtime_matches(
+            index, cond, template_matches, off_x, off_y
+        )
         return ok, matches, image
 
-    def _template_matches_to_runtime_matches(self, index, cond, template_matches, off_x, off_y):
+    def _template_matches_to_runtime_matches(
+        self, index, cond, template_matches, off_x, off_y
+    ):
         matches = []
         for template_match in template_matches:
             x, y, w, h, score, scale = template_match
@@ -866,19 +915,21 @@ class MacroEngine(RallyMatchingMixin):
             image_box = (x, y, x + w, y + h)
             center = (box[0] + w // 2, box[1] + h // 2)
             scale_label = "" if abs(scale - 1.0) < 0.001 else f" x{scale:.2f}"
-            matches.append({
-                "condition_index": index,
-                "type": "template",
-                "label": f"{cond.template_path} {score:.2f}{scale_label}",
-                "confidence": score,
-                "scale": scale,
-                "scale_x": scale_x,
-                "scale_y": scale_y,
-                "angle": float(getattr(template_match, "angle", 0.0)),
-                "box": box,
-                "image_box": image_box,
-                "center": center,
-            })
+            matches.append(
+                {
+                    "condition_index": index,
+                    "type": "template",
+                    "label": f"{cond.template_path} {score:.2f}{scale_label}",
+                    "confidence": score,
+                    "scale": scale,
+                    "scale_x": scale_x,
+                    "scale_y": scale_y,
+                    "angle": float(getattr(template_match, "angle", 0.0)),
+                    "box": box,
+                    "image_box": image_box,
+                    "center": center,
+                }
+            )
         return matches
 
     def _find_best_template_match_in_frame(
@@ -926,13 +977,9 @@ class MacroEngine(RallyMatchingMixin):
             cache = {}
             self._prepared_template_cache = cache
         reference_key = tuple(reference_size) if reference_size else None
-        reference_sizes_key = tuple(
-            tuple(size) for size in (reference_sizes or ())
-        )
+        reference_sizes_key = tuple(tuple(size) for size in (reference_sizes or ()))
         current_key = tuple(current_size) if current_size else None
-        low_variance_threshold = float(
-            getattr(self, "low_variance_threshold", 1.0)
-        )
+        low_variance_threshold = float(getattr(self, "low_variance_threshold", 1.0))
         cache_key = (
             id(template),
             match_mode,
@@ -1008,9 +1055,7 @@ class MacroEngine(RallyMatchingMixin):
             match_mode="static_picture",
             scales=(scale,),
             stop_check=self._raise_if_stopped,
-            low_variance_threshold=float(
-                getattr(self, "low_variance_threshold", 1.0)
-            ),
+            low_variance_threshold=float(getattr(self, "low_variance_threshold", 1.0)),
             max_matches_per_scale=getattr(self, "max_matches_per_scale", 128),
             max_candidates=getattr(self, "max_multiscale_candidates", 512),
         )
@@ -1024,10 +1069,7 @@ class MacroEngine(RallyMatchingMixin):
             height,
             max(1, int(getattr(self, "max_matches_per_scale", 128))),
         )
-        return [
-            (x, y, width, height, score, scale)
-            for x, y, score in peaks
-        ]
+        return [(x, y, width, height, score, scale) for x, y, score in peaks]
 
     def _scaled_template(self, template, scale):
         cache = getattr(self, "_scaled_template_cache", None)
@@ -1038,7 +1080,6 @@ class MacroEngine(RallyMatchingMixin):
 
     def _box_iou(self, a, b):
         return box_iou(a, b)
-
 
     def _frame_to_image(self, frame):
         if isinstance(frame, Image.Image):
@@ -1141,7 +1182,7 @@ class MacroEngine(RallyMatchingMixin):
 
             if not collector.should_capture(
                 f"row-miss-probe:{step.name}:{reason}",
-                min_interval=15.0,
+                min_interval=5 * 60.0,
             ):
                 return
 
@@ -1179,6 +1220,8 @@ class MacroEngine(RallyMatchingMixin):
                 },
                 matches=diagnostic_matches,
                 key=f"row-miss-event:{step.name}:{reason}",
+                category="samples",
+                min_interval=5 * 60.0,
                 context_snapshot=frame_cache.get(_MATCHING_ROW_SNAPSHOT_KEY),
             )
         except Exception as exc:
@@ -1202,7 +1245,10 @@ class MacroEngine(RallyMatchingMixin):
             geometry_match = None
             if action.x is not None and action.y is not None:
                 x, y = action.x, action.y
-            elif action.on_condition_index is not None and action.on_condition_index in points:
+            elif (
+                action.on_condition_index is not None
+                and action.on_condition_index in points
+            ):
                 x, y = points[action.on_condition_index]
                 condition_matches = matches.get(action.on_condition_index, [])
                 geometry_match = condition_matches[0] if condition_matches else None
@@ -1211,9 +1257,13 @@ class MacroEngine(RallyMatchingMixin):
                     f"  [skip] '{step.name}' click target condition "
                     f"#{action.on_condition_index} has no match"
                 )
+                self._retry_current_step = True
                 return False
             elif action.x is not None or action.y is not None:
-                self.log(f"  [skip] '{step.name}' click action has an incomplete fixed point")
+                self.log(
+                    f"  [skip] '{step.name}' click action has an incomplete fixed point"
+                )
+                self._retry_current_step = True
                 return False
             elif points:
                 condition_index, point = next(iter(points.items()))
@@ -1222,11 +1272,13 @@ class MacroEngine(RallyMatchingMixin):
                 geometry_match = condition_matches[0] if condition_matches else None
             else:
                 self.log(f"  [skip] '{step.name}' click action has no target point")
+                self._retry_current_step = True
                 return False
             scale_x, scale_y = self._match_geometry_scale(geometry_match)
             x += round(action.offset_x * scale_x)
             y += round(action.offset_y * scale_y)
             if self._click_point(x, y, action.button) is False:
+                self._retry_current_step = True
                 return False
             self.log(f"  click ({x}, {y})")
             return True
@@ -1251,7 +1303,9 @@ class MacroEngine(RallyMatchingMixin):
             else:
                 refreshed = self._refresh_click_matching_row_matches(step, action)
                 if refreshed is None:
-                    self.log(f"  [skip] '{step.name}' conditions changed before row click")
+                    self.log(
+                        f"  [skip] '{step.name}' conditions changed before row click"
+                    )
                     self._retry_current_step = True
                     return False
                 points, matches = refreshed
@@ -1262,9 +1316,7 @@ class MacroEngine(RallyMatchingMixin):
             )
             if not selections:
                 decision = (
-                    "level_unreadable"
-                    if had_unreadable_level
-                    else "no_eligible_row"
+                    "level_unreadable" if had_unreadable_level else "no_eligible_row"
                 )
                 self._record_matching_row_diagnostic(
                     step,
@@ -1282,7 +1334,16 @@ class MacroEngine(RallyMatchingMixin):
                     self._retry_current_step = True
                     return False
                 self.log(f"  [skip] '{step.name}' no valid matching row target")
-                return self._run_no_match_fallback(step, action, points)
+                fallback_invalidates_frame = self._run_no_match_fallback(
+                    step,
+                    action,
+                    points,
+                )
+                # The fallback has completed this branch of the step. Do not run
+                # later actions such as a post-click wait when no row was clicked.
+                if not self._retry_current_step:
+                    self._abort_current_step = True
+                return fallback_invalidates_frame
 
             pre_click_delay = max(0.0, float(getattr(action, "pre_click_delay", 0.0)))
             diagnostic_elapsed = 0.0
@@ -1301,9 +1362,7 @@ class MacroEngine(RallyMatchingMixin):
             delayed = False
             if pre_click_delay > 0.0:
                 delayed = True
-                self.log(
-                    f"  wait {pre_click_delay:g}s after eligible level check"
-                )
+                self.log(f"  wait {pre_click_delay:g}s after eligible level check")
                 remaining_delay = max(0.0, pre_click_delay - diagnostic_elapsed)
                 if self._sleep_until_stop(remaining_delay):
                     return True
@@ -1346,6 +1405,7 @@ class MacroEngine(RallyMatchingMixin):
                 x += round(action.offset_x * scale_x)
                 y += round(action.offset_y * scale_y)
                 if self._click_point(x, y, action.button) is False:
+                    self._retry_current_step = True
                     return clicked or delayed
                 clicked = True
                 self._pending_rally_level = selection.get("level")
@@ -1421,7 +1481,9 @@ class MacroEngine(RallyMatchingMixin):
             return False
 
         anchor_index = action.on_condition_index
-        anchor_matches = matches.get(anchor_index, []) if anchor_index is not None else []
+        anchor_matches = (
+            matches.get(anchor_index, []) if anchor_index is not None else []
+        )
         anchor_match = anchor_matches[0] if anchor_matches else None
         anchor = points.get(anchor_index) if anchor_index is not None else None
         if anchor is None or anchor_match is None:
@@ -1461,8 +1523,7 @@ class MacroEngine(RallyMatchingMixin):
                     ),
                     "max_level": maximum,
                     "template_path": (
-                        specific_template_path
-                        or action.team_idle_template_path
+                        specific_template_path or action.team_idle_template_path
                     ),
                 }
             )
@@ -1475,12 +1536,10 @@ class MacroEngine(RallyMatchingMixin):
         left = min(candidate["region"][0] for candidate in candidates)
         top = min(candidate["region"][1] for candidate in candidates)
         right = max(
-            candidate["region"][0] + candidate["region"][2]
-            for candidate in candidates
+            candidate["region"][0] + candidate["region"][2] for candidate in candidates
         )
         bottom = max(
-            candidate["region"][1] + candidate["region"][3]
-            for candidate in candidates
+            candidate["region"][1] + candidate["region"][3] for candidate in candidates
         )
         capture_region = (left, top, right - left, bottom - top)
         window_rect = self._get_target_window_rect()
@@ -1617,7 +1676,10 @@ class MacroEngine(RallyMatchingMixin):
     def _run_no_match_fallback(self, step: Step, action: Action, points: dict):
         if self._stop_requested():
             return False
-        if action.no_match_condition_index is None and not action.no_match_disable_steps:
+        if (
+            action.no_match_condition_index is None
+            and not action.no_match_disable_steps
+        ):
             return False
 
         clicked = False
@@ -1631,9 +1693,12 @@ class MacroEngine(RallyMatchingMixin):
             else:
                 x, y = point
                 if self._click_point(x, y, action.button) is False:
+                    self._retry_current_step = True
                     return False
                 clicked = True
-                self.log(f"  [no-match] click condition #{action.no_match_condition_index} ({x}, {y})")
+                self.log(
+                    f"  [no-match] click condition #{action.no_match_condition_index} ({x}, {y})"
+                )
 
         for step_name in action.no_match_disable_steps:
             if self._stop_requested():
@@ -1655,7 +1720,9 @@ class MacroEngine(RallyMatchingMixin):
         self._window_rect_lookup_cache = {}
         evaluate_uses_frame_cache = getattr(self, "_evaluate_uses_frame_cache", None)
         if evaluate_uses_frame_cache is None:
-            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(self._evaluate_step)
+            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(
+                self._evaluate_step
+            )
         if evaluate_uses_frame_cache:
             met, points, matches = self._evaluate_step(step, frame_cache=frame_cache)
         else:
@@ -1669,7 +1736,8 @@ class MacroEngine(RallyMatchingMixin):
         if self._stop_requested():
             return False
         if not self._point_is_on_a_monitor(x, y):
-            self.log(f"  [skip] click point ({x}, {y}) is outside every monitor")
+            if not getattr(self, "_monitor_bounds_validation_failed", False):
+                self.log(f"  [skip] click point ({x}, {y}) is outside every monitor")
             return False
         move_duration = getattr(self, "click_move_duration", 0.0)
         if move_duration:
@@ -1686,17 +1754,58 @@ class MacroEngine(RallyMatchingMixin):
     def _point_is_on_a_monitor(self, x, y):
         sct = getattr(self, "sct", None)
         if sct is None:
-            return True
+            self._log_monitor_bounds_unavailable("screen capture is unavailable")
+            return False
         try:
             all_monitors = sct.monitors
-        except (AttributeError, OSError, TypeError):
-            return True
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            self._log_monitor_bounds_unavailable(
+                f"monitor enumeration failed ({type(exc).__name__})"
+            )
+            return False
+        if not isinstance(all_monitors, (list, tuple)) or not all_monitors:
+            self._log_monitor_bounds_unavailable(
+                "monitor enumeration is empty or malformed"
+            )
+            return False
         monitors = all_monitors[1:] or all_monitors[:1]
+        required_fields = ("left", "top", "width", "height")
+        for monitor in monitors:
+            if not isinstance(monitor, dict):
+                self._log_monitor_bounds_unavailable("monitor geometry is malformed")
+                return False
+            if any(field not in monitor for field in required_fields):
+                self._log_monitor_bounds_unavailable("monitor geometry is malformed")
+                return False
+            values = [monitor[field] for field in required_fields]
+            if (
+                any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in values
+                )
+                or values[2] <= 0
+                or values[3] <= 0
+            ):
+                self._log_monitor_bounds_unavailable("monitor geometry is malformed")
+                return False
+        self._monitor_bounds_validation_failed = False
+        self._monitor_bounds_warning_logged = False
         return any(
             monitor["left"] <= x < monitor["left"] + monitor["width"]
             and monitor["top"] <= y < monitor["top"] + monitor["height"]
             for monitor in monitors
         )
+
+    def _log_monitor_bounds_unavailable(self, reason):
+        self._monitor_bounds_validation_failed = True
+        if getattr(self, "_monitor_bounds_warning_logged", False):
+            return
+        self.log(
+            f"  [safety] click skipped because monitor bounds are unavailable: {reason}"
+        )
+        self._monitor_bounds_warning_logged = True
 
     def _cycle(self):
         now = time.monotonic()
@@ -1708,7 +1817,9 @@ class MacroEngine(RallyMatchingMixin):
         if hasattr(self, "_evaluate_uses_frame_cache"):
             evaluate_uses_frame_cache = self._evaluate_uses_frame_cache
         else:
-            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(evaluate_step)
+            evaluate_uses_frame_cache = self._evaluate_step_supports_frame_cache(
+                evaluate_step
+            )
         self._window_rect_lookup_cache = {}
         try:
             for step in steps:
@@ -1725,16 +1836,15 @@ class MacroEngine(RallyMatchingMixin):
                 else:
                     met, points, matches = evaluate_step(step)
                 eval_elapsed = time.perf_counter() - eval_start
-                if (
-                    eval_elapsed >= getattr(self, "slow_step_threshold", 0.15)
-                    and self._should_log_perf(("step", step.name), now)
-                ):
+                if eval_elapsed >= getattr(
+                    self, "slow_step_threshold", 0.15
+                ) and self._should_log_perf(("step", step.name), now):
                     self.log(
                         f"[perf] step '{step.name}' check took {eval_elapsed:.3f}s "
                         f"({len(step.conditions)} condition(s))"
                     )
                 if not met:
-                    continue   # condition not on screen right now -- skip this step, check the next one
+                    continue  # condition not on screen right now -- skip this step, check the next one
                 if self._stop_requested():
                     return fired_any
 
@@ -1762,7 +1872,9 @@ class MacroEngine(RallyMatchingMixin):
                         else None
                     )
                     try:
-                        invalidates_frame = self._run_action(step, action, points, matches)
+                        invalidates_frame = self._run_action(
+                            step, action, points, matches
+                        )
                     finally:
                         self._matching_row_reuse_context = None
                     if invalidates_frame:
@@ -1777,7 +1889,9 @@ class MacroEngine(RallyMatchingMixin):
                                     if self._stop_requested():
                                         return fired_any
                                     self._retry_current_step = False
-                                    self._run_action(step, cleanup_action, points, matches)
+                                    self._run_action(
+                                        step, cleanup_action, points, matches
+                                    )
                             finally:
                                 self._cleanup_after_abort = False
                         break
@@ -1792,10 +1906,9 @@ class MacroEngine(RallyMatchingMixin):
                     if not step.repeatable:
                         step.enabled = False
             cycle_elapsed = time.perf_counter() - cycle_start
-            if (
-                cycle_elapsed >= getattr(self, "slow_cycle_threshold", 0.35)
-                and self._should_log_perf(("cycle",), now)
-            ):
+            if cycle_elapsed >= getattr(
+                self, "slow_cycle_threshold", 0.35
+            ) and self._should_log_perf(("cycle",), now):
                 self.log(f"[perf] cycle took {cycle_elapsed:.3f}s")
             return fired_any
         except _StopRequested:

@@ -163,4 +163,3 @@ def save_settings(path, settings):
         if data[key] is not None:
             data[key] = list(data[key])
     atomic_write_json(path, data)
-

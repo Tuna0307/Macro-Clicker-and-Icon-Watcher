@@ -92,7 +92,9 @@ class LevelOcrReaderTests(unittest.TestCase):
                 calls.append(("predict", image.shape))
                 return []
 
-        reader._get_recognition_engine = lambda: calls.append("recognition") or FakeRecognitionEngine()
+        reader._get_recognition_engine = lambda: (
+            calls.append("recognition") or FakeRecognitionEngine()
+        )
         reader._get_engine = lambda: calls.append("full") or object()
 
         self.assertTrue(reader.warm_up())
@@ -102,10 +104,12 @@ class LevelOcrReaderTests(unittest.TestCase):
 
     def test_numpy_entry_arrays_are_supported_without_truth_value_errors(self):
         reader = LevelOcrReader()
-        raw = [{
-            "rec_texts": np.array(["Lv.22", "Ready"]),
-            "rec_scores": np.array([0.82, 0.99]),
-        }]
+        raw = [
+            {
+                "rec_texts": np.array(["Lv.22", "Ready"]),
+                "rec_scores": np.array([0.82, 0.99]),
+            }
+        ]
 
         self.assertEqual(
             list(reader._extract_text_entries(raw)),
@@ -127,10 +131,12 @@ class LevelOcrReaderTests(unittest.TestCase):
     def test_reader_selects_best_safe_variant_instead_of_first_number(self):
         reader = LevelOcrReader()
         reader._preprocess_variants = lambda _frame: ["first", "second"]
-        results = iter([
-            reader._result_from_entries([("Lv.10", 0.71)], "fake"),
-            reader._result_from_entries([("Lv.20", 0.88)], "fake"),
-        ])
+        results = iter(
+            [
+                reader._result_from_entries([("Lv.10", 0.71)], "fake"),
+                reader._result_from_entries([("Lv.20", 0.88)], "fake"),
+            ]
+        )
         reader._run_text_recognition = lambda _image: next(results)
         reader._get_engine = lambda: None
 

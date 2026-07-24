@@ -76,9 +76,7 @@ class DiagnosticCollector:
         self.log = log or (lambda _message: None)
         self.synchronous = synchronous
         self._queue = queue.Queue(maxsize=max(1, int(queue_size)))
-        self._decision_queue = queue.Queue(
-            maxsize=max(1, int(decision_queue_size))
-        )
+        self._decision_queue = queue.Queue(maxsize=max(1, int(decision_queue_size)))
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._decision_file_lock = threading.Lock()
@@ -106,15 +104,20 @@ class DiagnosticCollector:
 
     @staticmethod
     def _category_name(category):
-        return "samples" if str(category).lower() in {"sample", "samples"} else "critical"
+        return (
+            "samples" if str(category).lower() in {"sample", "samples"} else "critical"
+        )
 
     def should_capture(self, key, *, min_interval=0.0, sample_rate=1.0, now=None):
-        return self.reserve_capture(
-            key,
-            min_interval=min_interval,
-            sample_rate=sample_rate,
-            now=now,
-        ) is not None
+        return (
+            self.reserve_capture(
+                key,
+                min_interval=min_interval,
+                sample_rate=sample_rate,
+                now=now,
+            )
+            is not None
+        )
 
     def reserve_capture(self, key, *, min_interval=0.0, sample_rate=1.0, now=None):
         if sample_rate <= 0.0:
@@ -407,7 +410,9 @@ class DiagnosticCollector:
             for filename, image in payload["images"].items():
                 path = temp_dir / filename
                 extension = Path(filename).suffix.lower()
-                encode_options = [cv2.IMWRITE_JPEG_QUALITY, 85] if extension == ".jpg" else []
+                encode_options = (
+                    [cv2.IMWRITE_JPEG_QUALITY, 85] if extension == ".jpg" else []
+                )
                 ok, encoded = cv2.imencode(extension, image, encode_options)
                 if not ok:
                     raise OSError(f"could not encode {filename}")
@@ -461,8 +466,7 @@ class DiagnosticCollector:
                 if path.name.endswith(".tmp"):
                     try:
                         is_stale = (
-                            now - path.stat().st_mtime
-                            >= DEFAULT_STALE_TEMP_AGE_SECONDS
+                            now - path.stat().st_mtime >= DEFAULT_STALE_TEMP_AGE_SECONDS
                         )
                     except OSError:
                         is_stale = False
@@ -474,9 +478,7 @@ class DiagnosticCollector:
             try:
                 mtime = path.stat().st_mtime
                 size = sum(
-                    item.stat().st_size
-                    for item in path.rglob("*")
-                    if item.is_file()
+                    item.stat().st_size for item in path.rglob("*") if item.is_file()
                 )
             except OSError:
                 continue
@@ -509,8 +511,7 @@ class DiagnosticCollector:
         for index, (_mtime, size, path, _category) in enumerate(retained):
             over_count = self.max_events is not None and index >= self.max_events
             over_bytes = (
-                self.max_bytes is not None
-                and retained_bytes + size > self.max_bytes
+                self.max_bytes is not None and retained_bytes + size > self.max_bytes
             )
             if over_count or over_bytes:
                 shutil.rmtree(path, ignore_errors=True)

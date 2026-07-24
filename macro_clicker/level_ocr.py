@@ -33,9 +33,7 @@ class LevelOcrReader:
     _LEVEL_PREFIX_PATTERN = re.compile(
         r"(?<![a-z0-9])(?:level|lv)([^a-z0-9]{0,4})(\d{1,4})"
     )
-    _SINGLE_L_PREFIX_PATTERN = re.compile(
-        r"(?<![a-z0-9])l([^a-z0-9]{1,3})(\d{1,4})"
-    )
+    _SINGLE_L_PREFIX_PATTERN = re.compile(r"(?<![a-z0-9])l([^a-z0-9]{1,3})(\d{1,4})")
     _OCR_PREFIX_CORRECTION_PATTERN = re.compile(
         r"(?<![a-z0-9])(?:1v|iv|ly)(?=[^a-z0-9]{0,4}\d)"
     )
@@ -141,7 +139,9 @@ class LevelOcrReader:
         if engine is None:
             if self._is_acceptable_result(best):
                 return self._as_provisional_result(best)
-            return LevelOcrResult(None, best.text, best.confidence, best.engine, self.init_error)
+            return LevelOcrResult(
+                None, best.text, best.confidence, best.engine, self.init_error
+            )
 
         for image in variants:
             result = self._run_paddleocr(engine, image)
@@ -161,7 +161,9 @@ class LevelOcrReader:
             return self._as_provisional_result(best)
         error = best.error
         if best.level is not None and not error:
-            confidence = "unknown" if best.confidence is None else f"{best.confidence:.2f}"
+            confidence = (
+                "unknown" if best.confidence is None else f"{best.confidence:.2f}"
+            )
             error = f"OCR confidence {confidence} is below the safety threshold"
         return LevelOcrResult(None, best.text, best.confidence, best.engine, error)
 
@@ -180,7 +182,9 @@ class LevelOcrReader:
     def _result_rank(self, result):
         has_level = result is not None and result.level is not None
         prefixed = has_level and self._has_level_prefix(result.text)
-        confidence = -1.0 if result is None or result.confidence is None else result.confidence
+        confidence = (
+            -1.0 if result is None or result.confidence is None else result.confidence
+        )
         acceptable = has_level and confidence >= self.MIN_ACCEPT_CONFIDENCE
         text_length = 0 if result is None else len(result.text or "")
         return (
@@ -195,7 +199,11 @@ class LevelOcrReader:
     def _better_result(self, current, candidate):
         if candidate is None:
             return current
-        return candidate if self._result_rank(candidate) > self._result_rank(current) else current
+        return (
+            candidate
+            if self._result_rank(candidate) > self._result_rank(current)
+            else current
+        )
 
     def _is_acceptable_result(self, result):
         return (
@@ -219,9 +227,8 @@ class LevelOcrReader:
         )
 
     def _record_unprefixed_level(self, observations, result):
-        if (
-            not self._is_acceptable_result(result)
-            or self._has_level_prefix(result.text)
+        if not self._is_acceptable_result(result) or self._has_level_prefix(
+            result.text
         ):
             return None
         prior = observations.get(result.level)
@@ -302,7 +309,9 @@ class LevelOcrReader:
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
             from paddleocr import TextRecognition
         except Exception as exc:
-            self._recognition_init_error = f"PaddleOCR TextRecognition import failed: {exc}"
+            self._recognition_init_error = (
+                f"PaddleOCR TextRecognition import failed: {exc}"
+            )
             return None
 
         init_attempts = [
@@ -320,7 +329,9 @@ class LevelOcrReader:
             except Exception as exc:
                 last_error = exc
                 continue
-        self._recognition_init_error = f"PaddleOCR TextRecognition init failed: {last_error}"
+        self._recognition_init_error = (
+            f"PaddleOCR TextRecognition init failed: {last_error}"
+        )
         return None
 
     def _preprocess_variants(self, frame):
@@ -349,9 +360,24 @@ class LevelOcrReader:
 
         boxes = [
             (0, max(0, round(height * 0.27)), width, height),
-            (round(width * 0.13), max(0, round(height * 0.22)), round(width * 0.87), height),
-            (round(width * 0.20), max(0, round(height * 0.30)), round(width * 0.77), max(1, round(height * 0.96))),
-            (round(width * 0.42), max(0, round(height * 0.30)), round(width * 0.72), max(1, round(height * 0.96))),
+            (
+                round(width * 0.13),
+                max(0, round(height * 0.22)),
+                round(width * 0.87),
+                height,
+            ),
+            (
+                round(width * 0.20),
+                max(0, round(height * 0.30)),
+                round(width * 0.77),
+                max(1, round(height * 0.96)),
+            ),
+            (
+                round(width * 0.42),
+                max(0, round(height * 0.30)),
+                round(width * 0.72),
+                max(1, round(height * 0.96)),
+            ),
             (0, 0, width, height),
         ]
 
@@ -406,7 +432,9 @@ class LevelOcrReader:
     def _run_text_recognition(self, image) -> LevelOcrResult:
         engine = self._get_recognition_engine()
         if engine is None:
-            return LevelOcrResult(None, engine="paddleocr_rec", error=self._recognition_init_error)
+            return LevelOcrResult(
+                None, engine="paddleocr_rec", error=self._recognition_init_error
+            )
         try:
             raw = engine.predict(image)
         except Exception as exc:
@@ -470,14 +498,18 @@ class LevelOcrReader:
         # Joined text can span multiple OCR boxes, so use the weakest involved
         # digit-bearing score rather than borrowing confidence from unrelated text.
         confidence = min(digit_scores) if digit_scores else None
-        return LevelOcrResult(level, text=joined_text, confidence=confidence, engine=engine_name)
+        return LevelOcrResult(
+            level, text=joined_text, confidence=confidence, engine=engine_name
+        )
 
     def _prime_recognition_engine(self, engine):
         try:
             engine.predict(np.zeros((64, 160, 3), dtype=np.uint8))
             return True
         except Exception as exc:
-            self._recognition_init_error = f"PaddleOCR TextRecognition warm-up failed: {exc}"
+            self._recognition_init_error = (
+                f"PaddleOCR TextRecognition warm-up failed: {exc}"
+            )
             return False
 
     def _prime_full_engine(self, engine):
@@ -508,7 +540,11 @@ class LevelOcrReader:
             return
         if _seen is None:
             _seen = set()
-        if isinstance(raw, (dict, list, tuple, np.ndarray)) or hasattr(raw, "json") or hasattr(raw, "res"):
+        if (
+            isinstance(raw, (dict, list, tuple, np.ndarray))
+            or hasattr(raw, "json")
+            or hasattr(raw, "res")
+        ):
             raw_id = id(raw)
             if raw_id in _seen:
                 return
@@ -516,7 +552,10 @@ class LevelOcrReader:
 
         if isinstance(raw, dict):
             if "rec_text" in raw:
-                yield str(raw.get("rec_text") or ""), self._coerce_score(raw.get("rec_score"))
+                yield (
+                    str(raw.get("rec_text") or ""),
+                    self._coerce_score(raw.get("rec_score")),
+                )
             texts = raw.get("rec_texts")
             if texts is None:
                 texts = raw.get("texts")
@@ -525,12 +564,27 @@ class LevelOcrReader:
                 scores = raw.get("scores")
             if texts is not None:
                 texts = texts.tolist() if isinstance(texts, np.ndarray) else texts
-                scores = scores.tolist() if isinstance(scores, np.ndarray) else (scores or [])
+                scores = (
+                    scores.tolist()
+                    if isinstance(scores, np.ndarray)
+                    else (scores or [])
+                )
                 if isinstance(texts, (list, tuple)):
                     for i, text in enumerate(texts):
-                        score = scores[i] if isinstance(scores, (list, tuple)) and i < len(scores) else None
+                        score = (
+                            scores[i]
+                            if isinstance(scores, (list, tuple)) and i < len(scores)
+                            else None
+                        )
                         yield str(text), self._coerce_score(score)
-            handled_keys = {"rec_text", "rec_score", "rec_texts", "texts", "rec_scores", "scores"}
+            handled_keys = {
+                "rec_text",
+                "rec_score",
+                "rec_texts",
+                "texts",
+                "rec_scores",
+                "scores",
+            }
             for key, value in raw.items():
                 if key in handled_keys:
                     continue
@@ -550,7 +604,12 @@ class LevelOcrReader:
             if is_text_score_pair:
                 yield raw[0], self._coerce_score(raw[1])
                 return
-            if len(raw) == 2 and isinstance(raw[1], (list, tuple)) and raw[1] and isinstance(raw[1][0], str):
+            if (
+                len(raw) == 2
+                and isinstance(raw[1], (list, tuple))
+                and raw[1]
+                and isinstance(raw[1][0], str)
+            ):
                 score = raw[1][1] if len(raw[1]) > 1 else None
                 yield raw[1][0], self._coerce_score(score)
                 return
@@ -584,7 +643,9 @@ class LevelOcrReader:
             match = pattern.search(normalized)
             if match:
                 separator, digits = match.group(1), match.group(2)
-                return self._normalize_level_digits(digits, lv_prefixed=True, separator=separator)
+                return self._normalize_level_digits(
+                    digits, lv_prefixed=True, separator=separator
+                )
 
         numbers = re.findall(r"\d{1,3}", normalized)
         if not numbers:
@@ -598,10 +659,7 @@ class LevelOcrReader:
             value = int(digits)
             first_two = int(digits[:2])
             likely_out_of_game_range = value > 300
-            if (
-                1 <= first_two <= 150
-                and likely_out_of_game_range
-            ):
+            if 1 <= first_two <= 150 and likely_out_of_game_range:
                 return first_two
         return int(digits)
 

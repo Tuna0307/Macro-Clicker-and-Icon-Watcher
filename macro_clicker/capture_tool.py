@@ -8,6 +8,7 @@ rectangle over it. Used for two things:
                       (used for the optional "search region" on a
                       condition, to restrict matching to a small area)
 """
+
 import os
 import tempfile
 import time
@@ -119,16 +120,23 @@ def select_region(root, monitor_index=1):
         overlay.configure(cursor="cross")
 
         photo = ImageTk.PhotoImage(screenshot)
-        canvas = tk.Canvas(overlay, width=screenshot.width, height=screenshot.height,
-                           highlightthickness=0, cursor="cross")
+        canvas = tk.Canvas(
+            overlay,
+            width=screenshot.width,
+            height=screenshot.height,
+            highlightthickness=0,
+            cursor="cross",
+        )
         canvas.pack(fill="both", expand=True)
         canvas.create_image(0, 0, anchor="nw", image=photo)
         canvas.image = photo  # keep a reference so it isn't garbage collected
 
         canvas.create_text(
-            screenshot.width // 2, 30,
+            screenshot.width // 2,
+            30,
             text="Drag a box around the icon. Esc to cancel.",
-            fill="#00ff00", font=("Segoe UI", 14, "bold"),
+            fill="#00ff00",
+            font=("Segoe UI", 14, "bold"),
         )
 
         start: dict[str, int] = {}
@@ -138,8 +146,9 @@ def select_region(root, monitor_index=1):
             start["x"], start["y"] = event.x, event.y
             if rect_id["id"]:
                 canvas.delete(rect_id["id"])
-            rect_id["id"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
-                                                     outline="#00ff00", width=2)
+            rect_id["id"] = canvas.create_rectangle(
+                event.x, event.y, event.x, event.y, outline="#00ff00", width=2
+            )
 
         def on_drag(event):
             if rect_id["id"] and "x" in start and "y" in start:
@@ -156,7 +165,12 @@ def select_region(root, monitor_index=1):
             left, right = sorted((x0, x1))
             top, bottom = sorted((y0, y1))
             if right - left > 3 and bottom - top > 3:
-                result["region"] = (mon_left + left, mon_top + top, right - left, bottom - top)
+                result["region"] = (
+                    mon_left + left,
+                    mon_top + top,
+                    right - left,
+                    bottom - top,
+                )
             overlay.destroy()
 
         def on_escape(event=None):
@@ -185,10 +199,14 @@ def select_region(root, monitor_index=1):
         return None, None
 
     region = result["region"]
-    crop = screenshot.crop((
-        region[0] - mon_left, region[1] - mon_top,
-        region[0] - mon_left + region[2], region[1] - mon_top + region[3],
-    ))
+    crop = screenshot.crop(
+        (
+            region[0] - mon_left,
+            region[1] - mon_top,
+            region[0] - mon_left + region[2],
+            region[1] - mon_top + region[3],
+        )
+    )
     return region, crop
 
 
@@ -202,7 +220,9 @@ def capture_template(root, save_dir=TEMPLATES_DIR, monitor_index=1):
     if region is None:
         return None
 
-    name = simpledialog.askstring("Save template", "Name for this template image:", parent=root)
+    name = simpledialog.askstring(
+        "Save template", "Name for this template image:", parent=root
+    )
     if not name:
         return None
     safe_name = "".join(c for c in name if c.isalnum() or c in ("_", "-")) or "template"
@@ -216,7 +236,9 @@ def capture_template(root, save_dir=TEMPLATES_DIR, monitor_index=1):
         path = f"{base_root}_{counter}{base_ext}"
         counter += 1
 
-    fd, tmp_path = tempfile.mkstemp(prefix=f".{safe_name}.", suffix=".png", dir=save_dir)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{safe_name}.", suffix=".png", dir=save_dir
+    )
     os.close(fd)
     try:
         crop.save(tmp_path)

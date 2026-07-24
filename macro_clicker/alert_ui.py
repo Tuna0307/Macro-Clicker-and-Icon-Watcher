@@ -36,8 +36,7 @@ class ScreenRegionPicker(tk.Toplevel):
             self.full_img = img
 
         self.geometry(
-            f"{virtual['width']}x{virtual['height']}"
-            f"+{virtual['left']}+{virtual['top']}"
+            f"{virtual['width']}x{virtual['height']}+{virtual['left']}+{virtual['top']}"
         )
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -250,7 +249,9 @@ class AlertPopup(tk.Toplevel):
             return
         if not exists:
             return
-        next_value = min(target, value + step) if value < target else max(target, value - step)
+        next_value = (
+            min(target, value + step) if value < target else max(target, value - step)
+        )
         try:
             self.attributes("-alpha", next_value)
         except tk.TclError:
