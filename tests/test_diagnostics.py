@@ -254,6 +254,127 @@ class DiagnosticCollectorTests(unittest.TestCase):
             self.assertIsNotNone(retried)
             collector.close(timeout=2.0)
 
+    def test_queue_byte_limit_rejects_event_before_copying_images(self):
+        class CopyTrackingArray(np.ndarray):
+            copy_calls = 0
+
+            def copy(self, *args, **kwargs):
+                type(self).copy_calls += 1
+                return super().copy(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as folder:
+            image = np.zeros((20, 20, 3), dtype=np.uint8).view(CopyTrackingArray)
+            CopyTrackingArray.copy_calls = 0
+            collector = DiagnosticCollector(
+                folder,
+                queue_max_bytes=image.nbytes - 1,
+            )
+
+            result = collector.submit(
+                "too-large",
+                {},
+                {"context": image},
+                force=True,
+                log_decision=False,
+            )
+
+            self.assertIsNone(result)
+            self.assertEqual(CopyTrackingArray.copy_calls, 0)
+            self.assertEqual(collector._queued_image_bytes, 0)
+            collector.close(timeout=2.0)
+
+    def test_full_queue_rejects_event_before_copying_images(self):
+        class CopyTrackingArray(np.ndarray):
+            copy_calls = 0
+
+            def copy(self, *args, **kwargs):
+                type(self).copy_calls += 1
+                return super().copy(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as folder:
+            collector = DiagnosticCollector(folder, queue_size=1)
+            write_started = threading.Event()
+            release_write = threading.Event()
+            original_write = collector._write
+
+            def delayed_write(payload):
+                write_started.set()
+                release_write.wait(2.0)
+                return original_write(payload)
+
+            collector._write = delayed_write
+            ordinary = np.zeros((4, 4, 3), dtype=np.uint8)
+            collector.submit(
+                "blocking",
+                {},
+                {"image": ordinary},
+                force=True,
+                log_decision=False,
+            )
+            self.assertTrue(write_started.wait(1.0))
+            collector.submit(
+                "queued",
+                {},
+                {"image": ordinary},
+                force=True,
+                log_decision=False,
+            )
+
+            tracked = ordinary.view(CopyTrackingArray)
+            CopyTrackingArray.copy_calls = 0
+            rejected = collector.submit(
+                "rejected",
+                {},
+                {"image": tracked},
+                force=True,
+                log_decision=False,
+            )
+
+            self.assertIsNone(rejected)
+            self.assertEqual(CopyTrackingArray.copy_calls, 0)
+            release_write.set()
+            collector.close(timeout=2.0)
+
+    def test_timed_out_close_workers_exit_after_full_queue_drains(self):
+        with tempfile.TemporaryDirectory() as folder:
+            collector = DiagnosticCollector(folder, queue_size=1)
+            write_started = threading.Event()
+            release_write = threading.Event()
+            original_write = collector._write
+
+            def delayed_write(payload):
+                write_started.set()
+                release_write.wait(2.0)
+                return original_write(payload)
+
+            collector._write = delayed_write
+            image = np.zeros((4, 4, 3), dtype=np.uint8)
+            collector.submit(
+                "blocking",
+                {},
+                {"image": image},
+                force=True,
+                log_decision=False,
+            )
+            self.assertTrue(write_started.wait(1.0))
+            collector.submit(
+                "queued",
+                {},
+                {"image": image},
+                force=True,
+                log_decision=False,
+            )
+
+            collector.close(timeout=0.01)
+            self.assertTrue(collector._worker.is_alive())
+            release_write.set()
+            collector._worker.join(timeout=2.0)
+            collector._decision_worker.join(timeout=2.0)
+
+            self.assertFalse(collector._worker.is_alive())
+            self.assertFalse(collector._decision_worker.is_alive())
+            self.assertEqual(collector._queued_image_bytes, 0)
+
     def test_reserved_metadata_fields_cannot_override_collector_fields(self):
         with tempfile.TemporaryDirectory() as folder:
             collector = DiagnosticCollector(folder, synchronous=True)

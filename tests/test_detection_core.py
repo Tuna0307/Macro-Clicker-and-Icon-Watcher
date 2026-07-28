@@ -1,5 +1,6 @@
 import threading
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -9,6 +10,26 @@ from macro_clicker.window_locator import absolute_region_from_window_ratio
 
 
 class ResolutionScalingTests(unittest.TestCase):
+    def test_container_match_mode_falls_back_without_crashing(self):
+        self.assertEqual(
+            core.normalize_match_mode(["static_picture"]),
+            core.LEGACY_ALERT_MATCH_MODE,
+        )
+        self.assertEqual(
+            core.normalize_match_mode({"mode": "static_picture"}, default="fallback"),
+            "fallback",
+        )
+
+    def test_resize_template_xy_scales_both_axes_and_reuses_cache(self):
+        template = np.arange(12 * 20 * 3, dtype=np.uint8).reshape(12, 20, 3)
+        cache = {}
+
+        first = core.resize_template_xy(template, 1.5, 0.75, cache=cache)
+        second = core.resize_template_xy(template, 1.5, 0.75, cache=cache)
+
+        self.assertEqual(first.shape[:2], (9, 30))
+        self.assertIs(second, first)
+
     def test_exact_four_thirds_scale_is_first_candidate(self):
         scales = core.resolution_scale_candidates(
             (1920, 1080), (2560, 1440), (1.0, 1.3, 1.4)
@@ -163,6 +184,93 @@ class SharedMatcherTests(unittest.TestCase):
         self.assertGreaterEqual(score, 0.99)
         self.assertEqual(location, (47, 31))
 
+    def test_sequential_exact_ties_use_scale_angle_then_original_order(self):
+        rng = np.random.default_rng(126)
+        template = rng.integers(0, 256, (20, 24, 3), dtype=np.uint8)
+        frame = np.zeros((80, 100, 3), dtype=np.uint8)
+        frame[31:51, 47:71] = template
+        base = core.prepare_template_variants(
+            template,
+            scales=(1.0,),
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+        )[0]
+
+        def variant(label, scale, angle):
+            item = dict(base)
+            item.update(label=label, scale=scale, angle=angle)
+            return item
+
+        variants = (
+            variant("farther-scale", 0.8, 0.0),
+            variant("larger-angle", 1.0, 5.0),
+            variant("preferred-first", 1.0, 0.0),
+            variant("preferred-second", 1.0, 0.0),
+        )
+
+        score, location, scale, matched_variant = core.match_template_multiscale(
+            frame,
+            template,
+            variants=variants,
+            match_mode=core.MATCH_MODE_STATIC,
+            allow_coarse=False,
+            return_details=True,
+        )
+
+        self.assertEqual(score, 1.0)
+        self.assertEqual(location, (47, 31))
+        self.assertEqual(scale, 1.0)
+        self.assertEqual(matched_variant["label"], "preferred-first")
+
+    def test_sequential_threshold_mode_stops_after_nonexact_accepted_match(self):
+        rng = np.random.default_rng(127)
+        template = rng.integers(0, 256, (20, 24, 3), dtype=np.uint8)
+        candidate = template.copy()
+        candidate[4, 7, 1] = (int(candidate[4, 7, 1]) + 1) % 256
+        frame = np.zeros((80, 100, 3), dtype=np.uint8)
+        frame[31:51, 47:71] = candidate
+        variants = core.prepare_template_variants(
+            template,
+            scales=(1.0, 0.95, 1.05),
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+        )
+        original_match = core._best_variant_match
+
+        with patch.object(core, "_best_variant_match", wraps=original_match) as matcher:
+            score, location, _scale = core.match_template_multiscale(
+                frame,
+                template,
+                variants=variants,
+                match_mode=core.MATCH_MODE_STATIC,
+                allow_coarse=False,
+                early_exit_score=0.90,
+            )
+
+        self.assertGreaterEqual(score, 0.90)
+        self.assertEqual(location, (47, 31))
+        self.assertEqual(matcher.call_count, 1)
+
+    def test_collect_all_infers_colored_text_mode_from_supplied_variants(self):
+        template = self._text_tile("#2212", (54, 111, 99))
+        frame = np.full((80, 260, 3), (54, 111, 99), dtype=np.uint8)
+        frame[25:57, 70:200] = template
+        variants = core.prepare_template_variants(
+            template,
+            scales=(1.0,),
+            match_mode=core.MATCH_MODE_TEXT,
+        )
+
+        matches = core.find_template_matches(
+            frame,
+            template,
+            0.90,
+            collect_all=True,
+            variants=variants,
+        )
+
+        self.assertEqual([(match.x, match.y) for match in matches], [(70, 25)])
+
     def test_colored_text_rejects_similar_digits_on_changed_background(self):
         template = self._text_tile("#2212", (54, 111, 99))
 
@@ -252,6 +360,405 @@ class SharedMatcherTests(unittest.TestCase):
         self.assertEqual(
             {(item.x, item.y) for item in matches},
             {(217, 123), (809, 611)},
+        )
+
+    def test_rally_condition_regions_keep_the_existing_small_search_path(self):
+        rng = np.random.default_rng(140)
+        cases = (
+            ((807, 222), (81, 142)),
+            ((794, 384), (39, 36)),
+        )
+        for frame_size, template_size in cases:
+            with self.subTest(frame_size=frame_size, template_size=template_size):
+                frame = rng.integers(
+                    0,
+                    256,
+                    (*frame_size, 3),
+                    dtype=np.uint8,
+                )
+                template = rng.integers(
+                    0,
+                    256,
+                    (*template_size, 3),
+                    dtype=np.uint8,
+                )
+                with patch.object(
+                    core,
+                    "_parallel_full_resolution_multiscale_match",
+                    side_effect=AssertionError("large-screen path used"),
+                ):
+                    core.match_template_multiscale(
+                        frame,
+                        template,
+                        scales=core.MACRO_DEFAULT_SCALES,
+                        rotations=(0,),
+                        match_mode=core.MATCH_MODE_STATIC,
+                        allow_coarse=True,
+                    )
+
+    def test_coarse_search_verifies_exact_target_behind_phase_aligned_decoy(self):
+        rng = np.random.default_rng(1)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        decoy = template.copy()
+        decoy[3:10, 3:10] = 255 - decoy[3:10, 3:10]
+        frame = np.zeros((710, 710, 3), dtype=np.uint8)
+        frame[100:140, 100:140] = decoy
+        frame[501:541, 501:541] = template
+
+        score, location, scale = core.match_template_multiscale(
+            frame,
+            template,
+            scales=core.MACRO_DEFAULT_SCALES,
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+            allow_coarse=True,
+            early_exit_score=0.90,
+        )
+
+        self.assertGreaterEqual(score, 0.99)
+        self.assertEqual(location, (501, 501))
+        self.assertEqual(scale, 1.0)
+
+    def test_large_search_prefers_exact_pixels_over_float32_rounded_decoy(self):
+        rng = np.random.default_rng(0)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        decoy = template.copy()
+        decoy[3, 5, 1] = (int(decoy[3, 5, 1]) + 1) % 256
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        frame[100:140, 100:140] = decoy
+        frame[900:940, 1700:1740] = template
+
+        matches = core.find_template_matches(
+            frame,
+            template,
+            0.99,
+            collect_all=False,
+            scales=core.MACRO_DEFAULT_SCALES,
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+            allow_coarse=True,
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual((matches[0].x, matches[0].y), (1700, 900))
+        self.assertEqual(matches[0].score, 1.0)
+
+    def test_coarse_search_expands_past_many_phase_aligned_decoys(self):
+        rng = np.random.default_rng(1)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        frame = np.zeros((900, 1300, 3), dtype=np.uint8)
+        decoy_positions = [
+            (100, 100),
+            (300, 100),
+            (500, 100),
+            (700, 100),
+            (900, 100),
+            (1100, 100),
+            (100, 300),
+            (300, 300),
+        ]
+        for index, (x, y) in enumerate(decoy_positions):
+            decoy = template.copy()
+            top = 3 + index % 3
+            decoy[top : top + 7, 3:10] = 255 - decoy[top : top + 7, 3:10]
+            frame[y : y + 40, x : x + 40] = decoy
+        frame[801:841, 1201:1241] = template
+
+        for confidence in (0.90, 0.95):
+            with self.subTest(confidence=confidence):
+                matches = core.find_template_matches(
+                    frame,
+                    template,
+                    confidence,
+                    collect_all=False,
+                    scales=core.MACRO_DEFAULT_SCALES,
+                    rotations=(0,),
+                    match_mode=core.MATCH_MODE_STATIC,
+                    allow_coarse=True,
+                    early_exit_score=confidence,
+                )
+
+                self.assertEqual(len(matches), 1)
+                self.assertEqual((matches[0].x, matches[0].y), (1201, 801))
+                self.assertGreaterEqual(matches[0].score, 0.99)
+
+    def test_large_search_exact_target_survives_twenty_four_stronger_proposals(self):
+        rng = np.random.default_rng(0)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        positions = [
+            (30 + 110 * (index % 8), 30 + 130 * (index // 8)) for index in range(24)
+        ]
+        for index, (x, y) in enumerate(positions):
+            decoy = template.copy()
+            top = 2 + index % 5
+            decoy[top : top + 7, 3:10] = 255 - decoy[top : top + 7, 3:10]
+            frame[y : y + 40, x : x + 40] = decoy
+        frame[401:441, 901:941] = template
+
+        for confidence in (0.85, 0.95):
+            with self.subTest(confidence=confidence):
+                matches = core.find_template_matches(
+                    frame,
+                    template,
+                    confidence,
+                    collect_all=False,
+                    scales=core.MACRO_DEFAULT_SCALES,
+                    rotations=(0,),
+                    match_mode=core.MATCH_MODE_STATIC,
+                    allow_coarse=True,
+                )
+
+                self.assertEqual(len(matches), 1)
+                self.assertEqual((matches[0].x, matches[0].y), (901, 401))
+                self.assertEqual(matches[0].score, 1.0)
+
+    def test_coarse_search_checks_every_rotated_scale(self):
+        rng = np.random.default_rng(1)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        variants = core.prepare_template_variants(
+            template,
+            scales=core.ALERT_DEFAULT_SCALES,
+            rotations=core.DEFAULT_ROTATIONS,
+            match_mode=core.MATCH_MODE_ANIMATED,
+        )
+        large_decoy_variant = next(
+            variant
+            for variant in variants
+            if variant["angle"] == 0.0 and variant["scale"] == 1.5
+        )
+        exact_variant = next(
+            variant
+            for variant in variants
+            if variant["angle"] == 5.0 and variant["scale"] == 0.5
+        )
+        decoy = large_decoy_variant["image"].copy()
+        decoy[3:13, 3:13] = 255 - decoy[3:13, 3:13]
+        exact = exact_variant["image"]
+        frame = np.zeros((710, 710, 3), dtype=np.uint8)
+        frame[100 : 100 + decoy.shape[0], 100 : 100 + decoy.shape[1]] = decoy
+        frame[501 : 501 + exact.shape[0], 501 : 501 + exact.shape[1]] = exact
+
+        score, location, scale = core.match_template_multiscale(
+            frame,
+            template,
+            variants=variants,
+            match_mode=core.MATCH_MODE_ANIMATED,
+            allow_coarse=True,
+        )
+
+        self.assertGreaterEqual(score, 0.99)
+        self.assertEqual(location, (501, 501))
+        self.assertEqual(scale, 0.5)
+
+    def test_large_threshold_mode_stops_after_nonexact_accepted_batch(self):
+        rng = np.random.default_rng(40)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        candidate = template.copy()
+        candidate[3, 5, 1] = (int(candidate[3, 5, 1]) + 1) % 256
+        frame = np.zeros((710, 710, 3), dtype=np.uint8)
+        frame[401:441, 501:541] = candidate
+        variants = core.prepare_template_variants(
+            template,
+            scales=core.ALERT_DEFAULT_SCALES,
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+        )
+        original_match = core._best_variant_match
+
+        with patch.object(core, "_best_variant_match", wraps=original_match) as matcher:
+            score, location, _scale = core.match_template_multiscale(
+                frame,
+                template,
+                variants=variants,
+                match_mode=core.MATCH_MODE_STATIC,
+                allow_coarse=True,
+                early_exit_score=0.90,
+            )
+
+        self.assertGreaterEqual(score, 0.90)
+        self.assertEqual(location, (501, 401))
+        self.assertLessEqual(
+            matcher.call_count,
+            core.MAX_PARALLEL_VARIANT_WORKERS,
+        )
+
+    def test_large_threshold_mode_exhausts_variants_to_prove_absence(self):
+        rng = np.random.default_rng(42)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        frame = rng.integers(0, 256, (710, 710, 3), dtype=np.uint8)
+        variants = core.prepare_template_variants(
+            template,
+            scales=core.ALERT_DEFAULT_SCALES,
+            rotations=(0,),
+            match_mode=core.MATCH_MODE_STATIC,
+        )
+        original_match = core._best_variant_match
+
+        with patch.object(core, "_best_variant_match", wraps=original_match) as matcher:
+            score, location, _scale = core.match_template_multiscale(
+                frame,
+                template,
+                variants=variants,
+                match_mode=core.MATCH_MODE_STATIC,
+                allow_coarse=True,
+                early_exit_score=0.99,
+            )
+
+        self.assertLess(score, 0.99)
+        self.assertIsNotNone(location)
+        self.assertEqual(matcher.call_count, len(variants))
+
+    def test_coarse_search_uses_each_rotations_own_spatial_proposals(self):
+        rng = np.random.default_rng(41)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        variants = core.prepare_template_variants(
+            template,
+            scales=core.ALERT_DEFAULT_SCALES,
+            rotations=core.DEFAULT_ROTATIONS,
+            match_mode=core.MATCH_MODE_ANIMATED,
+        )
+        zero_variant = next(
+            variant
+            for variant in variants
+            if variant["angle"] == 0.0 and variant["scale"] == 1.0
+        )
+        decoy_positions = [
+            (10 + 100 * column, 10 + 100 * row)
+            for row in range(6)
+            for column in range(6)
+        ][:33]
+
+        for angle in (-8.0, 8.0):
+            exact_variant = next(
+                variant
+                for variant in variants
+                if variant["angle"] == angle and variant["scale"] == 1.0
+            )
+            frame = np.zeros((710, 710, 3), dtype=np.uint8)
+            for index, (x, y) in enumerate(decoy_positions):
+                decoy = zero_variant["image"].copy()
+                top = 2 + index % 5
+                decoy[top : top + 8, 4:16] = 255 - decoy[top : top + 8, 4:16]
+                frame[y : y + 40, x : x + 40] = decoy
+            frame[651:691, 651:691] = exact_variant["image"]
+
+            for confidence in (0.90, 0.95):
+                with self.subTest(angle=angle, confidence=confidence):
+                    matches = core.find_template_matches(
+                        frame,
+                        template,
+                        confidence,
+                        collect_all=False,
+                        variants=variants,
+                        match_mode=core.MATCH_MODE_ANIMATED,
+                        allow_coarse=True,
+                        early_exit_score=confidence,
+                    )
+
+                    self.assertEqual(len(matches), 1)
+                    self.assertEqual((matches[0].x, matches[0].y), (651, 651))
+                    self.assertGreaterEqual(matches[0].score, 0.99)
+                    self.assertEqual(matches[0].angle, angle)
+
+    def test_rotated_exact_target_beats_near_perfect_rotated_decoy(self):
+        rng = np.random.default_rng(0)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        variants = core.prepare_template_variants(
+            template,
+            scales=(1.0, 0.95),
+            rotations=core.DEFAULT_ROTATIONS,
+            match_mode=core.MATCH_MODE_ANIMATED,
+        )
+        exact_variant = next(
+            variant
+            for variant in variants
+            if variant["angle"] == -8.0 and variant["scale"] == 1.0
+        )
+        exact = exact_variant["image"]
+        decoy = exact.copy()
+        decoy[3, 5, 1] = (int(decoy[3, 5, 1]) + 1) % 256
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        frame[100:140, 100:140] = decoy
+        frame[401:441, 901:941] = exact
+
+        score, location, scale, matched_variant = core.match_template_multiscale(
+            frame,
+            template,
+            variants=variants,
+            match_mode=core.MATCH_MODE_ANIMATED,
+            allow_coarse=True,
+            return_details=True,
+        )
+
+        self.assertEqual(location, (901, 401))
+        self.assertEqual(score, 1.0)
+        self.assertEqual(scale, 1.0)
+        self.assertEqual(matched_variant["angle"], -8.0)
+
+    def test_rotated_exact_target_survives_twenty_four_rotated_decoys(self):
+        rng = np.random.default_rng(0)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        variants = core.prepare_template_variants(
+            template,
+            scales=(1.0, 0.95),
+            rotations=core.DEFAULT_ROTATIONS,
+            match_mode=core.MATCH_MODE_ANIMATED,
+        )
+        exact_variant = next(
+            variant
+            for variant in variants
+            if variant["angle"] == -8.0 and variant["scale"] == 1.0
+        )
+        exact = exact_variant["image"]
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        positions = [
+            (30 + 110 * (index % 8), 30 + 130 * (index // 8)) for index in range(24)
+        ]
+        for index, (x, y) in enumerate(positions):
+            decoy = exact.copy()
+            top = 2 + index % 5
+            decoy[top : top + 7, 3:10] = 255 - decoy[top : top + 7, 3:10]
+            frame[y : y + 40, x : x + 40] = decoy
+        frame[401:441, 901:941] = exact
+
+        score, location, scale, matched_variant = core.match_template_multiscale(
+            frame,
+            template,
+            variants=variants,
+            match_mode=core.MATCH_MODE_ANIMATED,
+            allow_coarse=True,
+            return_details=True,
+        )
+
+        self.assertEqual(location, (901, 401))
+        self.assertEqual(score, 1.0)
+        self.assertEqual(scale, 1.0)
+        self.assertEqual(matched_variant["angle"], -8.0)
+
+    def test_large_search_stops_after_verified_exact_batch(self):
+        rng = np.random.default_rng(43)
+        template = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        frame = rng.integers(0, 40, (710, 710, 3), dtype=np.uint8)
+        frame[300:340, 400:440] = template
+        original_match = core._best_variant_match
+
+        with patch.object(core, "_best_variant_match", wraps=original_match) as matcher:
+            score, location, _scale = core.match_template_multiscale(
+                frame,
+                template,
+                scales=core.ALERT_DEFAULT_SCALES,
+                rotations=core.DEFAULT_ROTATIONS,
+                match_mode=core.MATCH_MODE_ANIMATED,
+                allow_coarse=True,
+                early_exit_score=0.90,
+            )
+
+        self.assertGreaterEqual(score, 0.99)
+        self.assertEqual(location, (400, 300))
+        self.assertLessEqual(
+            matcher.call_count,
+            core.MAX_PARALLEL_VARIANT_WORKERS,
         )
 
     def test_collect_all_falls_back_when_coarse_checkerboard_collapses(self):

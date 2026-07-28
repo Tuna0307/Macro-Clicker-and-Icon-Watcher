@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .detection_core import resize_template_xy
 from .level_ocr import LevelOcrReader
 from .models import Action, ImageCondition, has_smart_rally_team_prefilter
 
@@ -86,7 +87,7 @@ class RallyMatchingMixin:
                 for candidate_step in self.scenario.steps
                 if candidate_step.name in enabled_step_names
                 for action in candidate_step.actions
-                if action.type == "click_matching_row"
+                if has_smart_rally_team_prefilter(action)
             ),
             None,
         )
@@ -128,8 +129,16 @@ class RallyMatchingMixin:
         if reference_index is None or target_index is None:
             return [], False
 
-        reference_matches = matches.get(reference_index, [])
+        reference_matches = sorted(
+            matches.get(reference_index, []),
+            key=lambda match: match["center"][1],
+        )
         remaining_targets = list(matches.get(target_index, []))
+        targets_by_reference = self._targets_by_closest_reference(
+            reference_matches,
+            remaining_targets,
+            action,
+        )
         team_level_cap = _TEAM_LEVEL_CAP_UNSET
         if apply_level_filter:
             team_level_cap = self._available_rally_team_level_cap(action)
@@ -137,17 +146,10 @@ class RallyMatchingMixin:
                 return [], False
         selected = []
         had_unreadable_level = False
-        for reference in sorted(reference_matches, key=lambda m: m["center"][1]):
+        for reference in reference_matches:
             if self._stop_requested():
                 break
-            ref_y = reference["center"][1]
-            _scale_x, scale_y = self._match_geometry_scale(reference)
-            row_tolerance = max(0, round(action.row_tolerance * scale_y))
-            row_targets = [
-                target
-                for target in remaining_targets
-                if abs(target["center"][1] - ref_y) <= row_tolerance
-            ]
+            row_targets = targets_by_reference.get(id(reference), [])
             if not row_targets:
                 continue
             level = None
@@ -205,16 +207,14 @@ class RallyMatchingMixin:
                 ),
                 key=lambda reference: abs(reference["center"][1] - original_y),
             )
+            targets_by_reference = self._targets_by_closest_reference(
+                references,
+                remaining_targets,
+                action,
+            )
             accepted = None
             for reference in nearby_references:
-                ref_y = reference["center"][1]
-                _ref_scale_x, ref_scale_y = self._match_geometry_scale(reference)
-                row_tolerance = max(0, round(action.row_tolerance * ref_scale_y))
-                row_targets = [
-                    target
-                    for target in remaining_targets
-                    if abs(target["center"][1] - ref_y) <= row_tolerance
-                ]
+                row_targets = targets_by_reference.get(id(reference), [])
                 if not row_targets:
                     continue
                 level_status, level = self._row_level_status(
@@ -251,6 +251,27 @@ class RallyMatchingMixin:
         if not math.isfinite(scale_y) or scale_y <= 0.0:
             scale_y = 1.0
         return scale_x, scale_y
+
+    def _targets_by_closest_reference(self, references, targets, action):
+        """Assign each target to its nearest eligible row before x-axis selection."""
+        assignments = {id(reference): [] for reference in references}
+        for target in targets:
+            target_y = target["center"][1]
+            eligible = []
+            for order, reference in enumerate(references):
+                _scale_x, scale_y = self._match_geometry_scale(reference)
+                tolerance = max(0, round(action.row_tolerance * scale_y))
+                distance = abs(target_y - reference["center"][1])
+                if distance <= tolerance:
+                    eligible.append((distance, order, reference))
+            if not eligible:
+                continue
+            _distance, _order, closest = min(
+                eligible,
+                key=lambda candidate: (candidate[0], candidate[1]),
+            )
+            assignments[id(closest)].append(target)
+        return assignments
 
     def _row_level_allowed(self, action: Action, reference: dict):
         status, _level = self._row_level_status(action, reference)
@@ -406,13 +427,24 @@ class RallyMatchingMixin:
                 max(1, round(height * scale_y)),
             )
             frame, off_x, off_y = self._grab(capture_region)
-            template_scale = math.sqrt(scale_x * scale_y)
             scores = {}
             for team_number in (1, 3):
                 template = self._load_template(
                     getattr(action, f"team{team_number}_busy_template_path")
                 )
-                scaled_template = self._scaled_template(template, template_scale)
+                if abs(scale_x - scale_y) < 1e-6:
+                    scaled_template = self._scaled_template(template, scale_x)
+                else:
+                    cache = getattr(self, "_scaled_template_cache", None)
+                    if cache is None:
+                        cache = {}
+                        self._scaled_template_cache = cache
+                    scaled_template = resize_template_xy(
+                        template,
+                        scale_x,
+                        scale_y,
+                        cache=cache,
+                    )
                 score, _location = self._best_scaled_template_match(
                     frame,
                     scaled_template,
@@ -426,7 +458,12 @@ class RallyMatchingMixin:
 
         previous_availability = getattr(self, "_last_rally_team_availability", {}) or {}
         previous_busy = previous_availability.get("busy", {})
-        busy_release_threshold = 0.50
+        # Preserve the existing wide release margin at normal confidence while
+        # keeping hysteresis correctly ordered for lower custom thresholds.
+        busy_release_threshold = min(
+            0.50,
+            float(action.team_busy_confidence) - 0.05,
+        )
         effective_thresholds = {
             team_number: (
                 busy_release_threshold
@@ -819,7 +856,14 @@ class RallyMatchingMixin:
         )
         current_size = None
         scenario = getattr(self, "scenario", None)
-        if scenario is not None and scenario.target_window_title.strip():
+        if cond.region_mode == "monitor":
+            try:
+                _index, monitor = self._selected_monitor()
+            except (AttributeError, RuntimeError):
+                monitor = None
+            if monitor is not None:
+                current_size = (int(monitor["width"]), int(monitor["height"]))
+        elif scenario is not None and scenario.target_window_title.strip():
             rect = self._get_target_window_rect()
             if rect:
                 current_size = (rect[2], rect[3])

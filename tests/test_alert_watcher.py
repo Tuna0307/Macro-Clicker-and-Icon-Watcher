@@ -2,6 +2,7 @@ import json
 import os
 import queue
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch, sentinel
@@ -73,6 +74,184 @@ class TemplateManagerTests(unittest.TestCase):
         self.assertEqual(item["region_mode"], "window")
         self.assertEqual(item["region_ratio"], (0.1, 0.2, 0.3, 0.4))
         self.assertEqual(item["region_window_size"], (100, 100))
+
+    def test_monitor_reference_uses_monitor_size_even_with_target_window(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            "monitor-scaled",
+            template_reference_size=(1920, 1080),
+            template_reference_space="monitor",
+        )
+        tm.set_region(
+            tid,
+            (10, 20, 30, 40),
+            "monitor",
+            (0.1, 0.2, 0.3, 0.4),
+            (100, 100),
+            monitor_index=2,
+            monitor_unique_id="DISPLAY-B",
+        )
+
+        with patch.object(
+            watcher,
+            "prepare_template_variants",
+            return_value=(sentinel.variant,),
+        ) as prepare:
+            item = tm.snapshot(
+                use_grayscale=True,
+                current_window_size=(800, 600),
+                current_monitor_size=(1920, 1080),
+            )[0]
+
+        self.assertEqual(item["variants"], (sentinel.variant,))
+        self.assertEqual(prepare.call_args.kwargs["current_size"], (1920, 1080))
+
+    def test_monitor_identity_round_trips_and_survives_reordering(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "monitor-bound")
+        tm.set_region(
+            tid,
+            (10, 20, 30, 40),
+            "monitor",
+            (0.1, 0.2, 0.3, 0.4),
+            (100, 100),
+            monitor_index=2,
+            monitor_unique_id="DISPLAY-B",
+        )
+
+        reloaded = watcher.TemplateManager().snapshot()[0]
+
+        self.assertEqual(reloaded["monitor_index"], 2)
+        self.assertEqual(reloaded["monitor_unique_id"], "DISPLAY-B")
+        self.assertTrue(
+            watcher.WatcherThread._item_matches_monitor(
+                reloaded,
+                1,
+                {"unique_id": "DISPLAY-B"},
+            )
+        )
+        self.assertFalse(
+            watcher.WatcherThread._item_matches_monitor(
+                reloaded,
+                2,
+                {"unique_id": "DISPLAY-A"},
+            )
+        )
+
+    def test_legacy_template_without_monitor_identity_keeps_all_monitor_behavior(self):
+        self.assertTrue(
+            watcher.WatcherThread._item_matches_monitor(
+                {},
+                2,
+                {"unique_id": "DISPLAY-B"},
+            )
+        )
+
+    def test_variant_generation_does_not_hold_manager_lock(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "slow-variant")
+        entered = threading.Event()
+        release = threading.Event()
+        reader_finished = threading.Event()
+
+        def slow_prepare(*_args, **_kwargs):
+            entered.set()
+            release.wait(2.0)
+            return (sentinel.variant,)
+
+        def read_template():
+            tm.get(tid)
+            reader_finished.set()
+
+        with patch.object(
+            watcher,
+            "prepare_template_variants",
+            side_effect=slow_prepare,
+        ):
+            generator = threading.Thread(target=lambda: tm.snapshot(use_grayscale=True))
+            generator.start()
+            self.assertTrue(entered.wait(1.0))
+            reader = threading.Thread(target=read_template)
+            reader.start()
+            self.assertTrue(reader_finished.wait(0.5))
+            release.set()
+            generator.join(2.0)
+            reader.join(2.0)
+
+        self.assertFalse(generator.is_alive())
+
+    def test_relative_regions_reject_negative_offsets_but_screen_regions_allow_them(
+        self,
+    ):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "negative-screen")
+
+        tm.set_region(tid, (-100, 20, 30, 40), "screen")
+        self.assertEqual(tm.get(tid)["region"], (-100, 20, 30, 40))
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            tm.set_region(tid, (-1, 20, 30, 40), "window")
+
+    def test_fractional_template_reference_size_is_rejected(self):
+        self.assertIsNone(watcher.TemplateManager._valid_window_size((1920.5, 1080)))
+
+    def test_unknown_manifest_entry_is_disabled_and_preserved_on_save(self):
+        tm = self._manager_in_temp_dir()
+        templates_dir = os.path.dirname(watcher.MANIFEST_PATH)
+        cv2.imwrite(
+            os.path.join(templates_dir, "template_1.png"),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+        )
+        cv2.imwrite(
+            os.path.join(templates_dir, "template_2.png"),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+        )
+        malformed = {
+            "id": 2,
+            "name": "typo",
+            "file": "template_2.png",
+            "enable": False,
+            "threshhold": 0.99,
+        }
+        with open(watcher.MANIFEST_PATH, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "valid",
+                            "file": "template_1.png",
+                            "enabled": True,
+                            "threshold": 0.85,
+                        },
+                        malformed,
+                    ]
+                },
+                handle,
+            )
+
+        tm = watcher.TemplateManager()
+        self.assertEqual([item["id"] for item in tm.snapshot()], [1])
+        self.assertTrue(any("unknown field" in item for item in tm.load_warnings))
+        tm.set_enabled(1, False)
+        with open(watcher.MANIFEST_PATH, encoding="utf-8") as handle:
+            saved = json.load(handle)
+
+        self.assertIn(malformed, saved["items"])
+
+    def test_unknown_manifest_root_blocks_rewrite_and_runtime_matching(self):
+        self._manager_in_temp_dir()
+        original = {"items": [], "itmes": []}
+        with open(watcher.MANIFEST_PATH, "w", encoding="utf-8") as handle:
+            json.dump(original, handle)
+
+        tm = watcher.TemplateManager()
+
+        self.assertEqual(tm.snapshot(), [])
+        with self.assertRaisesRegex(ValueError, "malformed data"):
+            tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "must-not-save")
+        with open(watcher.MANIFEST_PATH, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), original)
 
     def test_template_enabled_choice_is_persisted(self):
         tm = self._manager_in_temp_dir()
@@ -215,7 +394,7 @@ class TemplateManagerTests(unittest.TestCase):
             self.assertEqual(tm.snapshot(), [])
             self.assertTrue(tm.load_warnings)
 
-    def test_invalid_match_mode_uses_legacy_animated_behavior(self):
+    def test_invalid_match_mode_fails_closed_without_crashing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             templates_dir = os.path.join(temp_dir, "templates")
             os.makedirs(templates_dir)
@@ -246,12 +425,100 @@ class TemplateManagerTests(unittest.TestCase):
             ):
                 tm = watcher.TemplateManager()
 
-            self.assertEqual(
-                tm.snapshot()[0]["match_mode"], watcher.MATCH_MODE_ANIMATED
-            )
+            self.assertEqual(tm.snapshot(), [])
             self.assertTrue(
-                any("invalid match mode" in item for item in tm.load_warnings)
+                any("match_mode is invalid" in item for item in tm.load_warnings)
             )
+
+    def test_container_match_mode_fails_closed_without_crashing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            templates_dir = os.path.join(temp_dir, "templates")
+            os.makedirs(templates_dir)
+            cv2.imwrite(
+                os.path.join(templates_dir, "template_1.png"),
+                np.zeros((8, 8, 3), dtype=np.uint8),
+            )
+            manifest_path = os.path.join(templates_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "items": [
+                            {
+                                "id": 1,
+                                "name": "malformed mode",
+                                "file": "template_1.png",
+                                "match_mode": ["animated"],
+                            }
+                        ]
+                    },
+                    file,
+                )
+
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
+                tm = watcher.TemplateManager()
+
+            self.assertEqual(tm.snapshot(), [])
+            self.assertTrue(
+                any("match_mode is invalid" in item for item in tm.load_warnings)
+            )
+
+    def test_unreadable_template_metadata_survives_unrelated_manifest_save(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            templates_dir = os.path.join(temp_dir, "templates")
+            os.makedirs(templates_dir)
+            cv2.imwrite(
+                os.path.join(templates_dir, "template_1.png"),
+                np.zeros((8, 8, 3), dtype=np.uint8),
+            )
+            with open(
+                os.path.join(templates_dir, "template_2.png"), "wb"
+            ) as unreadable:
+                unreadable.write(b"temporarily unreadable")
+            missing_entry = {
+                "id": 2,
+                "name": "preserve me",
+                "file": "template_2.png",
+                "threshold": 0.93,
+                "region": [10, 20, 30, 40],
+                "custom_metadata": {"owner": "user"},
+            }
+            manifest_path = os.path.join(templates_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "items": [
+                            {
+                                "id": 1,
+                                "name": "readable",
+                                "file": "template_1.png",
+                            },
+                            missing_entry,
+                        ]
+                    },
+                    file,
+                )
+
+            with (
+                patch.object(watcher, "TEMPLATES_DIR", templates_dir),
+                patch.object(watcher, "MANIFEST_PATH", manifest_path),
+            ):
+                tm = watcher.TemplateManager()
+                tm.set_threshold(1, 0.81)
+
+            with open(manifest_path, encoding="utf-8") as file:
+                saved_items = {entry["id"]: entry for entry in json.load(file)["items"]}
+            self.assertEqual(saved_items[2], missing_entry)
+            self.assertEqual(saved_items[1]["threshold"], 0.81)
+
+    def test_fractional_template_region_is_rejected_instead_of_truncated(self):
+        tm = self._manager_in_temp_dir()
+        tid = tm.add(np.zeros((8, 8, 3), dtype=np.uint8), "fractional")
+
+        with self.assertRaisesRegex(ValueError, "whole numbers"):
+            tm.set_region(tid, (10.9, 20, 30, 40))
 
     def test_add_skips_unlisted_existing_template_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -441,6 +708,34 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(results[0]["name"], "blue")
         self.assertTrue(results[0]["matched"])
         self.assertGreaterEqual(results[0]["score"], 0.99)
+
+    def test_screenshot_test_marks_wrong_monitor_binding_unavailable(self):
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            path = temp.name
+        cv2.imwrite(path, np.zeros((20, 20, 3), dtype=np.uint8))
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        item = {
+            "id": 1,
+            "name": "bound elsewhere",
+            "enabled": True,
+            "threshold": 0.8,
+            "image": np.zeros((4, 4, 3), dtype=np.uint8),
+            "monitor_index": 1,
+            "monitor_unique_id": "DISPLAY-A",
+        }
+
+        results = watcher.test_detection_on_screenshot(
+            path,
+            [item],
+            monitor_box=(0, 0, 20, 20),
+            monitor_index=2,
+            monitor_unique_id="DISPLAY-B",
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["unavailable"])
+        self.assertFalse(results[0]["matched"])
+        self.assertIn("monitor", results[0]["reason"])
 
     def test_matching_can_use_prepared_template_variants(self):
         screen = np.zeros((60, 60, 3), dtype=np.uint8)
@@ -724,6 +1019,301 @@ class WatcherThreadTests(unittest.TestCase):
             [None, (1920, 1080), (2560, 1440)],
         )
 
+    def test_each_scan_cycle_refreshes_monitor_geometry_and_capture_context(self):
+        item = self._template_item()
+        snapshot_sizes = []
+
+        class FakeManager:
+            def snapshot(self, use_grayscale=None, current_window_size=None):
+                snapshot_sizes.append(current_window_size)
+                return [item]
+
+        class FakeCapture:
+            def __init__(self, monitors):
+                self.monitors = monitors
+                self.requests = []
+                self.enter_count = 0
+                self.exit_count = 0
+
+            def __enter__(self):
+                self.enter_count += 1
+                return self
+
+            def __exit__(self, *_args):
+                self.exit_count += 1
+                return False
+
+            def grab(self, monitor):
+                self.requests.append(monitor)
+                return np.zeros(
+                    (monitor["height"], monitor["width"], 4),
+                    dtype=np.uint8,
+                )
+
+        first = FakeCapture(
+            [
+                {"left": 0, "top": 0, "width": 100, "height": 80},
+                {"left": 0, "top": 0, "width": 100, "height": 80},
+            ]
+        )
+        second = FakeCapture(
+            [
+                {"left": 0, "top": 0, "width": 500, "height": 200},
+                {"left": 0, "top": 0, "width": 200, "height": 160},
+                {"left": 200, "top": 0, "width": 300, "height": 200},
+            ]
+        )
+        capture_factory = Mock(side_effect=[first, second])
+        logs = queue.Queue()
+        thread = watcher.WatcherThread(FakeManager(), queue.Queue(), logs)
+        completed_cycles = 0
+
+        def finish_after_two_cycles():
+            nonlocal completed_cycles
+            completed_cycles += 1
+            if completed_cycles == 2:
+                thread.stop()
+
+        thread._wait_for_next_cycle = finish_after_two_cycles
+        with (
+            patch.object(watcher.mss, "MSS", capture_factory),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ),
+        ):
+            thread.run()
+
+        self.assertEqual(capture_factory.call_count, 2)
+        self.assertEqual(first.enter_count, 1)
+        self.assertEqual(first.exit_count, 1)
+        self.assertEqual(second.enter_count, 1)
+        self.assertEqual(second.exit_count, 1)
+        self.assertEqual(first.requests, [first.monitors[1]])
+        self.assertEqual(second.requests, second.monitors[1:])
+        self.assertEqual(
+            snapshot_sizes,
+            [None, (100, 80), None, (200, 160), (300, 200)],
+        )
+        messages = watcher._drain_queue(logs)
+        self.assertIn("Watching 1 monitor(s).", messages)
+        self.assertIn("Watching 2 monitor(s).", messages)
+
+    def test_capture_refresh_failures_are_cleaned_up_and_retried(self):
+        item = self._template_item()
+
+        class FakeManager:
+            def snapshot(self, *_args, **_kwargs):
+                return [item]
+
+        class EnterFailure:
+            def __init__(self):
+                self.close_count = 0
+
+            def __enter__(self):
+                raise OSError("capture initialization blocked")
+
+            def close(self):
+                self.close_count += 1
+
+        class TopologyFailure:
+            def __init__(self):
+                self.exit_count = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.exit_count += 1
+                return False
+
+            @property
+            def monitors(self):
+                raise OSError("display topology changing")
+
+        class WorkingCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+            ]
+
+            def __init__(self):
+                self.exit_count = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.exit_count += 1
+                return False
+
+            def grab(self, _monitor):
+                return np.zeros((10, 10, 4), dtype=np.uint8)
+
+        enter_failure = EnterFailure()
+        topology_failure = TopologyFailure()
+        working = WorkingCapture()
+        capture_factory = Mock(side_effect=[enter_failure, topology_failure, working])
+        events, logs = queue.Queue(), queue.Queue()
+        thread = watcher.WatcherThread(FakeManager(), events, logs)
+        completed_cycles = 0
+
+        def finish_after_three_cycles():
+            nonlocal completed_cycles
+            completed_cycles += 1
+            if completed_cycles == 3:
+                thread.stop()
+
+        thread._wait_for_next_cycle = finish_after_three_cycles
+        with (
+            patch.object(watcher.mss, "MSS", capture_factory),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ) as matcher,
+        ):
+            thread.run()
+
+        self.assertEqual(capture_factory.call_count, 3)
+        self.assertEqual(enter_failure.close_count, 1)
+        self.assertEqual(topology_failure.exit_count, 1)
+        self.assertEqual(working.exit_count, 1)
+        matcher.assert_called_once()
+        messages = watcher._drain_queue(logs)
+        self.assertEqual(
+            sum("Screen capture refresh failed" in message for message in messages),
+            1,
+        )
+        self.assertFalse(
+            any(
+                event.get("type") == "watcher_error"
+                for event in watcher._drain_queue(events)
+            )
+        )
+
+    def test_mixed_monitor_identity_inventory_does_not_use_old_item_ordinal(self):
+        item = self._template_item()
+        item.update(
+            {
+                "monitor_index": 1,
+                "monitor_unique_id": "DISPLAY-A",
+            }
+        )
+
+        class FakeManager:
+            def snapshot(self, *_args, **_kwargs):
+                return [item]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 20, "height": 10},
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+                {
+                    "left": 10,
+                    "top": 0,
+                    "width": 10,
+                    "height": 10,
+                    "unique_id": "DISPLAY-B",
+                },
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, _monitor):
+                return np.zeros((10, 10, 4), dtype=np.uint8)
+
+        thread = watcher.WatcherThread(
+            FakeManager(),
+            queue.Queue(),
+            queue.Queue(),
+        )
+        thread._wait_for_next_cycle = thread.stop
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ) as matcher,
+        ):
+            thread.run()
+
+        matcher.assert_not_called()
+        self.assertTrue(
+            watcher.WatcherThread._item_matches_monitor(
+                item,
+                1,
+                FakeCapture.monitors[1],
+                unique_ids_available=False,
+            )
+        )
+
+    def test_global_monitor_uid_survives_reordering_at_runtime(self):
+        item = self._template_item()
+
+        class FakeManager:
+            def snapshot(self, *_args, **_kwargs):
+                return [item]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 20, "height": 10},
+                {
+                    "left": 0,
+                    "top": 0,
+                    "width": 10,
+                    "height": 10,
+                    "unique_id": "DISPLAY-B",
+                },
+                {
+                    "left": 10,
+                    "top": 0,
+                    "width": 10,
+                    "height": 10,
+                    "unique_id": "DISPLAY-A",
+                },
+            ]
+
+            def __init__(self):
+                self.requests = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, monitor):
+                self.requests.append(monitor)
+                return np.zeros((10, 10, 4), dtype=np.uint8)
+
+        capture = FakeCapture()
+        thread = watcher.WatcherThread(
+            FakeManager(),
+            queue.Queue(),
+            queue.Queue(),
+            monitor_filter=2,
+            monitor_unique_id="DISPLAY-B",
+        )
+        thread._wait_for_next_cycle = thread.stop
+        with (
+            patch.object(watcher.mss, "MSS", return_value=capture),
+            patch.object(
+                watcher,
+                "match_template_multiscale",
+                return_value=(0.0, None, 1.0),
+            ),
+        ):
+            thread.run()
+
+        self.assertEqual(capture.requests, [capture.monitors[1]])
+
     def test_template_added_mid_cycle_is_deferred_without_stopping_watcher(self):
         first = self._template_item(1, "first")
         added = self._template_item(2, "added")
@@ -843,6 +1433,45 @@ class WatcherThreadTests(unittest.TestCase):
         )
         self.assertFalse(thread.states[1].active)
 
+    def test_run_stamps_alert_cooldown_after_scan_finishes(self):
+        item = self._template_item()
+
+        class FakeManager:
+            def snapshot(self, *_args, **_kwargs):
+                return [item]
+
+        class FakeCapture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+                {"left": 0, "top": 0, "width": 10, "height": 10},
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def grab(self, _monitor):
+                return np.zeros((10, 10, 4), dtype=np.uint8)
+
+        thread = watcher.WatcherThread(FakeManager(), queue.Queue(), queue.Queue())
+        thread._wait_for_next_cycle = thread.stop
+        thread._emit_aggregated_matches = Mock()
+
+        with (
+            patch.object(watcher.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                thread,
+                "_match_entry",
+                return_value=(0.91, (1, 1), 1.0),
+            ),
+            patch.object(watcher.time, "monotonic", side_effect=[10.0, 25.0]),
+        ):
+            thread.run()
+
+        self.assertEqual(thread._emit_aggregated_matches.call_args.args[2], 25.0)
+
     def test_stop_is_checked_before_scanning_the_next_template(self):
         items = [self._template_item(1, "first"), self._template_item(2, "second")]
 
@@ -890,6 +1519,7 @@ class WatcherThreadTests(unittest.TestCase):
 
         thread.update_config(
             monitor_filter=2,
+            monitor_unique_id="DISPLAY-B",
             scan_region=(1, 2, 30, 40),
             scan_region_mode="window",
             scan_region_ratio=(0.1, 0.2, 0.3, 0.4),
@@ -902,6 +1532,7 @@ class WatcherThreadTests(unittest.TestCase):
 
         config = thread._config_snapshot()
         self.assertEqual(config["monitor_filter"], 2)
+        self.assertEqual(config["monitor_unique_id"], "DISPLAY-B")
         self.assertEqual(config["scan_region"], (1, 2, 30, 40))
         self.assertEqual(config["target_window_title"], "Game")
         self.assertFalse(config["use_grayscale"])
@@ -970,6 +1601,31 @@ class WatcherThreadTests(unittest.TestCase):
 
 
 class WatcherFrameLifecycleTests(unittest.TestCase):
+    def test_variable_size_popup_packing_avoids_existing_rectangles(self):
+        occupied = [
+            (1500, 40, 360, 220),
+            (1620, 272, 240, 120),
+        ]
+
+        x, y = watcher.AlertPopup._choose_popup_position(
+            (0, 0, 1920, 1080),
+            (180, 100),
+            occupied,
+        )
+        candidate = (x, y, 180, 100)
+
+        self.assertTrue(all(value >= 0 for value in (x, y)))
+        self.assertFalse(
+            any(
+                watcher.AlertPopup._rectangles_overlap(
+                    candidate,
+                    existing,
+                    gap=12,
+                )
+                for existing in occupied
+            )
+        )
+
     class FakeControl:
         def __init__(self):
             self.options = {}
@@ -1023,6 +1679,61 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
             "Watcher is already running or still stopping."
         )
 
+    def test_shutdown_guards_start_and_test_callbacks(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._shutting_down = True
+        frame._selected_id = Mock()
+        frame._screenshot_test_running = False
+        frame.watcher = None
+
+        with (
+            patch.object(watcher, "AlertPopup") as popup,
+            patch.object(watcher, "play_alert_sound") as sound,
+        ):
+            frame._start_watching()
+            frame._toggle_watching()
+            frame._test_alert()
+            frame._test_screenshot()
+
+        frame._selected_id.assert_not_called()
+        popup.assert_not_called()
+        sound.assert_not_called()
+
+    def test_shutdown_discards_queued_commands_and_alert_events(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._shutting_down = True
+        frame.log_queue = queue.Queue()
+        frame.event_queue = queue.Queue()
+        frame.event_queue.put({"type": "ui_command", "command": "toggle"})
+        frame.event_queue.put({"type": "ui_command", "command": "test_alert"})
+        frame.event_queue.put(
+            {
+                "id": 1,
+                "name": "late alert",
+                "monitor": 1,
+                "score": 0.99,
+            }
+        )
+        frame._show_from_tray = Mock()
+        frame._toggle_watching = Mock()
+        frame._test_alert = Mock()
+        frame._quit_from_tray = Mock()
+        frame._append_log = Mock()
+        frame.tm = Mock()
+        frame.after = Mock()
+
+        with (
+            patch.object(watcher, "AlertPopup") as popup,
+            patch.object(watcher, "play_alert_sound") as sound,
+        ):
+            frame._poll_queues()
+
+        frame._toggle_watching.assert_not_called()
+        frame._test_alert.assert_not_called()
+        frame.tm.get.assert_not_called()
+        popup.assert_not_called()
+        sound.assert_not_called()
+
     def test_hotkey_callback_queues_ui_work_without_calling_tk(self):
         frame = object.__new__(watcher.AlertWatcherFrame)
         frame.event_queue = queue.Queue()
@@ -1035,6 +1746,39 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         self.assertEqual(
             frame.event_queue.get_nowait(),
             {"type": "ui_command", "command": "toggle"},
+        )
+
+    def test_alert_hotkey_alias_conflict_registers_only_first_binding(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.settings = Mock(
+            start_stop_hotkey="ctrl+shift+f8",
+            test_alert_hotkey="shift+control+f8",
+        )
+        frame.hotkey_handles = []
+        frame._toggle_watching_from_hotkey = Mock()
+        frame._test_alert_from_hotkey = Mock()
+        frame._append_log = Mock()
+
+        with (
+            patch.object(watcher, "HAVE_KEYBOARD", True),
+            patch.object(
+                watcher.keyboard,
+                "add_hotkey",
+                return_value=sentinel.start_handle,
+            ) as add_hotkey,
+        ):
+            frame._setup_hotkeys()
+
+        add_hotkey.assert_called_once_with(
+            "ctrl+shift+f8",
+            frame._toggle_watching_from_hotkey,
+        )
+        self.assertEqual(frame.hotkey_handles, [sentinel.start_handle])
+        self.assertTrue(
+            any(
+                "Hotkey conflict" in call.args[0]
+                for call in frame._append_log.call_args_list
+            )
         )
 
     def test_global_animation_preference_applies_to_live_watcher(self):
@@ -1066,13 +1810,537 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
 
         root.destroy.assert_called_once_with()
 
+    def test_screenshot_variant_preparation_starts_inside_worker(self):
+        workers = []
+
+        class DeferredThread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+                workers.append(self)
+
+            def start(self):
+                pass
+
+        class Manager:
+            def __init__(self):
+                self.calls = []
+
+            def snapshot(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                return [
+                    {
+                        "id": 1,
+                        "name": "test",
+                        "enabled": True,
+                        "threshold": 0.8,
+                        "image": np.zeros((4, 4, 3), dtype=np.uint8),
+                    }
+                ]
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            path = temp.name
+        cv2.imwrite(path, np.zeros((20, 20, 3), dtype=np.uint8))
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._screenshot_test_running = False
+        frame.tm = Manager()
+        frame._resolve_global_scan_region_for_display = Mock(return_value=None)
+        frame.target_window_var = Mock()
+        frame.target_window_var.get.return_value = ""
+        frame._selected_monitor_box = Mock(return_value=(0, 0, 20, 20))
+        frame._selected_monitor_filter = Mock(return_value=1)
+        frame.grayscale_var = Mock()
+        frame.grayscale_var.get.return_value = True
+        frame.test_screenshot_btn = Mock()
+        frame._append_log = Mock()
+        frame.event_queue = queue.Queue()
+
+        with (
+            patch.object(watcher.filedialog, "askopenfilename", return_value=path),
+            patch.object(watcher.threading, "Thread", DeferredThread),
+            patch.object(
+                watcher,
+                "test_detection_on_screenshot",
+                return_value=[],
+            ),
+        ):
+            frame._test_screenshot()
+            self.assertEqual(len(frame.tm.calls), 1)
+            workers[0].target()
+
+        self.assertEqual(len(frame.tm.calls), 2)
+        self.assertNotIn("use_grayscale", frame.tm.calls[0])
+        self.assertTrue(frame.tm.calls[1]["use_grayscale"])
+
+    def test_screenshot_worker_start_failure_restores_button(self):
+        class Manager:
+            def snapshot(self, **_kwargs):
+                return [
+                    {
+                        "id": 1,
+                        "name": "test",
+                        "enabled": True,
+                        "threshold": 0.8,
+                        "image": np.zeros((4, 4, 3), dtype=np.uint8),
+                    }
+                ]
+
+        class FailedThread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                raise RuntimeError("thread unavailable")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            path = temp.name
+        cv2.imwrite(path, np.zeros((20, 20, 3), dtype=np.uint8))
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._screenshot_test_running = False
+        frame.tm = Manager()
+        frame._resolve_global_scan_region_for_display = Mock(return_value=None)
+        frame.target_window_var = Mock()
+        frame.target_window_var.get.return_value = ""
+        frame._selected_monitor_box = Mock(return_value=(0, 0, 20, 20))
+        frame._selected_monitor_filter = Mock(return_value=1)
+        frame.grayscale_var = Mock()
+        frame.grayscale_var.get.return_value = True
+        frame.test_screenshot_btn = Mock()
+        frame._append_log = Mock()
+        frame.event_queue = queue.Queue()
+
+        with (
+            patch.object(watcher.filedialog, "askopenfilename", return_value=path),
+            patch.object(watcher.threading, "Thread", FailedThread),
+            patch.object(watcher.messagebox, "showerror") as error,
+        ):
+            frame._test_screenshot()
+
+        self.assertFalse(frame._screenshot_test_running)
+        frame.test_screenshot_btn.config.assert_called_with(
+            state="normal",
+            text="Test screenshot",
+        )
+        error.assert_called_once()
+
+    def test_unavailable_saved_monitor_is_preserved_in_selector(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._refresh_window_list = Mock()
+        frame.monitor_combo = {}
+        frame._monitor_choices = Mock(return_value=["All monitors", "Monitor 1"])
+        frame.monitor_var = Mock()
+        frame.monitor_var.get.return_value = "Monitor 2"
+        frame._update_region_label = Mock()
+        frame._append_log = Mock()
+
+        with (
+            patch.object(watcher, "HAVE_KEYBOARD", True),
+            patch.object(watcher, "HAVE_PYSTRAY", True),
+        ):
+            frame._apply_loaded_settings()
+
+        frame.monitor_var.set.assert_not_called()
+        self.assertIn("Monitor 2", frame.monitor_combo["values"])
+
+    def test_monitor_choices_refresh_after_reconnect_without_changing_selection(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.monitor_combo = {}
+        frame.monitor_var = Mock()
+        frame.monitor_var.get.return_value = "Monitor 2"
+        frame._monitor_choices = Mock(
+            side_effect=[
+                ["All monitors", "Monitor 1"],
+                ["All monitors", "Monitor 1", "Monitor 2"],
+            ]
+        )
+
+        self.assertFalse(frame._refresh_monitor_choices())
+        self.assertIn("Monitor 2", frame.monitor_combo["values"])
+        self.assertTrue(frame._refresh_monitor_choices())
+        self.assertEqual(
+            frame.monitor_combo["values"],
+            ("All monitors", "Monitor 1", "Monitor 2"),
+        )
+        frame.monitor_var.set.assert_not_called()
+
+    def test_global_monitor_selection_follows_saved_uid_after_reordering(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 300, "height": 100},
+                {
+                    "left": 0,
+                    "top": 0,
+                    "width": 100,
+                    "height": 100,
+                    "unique_id": "DISPLAY-B",
+                },
+                {
+                    "left": 100,
+                    "top": 0,
+                    "width": 200,
+                    "height": 100,
+                    "unique_id": "DISPLAY-A",
+                },
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.monitor_combo = {}
+        frame.monitor_var = Mock()
+        frame.monitor_var.get.return_value = "Monitor 2"
+        frame.monitor_unique_id = "DISPLAY-B"
+        frame._monitor_choices = Mock(
+            return_value=["All monitors", "Monitor 1", "Monitor 2"]
+        )
+
+        with patch.object(watcher.mss, "MSS", return_value=Capture()):
+            self.assertTrue(frame._refresh_monitor_choices())
+
+        frame.monitor_var.set.assert_called_once_with("Monitor 1")
+        self.assertEqual(frame.monitor_unique_id, "DISPLAY-B")
+
+    def test_global_monitor_selection_fails_closed_when_uid_is_absent(self):
+        monitors = [
+            {"left": 0, "top": 0, "width": 300, "height": 100},
+            {
+                "left": 0,
+                "top": 0,
+                "width": 100,
+                "height": 100,
+                "unique_id": "DISPLAY-A",
+            },
+            {"left": 100, "top": 0, "width": 200, "height": 100},
+        ]
+
+        self.assertIsNone(
+            watcher._resolve_monitor_binding(
+                monitors,
+                monitor_index=2,
+                monitor_unique_id="DISPLAY-B",
+            )
+        )
+        for monitor in monitors[1:]:
+            monitor.pop("unique_id", None)
+        self.assertEqual(
+            watcher._resolve_monitor_binding(
+                monitors,
+                monitor_index=2,
+                monitor_unique_id="DISPLAY-B",
+            ),
+            (2, monitors[2]),
+        )
+
+    def test_legacy_global_monitor_selection_acquires_available_uid(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 300, "height": 100},
+                {
+                    "left": 0,
+                    "top": 0,
+                    "width": 100,
+                    "height": 100,
+                    "unique_id": "DISPLAY-A",
+                },
+                {
+                    "left": 100,
+                    "top": 0,
+                    "width": 200,
+                    "height": 100,
+                    "unique_id": "DISPLAY-B",
+                },
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.monitor_combo = {}
+        frame.monitor_var = Mock()
+        frame.monitor_var.get.return_value = "Monitor 2"
+        frame.monitor_unique_id = None
+        frame._monitor_choices = Mock(
+            return_value=["All monitors", "Monitor 1", "Monitor 2"]
+        )
+
+        with patch.object(watcher.mss, "MSS", return_value=Capture()):
+            self.assertTrue(frame._refresh_monitor_choices())
+
+        self.assertEqual(frame.monitor_unique_id, "DISPLAY-B")
+        frame.monitor_var.set.assert_not_called()
+
+    def test_icon_preview_uses_its_persisted_monitor_identity(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 300, "height": 100},
+                {
+                    "left": 200,
+                    "top": 0,
+                    "width": 100,
+                    "height": 100,
+                    "unique_id": "DISPLAY-B",
+                },
+                {
+                    "left": 0,
+                    "top": 0,
+                    "width": 200,
+                    "height": 100,
+                    "unique_id": "DISPLAY-A",
+                },
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._selected_monitor_box = Mock(return_value=(0, 0, 200, 100))
+        entry = {
+            "region_mode": "monitor",
+            "monitor_index": 2,
+            "monitor_unique_id": "DISPLAY-B",
+        }
+
+        with patch.object(watcher.mss, "MSS", return_value=Capture()):
+            box = frame._entry_monitor_box(entry)
+
+        self.assertEqual(box, (200, 0, 100, 100))
+        frame._selected_monitor_box.assert_not_called()
+
+    def test_icon_preview_does_not_redirect_missing_uid_to_old_index(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 300, "height": 100},
+                {
+                    "left": 0,
+                    "top": 0,
+                    "width": 100,
+                    "height": 100,
+                    "unique_id": "DISPLAY-A",
+                },
+                {
+                    "left": 100,
+                    "top": 0,
+                    "width": 200,
+                    "height": 100,
+                    "unique_id": "DISPLAY-C",
+                },
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        entry = {
+            "region_mode": "monitor",
+            "monitor_index": 2,
+            "monitor_unique_id": "DISPLAY-B",
+        }
+
+        with patch.object(watcher.mss, "MSS", return_value=Capture()):
+            self.assertIsNone(frame._entry_monitor_box(entry))
+
+    def test_icon_preview_uses_index_when_backend_has_no_unique_ids(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 300, "height": 100},
+                {"left": 0, "top": 0, "width": 100, "height": 100},
+                {"left": 100, "top": 0, "width": 200, "height": 100},
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        entry = {
+            "region_mode": "monitor",
+            "monitor_index": 2,
+            "monitor_unique_id": "DISPLAY-B",
+        }
+
+        with patch.object(watcher.mss, "MSS", return_value=Capture()):
+            self.assertEqual(
+                frame._entry_monitor_box(entry),
+                (100, 0, 200, 100),
+            )
+
+    def test_monitor_region_pick_updates_scan_source_to_dragged_monitor(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.deiconify = Mock()
+        frame._region_metadata_from_abs_box = Mock(
+            return_value={
+                "region": (10, 20, 30, 40),
+                "region_mode": "monitor",
+                "region_ratio": (0.1, 0.2, 0.3, 0.4),
+                "region_window_size": (300, 100),
+                "monitor_index": 2,
+            }
+        )
+        frame.monitor_var = Mock()
+        frame._update_region_label = Mock()
+        frame._append_log = Mock()
+        frame._save_settings = Mock()
+
+        frame._on_scan_region_picked(None, (100, 200, 30, 40))
+
+        frame.monitor_var.set.assert_called_once_with("Monitor 2")
+        frame._save_settings.assert_called_once_with()
+
+    def test_monitor_icon_region_pick_updates_source_to_dragged_monitor(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.deiconify = Mock()
+        frame._region_metadata_from_abs_box = Mock(
+            return_value={
+                "region": (10, 20, 30, 40),
+                "region_mode": "monitor",
+                "region_ratio": (0.1, 0.2, 0.3, 0.4),
+                "region_window_size": (300, 100),
+                "monitor_index": 2,
+            }
+        )
+        frame.tm = Mock()
+        frame.tm.get.return_value = {"name": "Watched icon"}
+        frame.monitor_var = Mock()
+        frame._refresh_list = Mock()
+        frame._update_icon_region_label = Mock()
+        frame._append_log = Mock()
+
+        frame._on_icon_region_picked(None, (100, 200, 30, 40), 7)
+
+        frame.tm.set_region.assert_called_once_with(
+            7,
+            (10, 20, 30, 40),
+            "monitor",
+            (0.1, 0.2, 0.3, 0.4),
+            (300, 100),
+            monitor_index=2,
+            monitor_unique_id=None,
+        )
+        frame.monitor_var.set.assert_not_called()
+
+    def test_cross_monitor_region_pick_is_rejected(self):
+        class Capture:
+            monitors = [
+                {"left": 0, "top": 0, "width": 200, "height": 100},
+                {"left": 0, "top": 0, "width": 100, "height": 100},
+                {"left": 100, "top": 0, "width": 100, "height": 100},
+            ]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.target_window_var = Mock()
+        frame.target_window_var.get.return_value = ""
+
+        with (
+            patch.object(watcher.mss, "MSS", return_value=Capture()),
+            self.assertRaisesRegex(ValueError, "inside one monitor"),
+        ):
+            frame._region_metadata_from_abs_box((90, 10, 20, 20))
+
+    def test_close_to_tray_keeps_window_visible_when_tray_thread_died(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._settings_save_after_id = None
+        frame._template_save_after_id = None
+        frame._save_settings = Mock()
+        frame.embedded = False
+        frame.tray_var = Mock()
+        frame.tray_var.get.return_value = True
+        frame._tray_is_alive = Mock(return_value=False)
+        frame.withdraw = Mock()
+        frame._append_log = Mock()
+
+        with (
+            patch.object(watcher, "HAVE_PYSTRAY", True),
+            patch.object(watcher.messagebox, "showwarning") as warning,
+        ):
+            frame.on_close()
+
+        frame.withdraw.assert_not_called()
+        frame.tray_var.set.assert_called_once_with(False)
+        warning.assert_called_once()
+
 
 class SettingsTests(unittest.TestCase):
+    def test_unknown_settings_fail_closed_without_rewriting_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            source = {
+                "target_window_titel": "Game",
+                "moniter_choice": "Monitor 2",
+                "scan_regoin": [1, 2, 30, 40],
+            }
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(source, handle)
+
+            loaded = watcher.load_settings(path)
+
+            self.assertEqual(loaded.target_window_title, "")
+            self.assertEqual(loaded.monitor_choice, "All monitors")
+            self.assertIsNone(loaded.scan_region)
+            self.assertTrue(watcher.settings_load_errors(loaded))
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle), source)
+
+    def test_negative_relative_setting_fails_closed_but_negative_screen_is_valid(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "scan_region": [-100, 20, 30, 40],
+                        "scan_region_mode": "screen",
+                    },
+                    handle,
+                )
+            screen = watcher.load_settings(path)
+            self.assertEqual(screen.scan_region, (-100, 20, 30, 40))
+            self.assertFalse(watcher.settings_load_errors(screen))
+
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "scan_region": [-1, 20, 30, 40],
+                        "scan_region_mode": "monitor",
+                        "scan_region_ratio": [0.0, 0.1, 0.3, 0.4],
+                        "scan_region_window_size": [100, 100],
+                    },
+                    handle,
+                )
+            relative = watcher.load_settings(path)
+
+        self.assertIsNone(relative.scan_region)
+        self.assertTrue(watcher.settings_load_errors(relative))
+
     def test_settings_round_trip_preserves_user_options(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "settings.json")
             settings = watcher.AppSettings(
                 monitor_choice="Monitor 2",
+                monitor_unique_id="DISPLAY-B",
                 grayscale=False,
                 debug=True,
                 cooldown_sec=7.5,
@@ -1154,6 +2422,20 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(loaded.grayscale)
         self.assertIsNone(loaded.scan_region)
         self.assertEqual(loaded.target_window_title, "")
+
+    def test_container_scan_region_mode_uses_safe_default(self):
+        for malformed in ([], {}):
+            with (
+                self.subTest(malformed=malformed),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                path = os.path.join(temp_dir, "settings.json")
+                with open(path, "w", encoding="utf-8") as file:
+                    json.dump({"scan_region_mode": malformed}, file)
+
+                loaded = watcher.load_settings(path)
+
+            self.assertEqual(loaded.scan_region_mode, "screen")
 
     def test_fractional_pixel_coordinates_are_not_silently_truncated(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1243,6 +2525,26 @@ class SoundTests(unittest.TestCase):
             workers[0].target()
 
         play_once.assert_called_once_with(0.4)
+        self.assertIsNone(watcher._SOUND_THREAD)
+        self.assertIsNone(watcher._PENDING_SOUND_VOLUME)
+
+    def test_thread_start_failure_does_not_wedge_future_sound_requests(self):
+        class FailedThread:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("cannot start")
+
+        watcher._SOUND_THREAD = None
+        watcher._PENDING_SOUND_VOLUME = None
+        self.addCleanup(setattr, watcher, "_SOUND_THREAD", None)
+        self.addCleanup(setattr, watcher, "_PENDING_SOUND_VOLUME", None)
+
+        with patch.object(watcher.threading, "Thread", FailedThread):
+            watcher.play_alert_sound(0.2)
+            watcher.play_alert_sound(0.3)
+
         self.assertIsNone(watcher._SOUND_THREAD)
         self.assertIsNone(watcher._PENDING_SOUND_VOLUME)
 
@@ -1337,6 +2639,40 @@ class SingleInstanceTests(unittest.TestCase):
                 self.assertTrue(os.path.exists(path))
             finally:
                 first.release()
+
+    def test_single_instance_lock_propagates_post_lock_write_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "app.lock")
+            lock = watcher.SingleInstanceLock(path)
+
+            with (
+                patch.object(watcher.os, "fsync", side_effect=OSError("disk full")),
+                self.assertRaisesRegex(OSError, "disk full"),
+            ):
+                lock.acquire()
+
+            self.assertIsNone(lock.fd)
+
+    def test_standalone_lock_access_error_is_reported_without_traceback(self):
+        lock = Mock()
+        lock.acquire.side_effect = PermissionError("lock directory denied")
+        notice = Mock()
+
+        with (
+            patch.object(watcher, "SingleInstanceLock", return_value=lock),
+            patch.object(watcher.tk, "Tk", return_value=notice),
+            patch.object(watcher.messagebox, "showwarning") as warning,
+            patch.object(watcher.messagebox, "showerror") as error,
+            patch.object(watcher, "App") as app,
+        ):
+            result = watcher.main()
+
+        self.assertEqual(result, 1)
+        warning.assert_not_called()
+        app.assert_not_called()
+        self.assertEqual(error.call_args.args[0], "Icon Alert Watcher could not start")
+        self.assertIn("PermissionError: lock directory denied", error.call_args.args[1])
+        notice.destroy.assert_called_once_with()
 
 
 if __name__ == "__main__":

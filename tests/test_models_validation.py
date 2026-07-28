@@ -100,7 +100,7 @@ class ModelValidationTests(unittest.TestCase):
         self.assertEqual(legacy.start_hotkey, "f8")
 
     def test_scenario_start_and_stop_hotkeys_must_be_different(self):
-        with self.assertRaisesRegex(ValueError, "different keys"):
+        with self.assertRaisesRegex(ValueError, "overlapping physical key sequences"):
             validate_scenario(
                 Scenario(name="Conflicting keys", start_hotkey="F12", kill_switch="f12")
             )

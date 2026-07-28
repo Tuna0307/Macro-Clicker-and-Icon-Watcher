@@ -184,7 +184,15 @@ class RegionOverlay(tk.Toplevel):
 class AlertPopup(tk.Toplevel):
     """Short-lived alert window displayed when a configured icon is detected."""
 
-    def __init__(self, master, name, monitor, thumb_img):
+    def __init__(
+        self,
+        master,
+        name,
+        monitor,
+        thumb_img,
+        *,
+        animations_enabled=True,
+    ):
         super().__init__(master)
         self.title("Icon Alert")
         self.attributes("-topmost", True)
@@ -193,6 +201,8 @@ class AlertPopup(tk.Toplevel):
         self._fade_after_id = None
         self._close_after_id = None
         self._closing = False
+        self._animations_enabled = bool(animations_enabled)
+        self._popup_owner = master
 
         frame = tk.Frame(self, bg=COLORS["surface"], padx=18, pady=16)
         frame.pack(padx=1, pady=1)
@@ -227,20 +237,138 @@ class AlertPopup(tk.Toplevel):
         )
 
         self.update_idletasks()
+        left, top, width, height = self._alert_monitor_rect(monitor)
+        popup_width = self.winfo_width()
+        popup_height = self.winfo_height()
+        active = self._active_popups(master, (left, top, width, height))
+        occupied = [
+            rect for popup in active if (rect := self._popup_rect(popup)) is not None
+        ]
+        x, y = self._choose_popup_position(
+            (left, top, width, height),
+            (popup_width, popup_height),
+            occupied,
+        )
+        self._alert_popup_monitor = (left, top, width, height)
+        self._alert_popup_rect = (x, y, popup_width, popup_height)
+        registry = getattr(master, "_alert_popup_windows", None)
+        if registry is None:
+            registry = []
+            setattr(master, "_alert_popup_windows", registry)
+        registry.append(self)
+        self.geometry(f"{x:+d}{y:+d}")
+        self.protocol("WM_DELETE_WINDOW", self._begin_close)
+        if self._animations_enabled:
+            try:
+                self.attributes("-alpha", 0.0)
+                self._animate_alpha(0.0, 1.0, 0.16)
+            except tk.TclError:
+                pass
+        self._close_after_id = self.after(8000, self._begin_close)
+
+    def _alert_monitor_rect(self, requested_monitor):
+        try:
+            requested_index = int(requested_monitor)
+        except (TypeError, ValueError):
+            requested_index = 1
         try:
             with mss.MSS() as sct:
-                virtual = sct.monitors[0]
-            right = virtual["left"] + virtual["width"]
+                monitors = sct.monitors
+                index = (
+                    requested_index
+                    if 1 <= requested_index < len(monitors)
+                    else (1 if len(monitors) > 1 else 0)
+                )
+                monitor = monitors[index]
+            return (
+                int(monitor["left"]),
+                int(monitor["top"]),
+                int(monitor["width"]),
+                int(monitor["height"]),
+            )
         except Exception:
-            right = self.winfo_screenwidth()
-        self.geometry(f"+{right - self.winfo_width() - 40}+40")
-        self.protocol("WM_DELETE_WINDOW", self._begin_close)
+            return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
+
+    @staticmethod
+    def _active_popups(master, monitor_rect):
+        active = []
+        for popup in list(getattr(master, "_alert_popup_windows", ())):
+            try:
+                exists = bool(popup.winfo_exists())
+            except tk.TclError:
+                exists = False
+            if exists:
+                active.append(popup)
+        setattr(master, "_alert_popup_windows", active)
+        return [
+            popup
+            for popup in active
+            if getattr(popup, "_alert_popup_monitor", None) == monitor_rect
+        ]
+
+    @staticmethod
+    def _popup_rect(popup):
+        stored = getattr(popup, "_alert_popup_rect", None)
+        if stored is not None:
+            return stored
         try:
-            self.attributes("-alpha", 0.0)
-            self._animate_alpha(0.0, 1.0, 0.16)
-        except tk.TclError:
-            pass
-        self._close_after_id = self.after(8000, self._begin_close)
+            return (
+                int(popup.winfo_x()),
+                int(popup.winfo_y()),
+                int(popup.winfo_width()),
+                int(popup.winfo_height()),
+            )
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _rectangles_overlap(first, second, gap=0):
+        ax, ay, aw, ah = first
+        bx, by, bw, bh = second
+        return not (
+            ax + aw + gap <= bx
+            or bx + bw + gap <= ax
+            or ay + ah + gap <= by
+            or by + bh + gap <= ay
+        )
+
+    @classmethod
+    def _choose_popup_position(cls, monitor_rect, popup_size, occupied):
+        """Pack a popup using actual active rectangles, regardless of their sizes."""
+        left, top, width, height = (int(value) for value in monitor_rect)
+        popup_width, popup_height = (max(1, int(value)) for value in popup_size)
+        gap = 12
+        min_x = left + 8
+        min_y = top + 8
+        max_x = left + width - popup_width - 8
+        max_y = top + height - popup_height - 8
+        if max_x < min_x or max_y < min_y:
+            return left, top
+
+        preferred_x = min(max_x, max(min_x, left + width - popup_width - 40))
+        preferred_y = min(max_y, max(min_y, top + 40))
+        x_candidates = {preferred_x}
+        y_candidates = {preferred_y}
+        for x, y, item_width, item_height in occupied:
+            x_candidates.update((x - popup_width - gap, x + item_width + gap))
+            y_candidates.update((y - popup_height - gap, y + item_height + gap))
+
+        valid_x = sorted(
+            (x for x in x_candidates if min_x <= x <= max_x),
+            reverse=True,
+        )
+        valid_y = sorted(y for y in y_candidates if min_y <= y <= max_y)
+        for x in valid_x:
+            for y in valid_y:
+                candidate = (x, y, popup_width, popup_height)
+                if not any(
+                    cls._rectangles_overlap(candidate, existing, gap=gap)
+                    for existing in occupied
+                ):
+                    return x, y
+        # If the monitor is genuinely full, keep the newest popup visible at
+        # the preferred corner rather than placing it outside the display.
+        return preferred_x, preferred_y
 
     def _animate_alpha(self, value, target, step):
         try:
@@ -284,6 +412,9 @@ class AlertPopup(tk.Toplevel):
             except tk.TclError:
                 pass
             self._close_after_id = None
+        if not self._animations_enabled:
+            self._safe_destroy()
+            return
         try:
             current_alpha = float(self.attributes("-alpha"))
         except (tk.TclError, TypeError, ValueError):
@@ -300,6 +431,12 @@ class AlertPopup(tk.Toplevel):
                 except tk.TclError:
                     pass
                 setattr(self, attr, None)
+        registry = getattr(self._popup_owner, "_alert_popup_windows", None)
+        if registry is not None:
+            try:
+                registry.remove(self)
+            except ValueError:
+                pass
         try:
             self.destroy()
         except tk.TclError:

@@ -132,7 +132,20 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(clicked, [(485, 320, "left")])
-        self.assertIsNone(engine._pending_rally_level)
+        self.assertEqual(engine._pending_rally_level, 45)
+        self.assertEqual(
+            engine._pending_rally_team_selected,
+            {"level": 45, "team": 3},
+        )
+
+        resumed = engine._run_select_rally_team_action(
+            self._action(),
+            points,
+            matches,
+        )
+
+        self.assertFalse(resumed)
+        self.assertEqual(clicked, [(485, 320, "left")])
 
     def test_supplied_two_idle_frame_selects_stetmann_for_level_45(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
@@ -175,6 +188,60 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(clicked, [(1025, 976, "left")])
         self.assertIn("Team 3=1.00", "\n".join(logs))
+
+    def test_team_selector_resizes_idle_template_on_each_anchor_axis(self):
+        rng = np.random.default_rng(79)
+        idle_template = rng.integers(0, 256, (20, 20, 3), dtype=np.uint8)
+        exact_idle = cv2.resize(
+            idle_template,
+            (30, 15),
+            interpolation=cv2.INTER_AREA,
+        )
+        action = Action(
+            type="select_rally_team",
+            on_condition_index=0,
+            team_idle_template_path="idle.png",
+            team_idle_confidence=0.99,
+            team1_idle_region=[0, 0, 40, 40],
+            team1_click_offset=[10, 20],
+            team1_max_level=5,
+            team3_idle_region=[0, 0, 40, 40],
+            team3_click_offset=[10, 20],
+            team3_max_level=45,
+        )
+        frame = np.zeros((30, 60, 3), dtype=np.uint8)
+        frame[5:20, 10:40] = exact_idle
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="anisotropic idle selector")
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_level = 30
+        engine._scaled_template_cache = {}
+        engine._retry_current_step = False
+        engine.low_variance_threshold = 1.0
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: None
+        engine._grab = lambda region: (frame.copy(), region[0], region[1])
+        engine._load_template = lambda _path: idle_template
+        engine._submit_rally_diagnostic = lambda *_args, **_kwargs: None
+        clicked = []
+        engine._click_point = lambda x, y, button: (
+            clicked.append((x, y, button)) or True
+        )
+        points = {0: (100, 100)}
+        matches = {
+            0: [
+                {
+                    "center": (100, 100),
+                    "scale_x": 1.5,
+                    "scale_y": 0.75,
+                }
+            ]
+        }
+
+        result = engine._run_select_rally_team_action(action, points, matches)
+
+        self.assertTrue(result)
+        self.assertEqual(clicked, [(115, 115, "left")])
 
     def test_low_level_falls_back_to_team1_when_team3_is_busy(self):
         engine, clicked = self._engine(30, team1_idle=True, team3_idle=False)
@@ -406,6 +473,80 @@ class RallyTeamSelectionTests(unittest.TestCase):
                 ("Back if wrong mob", "wait", 2.0),
             ],
         )
+
+    def test_transient_post_team_refresh_miss_preserves_pending_level(self):
+        attack_step = Step(
+            name="Attack Confirm",
+            actions=[
+                Action(type="select_rally_team", on_condition_index=0),
+                Action(type="wait", seconds=0.2),
+                Action(type="click", on_condition_index=0),
+            ],
+            cooldown=0.0,
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Transient refresh", steps=[attack_step])
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_level = 45
+        engine._pending_rally_team_availability = {"level_cap": 45}
+        engine._last_fired = {attack_step.name: 0.0}
+        engine._evaluate_uses_frame_cache = False
+        evaluations = []
+
+        def evaluate(_step):
+            evaluations.append(True)
+            if len(evaluations) == 1:
+                return True, {0: (100, 100)}, {0: [{"center": (100, 100)}]}
+            return False, {}, {}
+
+        engine._evaluate_step = evaluate
+        engine._refresh_step_caches = lambda: [attack_step]
+        engine._prepare_rally_team_availability_for_entry = lambda _step: True
+        engine._should_log_perf = lambda *_args, **_kwargs: False
+        engine.log = lambda _message: None
+        engine._run_action = lambda _step, action, _points, _matches: (
+            action.type in {"select_rally_team", "wait"}
+        )
+
+        self.assertTrue(engine._cycle())
+        self.assertEqual(engine._pending_rally_level, 45)
+        self.assertEqual(
+            engine._pending_rally_team_availability,
+            {"level_cap": 45},
+        )
+        self.assertEqual(engine._last_fired[attack_step.name], 0.0)
+
+    def test_completed_attack_step_releases_pending_team_context(self):
+        attack_step = Step(
+            name="Attack Confirm",
+            actions=[
+                Action(type="select_rally_team", on_condition_index=0),
+                Action(type="click", on_condition_index=0),
+            ],
+            cooldown=0.0,
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(name="Completed dispatch", steps=[attack_step])
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_level = 45
+        engine._pending_rally_team_availability = {"level_cap": 45}
+        engine._last_fired = {attack_step.name: 0.0}
+        engine._evaluate_uses_frame_cache = False
+        engine._evaluate_step = lambda _step: (
+            True,
+            {0: (100, 100)},
+            {0: [{"center": (100, 100)}]},
+        )
+        engine._refresh_step_caches = lambda: [attack_step]
+        engine._prepare_rally_team_availability_for_entry = lambda _step: True
+        engine._should_log_perf = lambda *_args, **_kwargs: False
+        engine.log = lambda _message: None
+        engine._run_action = lambda *_args, **_kwargs: True
+
+        self.assertTrue(engine._cycle())
+        self.assertIsNone(engine._pending_rally_level)
+        self.assertIsNone(engine._pending_rally_team_availability)
+        self.assertNotEqual(engine._last_fired[attack_step.name], 0.0)
 
     def test_cleanup_abort_skips_attack_and_runs_only_trailing_set_steps(self):
         joining_step = Step(name="Joining", enabled=True)
@@ -1182,6 +1323,96 @@ class RallyTeamSelectionTests(unittest.TestCase):
             max(team1_limit, team3_limit),
         )
 
+    def test_busy_hysteresis_release_stays_below_a_low_engage_threshold(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        selector_action = self._selector_action(scenario)
+        selector_action.team1_max_level = 65
+        selector_action.team3_max_level = 45
+        action.team_busy_confidence = 0.40
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 1920, 1080)
+        engine._grab = lambda region: (
+            np.zeros((region[3], region[2], 3), dtype=np.uint8),
+            region[0],
+            region[1],
+        )
+        engine._load_template = lambda path: path
+        engine._scaled_template = lambda template, _scale: template
+        current_scores = {1: 0.45, 3: 1.0}
+
+        def match(_frame, template_path):
+            team_number = 1 if template_path == action.team1_busy_template_path else 3
+            return current_scores[team_number], (0, 0)
+
+        engine._best_scaled_template_match = match
+
+        self.assertIsNone(engine._available_rally_team_level_cap(action))
+        current_scores[1] = 0.38
+        self.assertIsNone(engine._available_rally_team_level_cap(action))
+        current_scores[1] = 0.34
+        self.assertEqual(engine._available_rally_team_level_cap(action), 65)
+
+    def test_busy_prefilter_resizes_templates_on_each_axis(self):
+        scenario = load_scenario("Rally gold mob_ 2 team")
+        action = next(
+            action
+            for step in scenario.steps
+            if step.name == "Joining"
+            for action in step.actions
+            if action.type == "click_matching_row"
+        )
+        selector_action = self._selector_action(scenario)
+        selector_action.team1_max_level = 65
+        selector_action.team3_max_level = 45
+        action.team_status_reference_size = [100, 100]
+        action.team_status_region = [0, 0, 100, 100]
+        rng = np.random.default_rng(73)
+        team1_template = rng.integers(0, 256, (20, 20, 3), dtype=np.uint8)
+        team3_template = rng.integers(0, 256, (20, 20, 3), dtype=np.uint8)
+        exact_team1 = cv2.resize(
+            team1_template,
+            (30, 15),
+            interpolation=cv2.INTER_AREA,
+        )
+        frame = np.zeros((75, 150, 3), dtype=np.uint8)
+        frame[10:25, 20:50] = exact_team1
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine._stop_event = type("Stop", (), {"is_set": lambda self: False})()
+        engine._scaled_template_cache = {}
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_busy_state = None
+        engine._last_rally_team_availability = {}
+        engine.low_variance_threshold = 1.0
+        engine.log = lambda _message: None
+        engine._get_target_window_rect = lambda: (0, 0, 150, 75)
+        engine._grab = lambda region: (frame.copy(), region[0], region[1])
+        engine._load_template = lambda path: (
+            team1_template
+            if path == action.team1_busy_template_path
+            else team3_template
+        )
+
+        cap = engine._available_rally_team_level_cap(action)
+
+        self.assertTrue(engine._last_rally_team_availability["busy"][1])
+        self.assertFalse(engine._last_rally_team_availability["busy"][3])
+        self.assertEqual(cap, 45)
+
     def test_supplied_queue_frames_identify_murphy_and_stetmann_by_portrait(self):
         scenario = load_scenario("Rally gold mob_ 2 team")
         selector_action = self._selector_action(scenario)
@@ -1251,6 +1482,43 @@ class RallyTeamSelectionTests(unittest.TestCase):
             expected_cap,
         )
         self.assertEqual(len(captures), 1)
+
+    def test_pre_entry_skips_ordinary_row_action_before_smart_row_action(self):
+        ordinary_row = Action(type="click_matching_row")
+        smart_row = Action(
+            type="click_matching_row",
+            team_status_region=[0, 0, 40, 40],
+        )
+        entry_step = Step(
+            name="Entry",
+            actions=[
+                Action(type="set_step", step_name="Ordinary", set_enabled=True),
+                Action(type="set_step", step_name="Smart", set_enabled=True),
+            ],
+        )
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="Smart pre-entry lookup",
+            steps=[
+                entry_step,
+                Step(name="Ordinary", actions=[ordinary_row]),
+                Step(name="Smart", actions=[smart_row]),
+            ],
+        )
+        engine._pending_rally_team_availability = None
+        engine._last_rally_team_availability = {"level_cap": 45}
+        inspected = []
+        engine._available_rally_team_level_cap = lambda action: (
+            inspected.append(action) or 45
+        )
+        engine.log = lambda _message: None
+
+        self.assertTrue(engine._prepare_rally_team_availability_for_entry(entry_step))
+        self.assertEqual(inspected, [smart_row])
+        self.assertIs(
+            engine._pending_rally_team_availability,
+            engine._last_rally_team_availability,
+        )
 
     def test_unbounded_pre_entry_availability_is_cached_and_reused(self):
         scenario = load_scenario("Rally gold mob_ 2 team")

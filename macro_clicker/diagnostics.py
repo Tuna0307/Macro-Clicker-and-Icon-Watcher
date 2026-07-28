@@ -22,6 +22,7 @@ DEFAULT_MAX_SAMPLE_EVENTS = 25
 DEFAULT_MAX_AGE_DAYS = 7
 DEFAULT_MAX_BYTES = 500 * 1024 * 1024
 DEFAULT_QUEUE_SIZE = 16
+DEFAULT_QUEUE_MAX_BYTES = 96 * 1024 * 1024
 DEFAULT_DECISION_QUEUE_SIZE = 1024
 DEFAULT_DECISION_LOG_BYTES = 5 * 1024 * 1024
 DEFAULT_DECISION_LOG_BACKUPS = 3
@@ -59,6 +60,7 @@ class DiagnosticCollector:
         max_age_days=DEFAULT_MAX_AGE_DAYS,
         max_bytes=DEFAULT_MAX_BYTES,
         queue_size=DEFAULT_QUEUE_SIZE,
+        queue_max_bytes=DEFAULT_QUEUE_MAX_BYTES,
         decision_queue_size=DEFAULT_DECISION_QUEUE_SIZE,
         decision_log_bytes=DEFAULT_DECISION_LOG_BYTES,
         decision_log_backups=DEFAULT_DECISION_LOG_BACKUPS,
@@ -71,6 +73,9 @@ class DiagnosticCollector:
         self.max_sample_events = max_sample_events
         self.max_age_days = max_age_days
         self.max_bytes = max_bytes
+        self.queue_max_bytes = (
+            None if queue_max_bytes is None else max(0, int(queue_max_bytes))
+        )
         self.decision_log_bytes = decision_log_bytes
         self.decision_log_backups = max(0, int(decision_log_backups))
         self.log = log or (lambda _message: None)
@@ -84,9 +89,11 @@ class DiagnosticCollector:
         self._last_image_hash = {}
         self._drop_log_at = 0.0
         self._decision_drop_log_at = 0.0
+        self._queued_image_bytes = 0
         self._worker = None
         self._decision_worker = None
         self._closed = False
+        self._stop_event = threading.Event()
         self.cleanup()
         if not synchronous:
             self._worker = threading.Thread(
@@ -260,17 +267,54 @@ class DiagnosticCollector:
             max_distance=dedupe_distance,
         ):
             return None
+        source_images = {}
+        for name, image in (images or {}).items():
+            if isinstance(image, np.ndarray) and image.size:
+                safe_name = _safe_name(name, "image")
+                extension = ".jpg" if safe_name.startswith("context") else ".png"
+                source_images[safe_name + extension] = image
+        image_bytes = sum(int(image.nbytes) for image in source_images.values())
+        bytes_reserved = False
+        drop_reason = None
+        if not self.synchronous:
+            with self._state_lock:
+                byte_limit_reached = (
+                    self.queue_max_bytes is not None
+                    and self._queued_image_bytes + image_bytes > self.queue_max_bytes
+                )
+                if self._closed:
+                    drop_reason = "writer closed"
+                elif self._queue.full():
+                    drop_reason = "writer queue full"
+                elif byte_limit_reached:
+                    drop_reason = "writer byte limit reached"
+                else:
+                    self._queued_image_bytes += image_bytes
+                    bytes_reserved = True
+            if not bytes_reserved:
+                self.rollback_capture(reservation)
+                if not self._closed:
+                    now = time.monotonic()
+                    if now - self._drop_log_at >= 10.0:
+                        self.log(
+                            f"[diagnostic] {drop_reason}; dropping screenshot event"
+                        )
+                        self._drop_log_at = now
+                return None
+        try:
+            payload_images = {
+                filename: image.copy() for filename, image in source_images.items()
+            }
+        except Exception:
+            if bytes_reserved:
+                self._release_image_bytes(image_bytes)
+            self.rollback_capture(reservation)
+            raise
         timestamp_ns = time.time_ns()
         event_id = (
             f"{time.strftime('%Y%m%d-%H%M%S')}-"
             f"{timestamp_ns % 1_000_000_000:09d}_{_safe_name(event_type)}"
         )
-        payload_images = {}
-        for name, image in (images or {}).items():
-            if isinstance(image, np.ndarray) and image.size:
-                safe_name = _safe_name(name, "image")
-                extension = ".jpg" if safe_name.startswith("context") else ".png"
-                payload_images[safe_name + extension] = image.copy()
         payload = {
             "event_id": event_id,
             "event_type": str(event_type),
@@ -278,6 +322,7 @@ class DiagnosticCollector:
             "category": category,
             "metadata": _json_safe(metadata or {}),
             "images": payload_images,
+            "_image_bytes": image_bytes,
         }
         if self.synchronous:
             if self._closed:
@@ -288,14 +333,19 @@ class DiagnosticCollector:
             except Exception:
                 self.rollback_capture(reservation)
                 raise
+        queued = False
         try:
             with self._state_lock:
-                if self._closed:
-                    self.rollback_capture(reservation)
-                    return None
-                self._queue.put_nowait(payload)
+                if not self._closed:
+                    self._queue.put_nowait(payload)
+                    queued = True
+            if not queued:
+                self._release_image_bytes(image_bytes)
+                self.rollback_capture(reservation)
+                return None
             return str(self.root / category / event_id)
         except queue.Full:
+            self._release_image_bytes(image_bytes)
             self.rollback_capture(reservation)
             now = time.monotonic()
             if now - self._drop_log_at >= 10.0:
@@ -321,51 +371,57 @@ class DiagnosticCollector:
             if self._closed:
                 return
             self._closed = True
+            self._stop_event.set()
         if self.synchronous or self._worker is None:
             return
         deadline = time.monotonic() + max(0.0, float(timeout))
-
-        def enqueue_stop(target_queue):
-            remaining = max(0.0, deadline - time.monotonic())
-            try:
-                target_queue.put(None, timeout=remaining)
-                return True
-            except queue.Full:
-                return False
-
-        image_stop_queued = enqueue_stop(self._queue)
-        decision_stop_queued = enqueue_stop(self._decision_queue)
-        if not image_stop_queued or not decision_stop_queued:
-            self.log("[diagnostic] timed out while closing writer queues")
         remaining = max(0.0, deadline - time.monotonic())
         self._worker.join(timeout=remaining)
         if self._decision_worker is not None:
             remaining = max(0.0, deadline - time.monotonic())
             self._decision_worker.join(timeout=remaining)
+        if self._worker.is_alive() or (
+            self._decision_worker is not None and self._decision_worker.is_alive()
+        ):
+            self.log("[diagnostic] timed out while closing writer queues")
 
     def _run(self):
         while True:
-            payload = self._queue.get()
             try:
-                if payload is None:
+                payload = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                if self._stop_event.is_set():
                     return
+                continue
+            try:
                 self._write(payload)
             except Exception as exc:
                 self.log(f"[diagnostic] could not save event: {exc}")
             finally:
+                self._release_image_bytes(payload.get("_image_bytes", 0))
                 self._queue.task_done()
 
     def _run_decisions(self):
         while True:
-            payload = self._decision_queue.get()
             try:
-                if payload is None:
+                payload = self._decision_queue.get(timeout=0.1)
+            except queue.Empty:
+                if self._stop_event.is_set():
                     return
+                continue
+            try:
                 self._write_decision(payload)
             except Exception as exc:
                 self.log(f"[diagnostic] could not save decision metadata: {exc}")
             finally:
                 self._decision_queue.task_done()
+
+    def _release_image_bytes(self, size):
+        with self._state_lock:
+            self._queued_image_bytes = max(
+                0,
+                self._queued_image_bytes - max(0, int(size)),
+            )
 
     def _write_decision(self, payload):
         encoded = (
@@ -453,10 +509,19 @@ class DiagnosticCollector:
         for category in ("critical", "samples"):
             category_dir = self.root / category
             if category_dir.is_dir():
-                candidates.extend((path, category) for path in category_dir.iterdir())
+                try:
+                    candidates.extend(
+                        (path, category) for path in category_dir.iterdir()
+                    )
+                except OSError:
+                    continue
+        try:
+            root_entries = list(self.root.iterdir())
+        except OSError:
+            root_entries = []
         candidates.extend(
             (path, "critical")
-            for path in self.root.iterdir()
+            for path in root_entries
             if path.is_dir() and path.name not in {"critical", "samples"}
         )
         for path, category in candidates:

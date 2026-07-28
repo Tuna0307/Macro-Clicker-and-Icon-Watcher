@@ -74,12 +74,20 @@ def _monitor_box(monitor_index=1):
 
 def _cleanup_captured_templates(captured_paths, keep_template_path=None):
     """Remove captures created by a dialog unless the saved condition uses one."""
-    keep_path = None
-    if keep_template_path:
-        keep_path = os.path.normcase(os.path.abspath(project_path(keep_template_path)))
-    for captured_path in captured_paths:
+    keep_paths = (keep_template_path,) if keep_template_path else ()
+    _cleanup_created_templates(captured_paths, keep_paths)
+
+
+def _cleanup_created_templates(created_paths, keep_template_paths=()):
+    """Remove only files this editor created and no saved condition still uses."""
+    keep_paths = {
+        os.path.normcase(os.path.abspath(project_path(path)))
+        for path in keep_template_paths
+        if path
+    }
+    for captured_path in created_paths:
         absolute_path = os.path.normcase(os.path.abspath(captured_path))
-        if keep_path is not None and absolute_path == keep_path:
+        if absolute_path in keep_paths:
             continue
         try:
             os.remove(captured_path)
@@ -102,6 +110,22 @@ def _parse_required_int(value, field_name):
     if parsed is None:
         raise ValueError(f"{field_name} is required.")
     return parsed
+
+
+def _schedule_dialog_fit(window, parent):
+    """Resize a dynamic dialog after Tk applies visibility changes."""
+
+    def fit():
+        try:
+            if window.winfo_exists():
+                center_window(window, parent)
+        except tk.TclError:
+            pass
+
+    try:
+        window.after_idle(fit)
+    except tk.TclError:
+        pass
 
 
 def schedule_mouse_position_fill(win, x_var, y_var, delay_ms=2000):
@@ -228,6 +252,7 @@ def condition_dialog(
     cond: Optional[ImageCondition] = None,
     monitor_index=1,
     target_window_title="",
+    created_template_paths=None,
 ):
     win = tk.Toplevel(parent)
     win.title("Edit Condition" if cond else "Add Condition")
@@ -374,6 +399,7 @@ def condition_dialog(
             or match_mode != LEGACY_MACRO_MATCH_MODE
             or grayscale_var.get()
         ),
+        on_toggle=lambda: _schedule_dialog_fit(win, parent),
     )
     advanced_matching.grid(
         row=3, column=0, columnspan=3, sticky="ew", padx=6, pady=(4, 2)
@@ -621,7 +647,7 @@ def condition_dialog(
         side="left", padx=4
     )
     win.bind("<Escape>", lambda _event: win.destroy())
-    win.after_idle(lambda: center_window(win, parent))
+    _schedule_dialog_fit(win, parent)
 
     win.wait_window()
     saved_condition = result["value"]
@@ -629,6 +655,15 @@ def condition_dialog(
         captured_template_paths,
         None if saved_condition is None else saved_condition.template_path,
     )
+    if saved_condition is not None and created_template_paths is not None:
+        saved_path = os.path.normcase(
+            os.path.abspath(project_path(saved_condition.template_path))
+        )
+        created_template_paths.extend(
+            path
+            for path in captured_template_paths
+            if os.path.normcase(os.path.abspath(path)) == saved_path
+        )
     return result["value"]
 
 
@@ -956,6 +991,7 @@ def action_dialog(
         if row_advanced_state["expanded"]:
             row_advanced_state["opened"] = True
         render_row_advanced()
+        _schedule_dialog_fit(win, parent)
 
     row_advanced_btn = ttk.Button(
         row_click_frame,
@@ -1168,6 +1204,7 @@ def action_dialog(
             f.grid_forget()
         action_type = action_type_values.get(type_var.get(), "click")
         frames[action_type].grid(row=0, column=0, sticky="we")
+        _schedule_dialog_fit(win, parent)
 
     type_combo.bind("<<ComboboxSelected>>", show_frame)
     show_frame()
@@ -1336,7 +1373,7 @@ def action_dialog(
         side="left", padx=4
     )
     win.bind("<Escape>", lambda _event: win.destroy())
-    win.after_idle(lambda: center_window(win, parent))
+    _schedule_dialog_fit(win, parent)
 
     win.wait_window()
     return result["value"]
@@ -1367,6 +1404,7 @@ def step_dialog(
     # Work on independent copies so Cancel never leaks edits into the scenario.
     conditions = copy.deepcopy(s.conditions)
     actions = copy.deepcopy(s.actions)
+    created_template_paths = []
     existing_names = existing_names or set()
     all_step_names = all_step_names or []
 
@@ -1454,6 +1492,7 @@ def step_dialog(
             win,
             monitor_index=monitor_index,
             target_window_title=target_window_title,
+            created_template_paths=created_template_paths,
         )
         if c:
             conditions.append(c)
@@ -1468,6 +1507,7 @@ def step_dialog(
             cond=conditions[sel[0]],
             monitor_index=monitor_index,
             target_window_title=target_window_title,
+            created_template_paths=created_template_paths,
         )
         if c:
             conditions[sel[0]] = c
@@ -1539,6 +1579,7 @@ def step_dialog(
             return
         copied = ImageCondition.from_dict(original.to_dict())
         copied.template_path = portable_project_path(new_path)
+        created_template_paths.append(new_path)
         conditions.append(copied)
         refresh_conditions()
 
@@ -1678,7 +1719,18 @@ def step_dialog(
         side="left", padx=4
     )
     win.bind("<Escape>", lambda _event: win.destroy())
-    win.after_idle(lambda: center_window(win, parent))
+    _schedule_dialog_fit(win, parent)
 
     win.wait_window()
+    saved_step = result["value"]
+    _cleanup_created_templates(
+        created_template_paths,
+        (
+            condition.template_path
+            for condition in saved_step.conditions
+            if condition.template_path
+        )
+        if saved_step is not None
+        else (),
+    )
     return result["value"]

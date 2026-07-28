@@ -90,6 +90,24 @@ class ReviewFixTests(unittest.TestCase):
             self.assertTrue(os.path.exists(kept))
             self.assertFalse(os.path.exists(discarded))
 
+    def test_outer_editor_cleanup_removes_only_new_unreferenced_templates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kept = os.path.join(tmp, "kept.png")
+            discarded = os.path.join(tmp, "discarded.png")
+            unrelated = os.path.join(tmp, "unrelated.png")
+            for path in (kept, discarded, unrelated):
+                with open(path, "wb") as handle:
+                    handle.write(b"template")
+
+            editors._cleanup_created_templates(
+                [kept, discarded],
+                [kept],
+            )
+
+            self.assertTrue(os.path.exists(kept))
+            self.assertFalse(os.path.exists(discarded))
+            self.assertTrue(os.path.exists(unrelated))
+
     def test_capture_overlay_geometry_preserves_negative_monitor_coordinates(self):
         self.assertEqual(
             capture_tool._absolute_overlay_geometry(1920, 1080, -1920, -200),
@@ -339,7 +357,9 @@ class ReviewFixTests(unittest.TestCase):
 
         self.assertEqual(add_hotkey.call_args.args[0], "f8")
         self.assertEqual(ui._start_hotkey_handle, "f8-handle")
-        self.assertEqual(ui.control_queue.get_nowait(), "start")
+        command = ui.control_queue.get_nowait()
+        self.assertEqual(command[0], "start")
+        self.assertIs(command[1], ui._start_hotkey_registration_token)
 
     def test_scenario_start_hotkey_replaces_the_previous_registration(self):
         ui = object.__new__(app.App)

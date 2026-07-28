@@ -7,6 +7,7 @@ from macro_clicker.window_locator import (
     absolute_region_from_window,
     absolute_region_from_window_ratio,
     find_window_rect,
+    is_window_foreground,
     proportional_region_from_window,
     resolve_window_region,
     visible_window_titles,
@@ -14,6 +15,110 @@ from macro_clicker.window_locator import (
 
 
 class WindowRegionTests(unittest.TestCase):
+    def test_foreground_window_uses_the_same_case_insensitive_title_rule(self):
+        active = type(
+            "Window",
+            (),
+            {
+                "title": "Last War-Survival Game",
+                "left": 10,
+                "top": 20,
+                "width": 800,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+            },
+        )()
+
+        self.assertTrue(
+            is_window_foreground(
+                "last war",
+                active_window_provider=lambda: active,
+                window_provider=lambda: [active],
+            )
+        )
+        self.assertFalse(
+            is_window_foreground(
+                "other game",
+                active_window_provider=lambda: active,
+                window_provider=lambda: [active],
+            )
+        )
+
+    def test_foreground_window_must_be_the_exact_selected_window(self):
+        target = type(
+            "Window",
+            (),
+            {
+                "_hWnd": 101,
+                "title": "Last War-Survival Game",
+                "left": 10,
+                "top": 20,
+                "width": 800,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+            },
+        )()
+        unrelated_active = type(
+            "Window",
+            (),
+            {
+                "_hWnd": 202,
+                "title": "Guide — Last War-Survival Game",
+                "left": 900,
+                "top": 20,
+                "width": 600,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+            },
+        )()
+
+        self.assertFalse(
+            is_window_foreground(
+                "Last War-Survival Game",
+                active_window_provider=lambda: unrelated_active,
+                window_provider=lambda: [unrelated_active, target],
+            )
+        )
+
+    def test_foreground_window_uses_title_and_rect_when_handles_are_unavailable(self):
+        selected = type(
+            "Window",
+            (),
+            {
+                "title": "Last War-Survival Game",
+                "left": 10,
+                "top": 20,
+                "width": 800,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+            },
+        )()
+        active_copy = type(
+            "Window",
+            (),
+            {
+                "title": "last war-survival game",
+                "left": 10,
+                "top": 20,
+                "width": 800,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+            },
+        )()
+
+        self.assertTrue(
+            is_window_foreground(
+                "Last War",
+                active_window_provider=lambda: active_copy,
+                window_provider=lambda: [selected],
+            )
+        )
+
     def test_converts_window_relative_region_to_screen_coordinates(self):
         window_rect = (100, 200, 800, 600)
         relative_region = [10, 20, 300, 50]

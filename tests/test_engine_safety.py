@@ -1,6 +1,6 @@
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -90,6 +90,207 @@ class EngineSafetyTests(unittest.TestCase):
 
         self.assertFalse(result)
         click.assert_not_called()
+
+    def test_click_point_outside_target_window_is_skipped(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._window_rect_lookup_cache = None
+        engine._target_window_missing_logged = False
+        engine._window_rect_provider = lambda _title: (500, 400, 800, 600)
+        engine.click_move_duration = 0.0
+        engine.sct = type(
+            "Capture",
+            (),
+            {
+                "monitors": [
+                    {"left": 0, "top": 0, "width": 1920, "height": 1080},
+                    {"left": 0, "top": 0, "width": 1920, "height": 1080},
+                ]
+            },
+        )()
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(50, 60, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+
+    def test_click_point_is_skipped_when_target_window_is_not_foreground(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = lambda _title: False
+        engine.click_move_duration = 0.0
+        logs = []
+        engine.log = logs.append
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+        self.assertTrue(any("not in the foreground" in message for message in logs))
+
+    def test_foreground_blocked_click_uses_normal_poll_then_fast_poll_on_success(self):
+        engine = self._bare_engine()
+        step = Step(
+            name="foreground retry",
+            actions=[Action(type="click", x=600, y=500)],
+            cooldown=0.0,
+        )
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+            poll_interval=0.25,
+            steps=[step],
+        )
+        engine.fast_poll_after_fire = 0.03
+        engine._last_fired = {step.name: 0.0}
+        engine._refresh_step_caches = lambda: [step]
+        engine._evaluate_uses_frame_cache = False
+        engine._evaluate_step = lambda _step: (True, {}, {})
+        engine._prepare_rally_team_availability_for_entry = lambda _step: True
+        engine._should_log_perf = lambda *_args, **_kwargs: False
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(side_effect=[False, True])
+        engine.click_move_duration = 0.0
+        engine._cleanup_runtime = Mock()
+        delays = []
+
+        def record_delay(seconds):
+            delays.append(seconds)
+            if len(delays) == 2:
+                engine._stop_event.set()
+            return False
+
+        engine._sleep_until_stop = record_delay
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            engine._run_loop()
+
+        self.assertEqual(delays, [0.25, 0.03])
+        click.assert_called_once_with(x=600, y=500, button="left")
+        self.assertNotEqual(engine._last_fired[step.name], 0.0)
+        engine._cleanup_runtime.assert_called_once_with()
+
+    def test_repeated_foreground_click_warning_is_rate_limited(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = lambda _title: False
+        engine.foreground_warning_interval = 5.0
+        engine.click_move_duration = 0.0
+        logs = []
+        engine.log = logs.append
+
+        with (
+            patch.object(
+                engine_module.time, "monotonic", side_effect=[100.0, 101.0, 106.0]
+            ),
+            patch.object(engine_module.pyautogui, "click") as click,
+        ):
+            results = [
+                engine._click_point(600, 500, "left"),
+                engine._click_point(600, 500, "left"),
+                engine._click_point(600, 500, "left"),
+            ]
+
+        self.assertEqual(results, [False, False, False])
+        click.assert_not_called()
+        foreground_logs = [
+            message for message in logs if "not in the foreground" in message
+        ]
+        self.assertEqual(len(foreground_logs), 2)
+
+    def test_click_point_fails_closed_when_foreground_validation_raises(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(
+            side_effect=OSError("foreground unavailable")
+        )
+        engine.click_move_duration = 0.0
+        logs = []
+        engine.log = logs.append
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+        self.assertTrue(any("validation failed" in message for message in logs))
+
+    def test_click_point_rechecks_foreground_after_mouse_move(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(side_effect=[True, False])
+        engine.click_move_duration = 0.2
+
+        with (
+            patch.object(engine_module.pyautogui, "moveTo") as move,
+            patch.object(engine_module.pyautogui, "click") as click,
+        ):
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        move.assert_called_once_with(600, 500, duration=0.2)
+        click.assert_not_called()
+        self.assertEqual(engine._foreground_window_provider.call_count, 2)
+
+    def test_targetless_click_preserves_monitor_only_behavior(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(name="monitor safety")
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(
+            side_effect=AssertionError("targetless click checked foreground")
+        )
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertTrue(result)
+        click.assert_called_once_with(x=600, y=500, button="left")
+        engine._foreground_window_provider.assert_not_called()
+
+    def test_key_action_is_skipped_when_target_window_is_not_foreground(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._foreground_window_provider = lambda _title: False
+        engine._retry_current_step = False
+        step = Step(name="Key", actions=[Action(type="key", key="escape")])
+
+        with patch.object(engine_module.keyboard, "send") as send:
+            result = engine._run_action(step, step.actions[0], {}, {})
+
+        self.assertFalse(result)
+        self.assertTrue(engine._retry_current_step)
+        send.assert_not_called()
 
     def test_click_point_fails_closed_when_monitor_bounds_are_unavailable(self):
         engine = self._bare_engine()
@@ -183,6 +384,67 @@ class EngineSafetyTests(unittest.TestCase):
 
         self.assertEqual(clicks, [])
         self.assertEqual(engine._last_fired[step.name], 0.0)
+
+    def test_conditionless_fixed_click_fails_closed_when_target_window_is_missing(self):
+        engine = self._bare_engine()
+        clicks = []
+        logs = []
+        step = Step(
+            name="conditionless",
+            actions=[Action(type="click", x=50, y=60)],
+            cooldown=0.0,
+        )
+        engine.scenario = Scenario(
+            name="targeted",
+            steps=[step],
+            target_window_title="Missing Game",
+        )
+        engine._last_fired = {step.name: 0.0}
+        engine._target_window_missing_logged = False
+        engine._window_rect_provider = lambda _title: None
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button))
+        engine.log = logs.append
+
+        engine._cycle()
+
+        self.assertEqual(clicks, [])
+        self.assertEqual(engine._last_fired[step.name], 0.0)
+        self.assertTrue(any("[safety]" in message for message in logs))
+
+    def test_detection_point_is_refreshed_after_wait_before_click(self):
+        engine = self._bare_engine()
+        clicks = []
+        evaluations = []
+        step = Step(
+            name="fresh-point",
+            actions=[
+                Action(type="wait", seconds=0.1),
+                Action(type="click", on_condition_index=0),
+            ],
+            cooldown=0.0,
+        )
+        engine.scenario = Scenario(name="safety", steps=[step])
+        engine._last_fired = {step.name: 0.0}
+        engine._sleep_until_stop = lambda _seconds: False
+        engine._click_point = lambda x, y, button: clicks.append((x, y, button)) or True
+
+        def evaluate(_step, frame_cache=None):
+            evaluations.append(frame_cache)
+            point = (100, 100) if len(evaluations) == 1 else (300, 300)
+            match = {
+                "center": point,
+                "box": (point[0] - 5, point[1] - 5, point[0] + 5, point[1] + 5),
+                "score": 1.0,
+                "scale": 1.0,
+            }
+            return True, {0: point}, {0: [match]}
+
+        engine._evaluate_step = evaluate
+
+        engine._cycle()
+
+        self.assertEqual(len(evaluations), 2)
+        self.assertEqual(clicks, [(300, 300, "left")])
 
     def test_side_effect_clears_frame_cache_before_later_step(self):
         engine = self._bare_engine()

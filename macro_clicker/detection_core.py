@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import ctypes
 import math
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence
 
@@ -54,6 +56,8 @@ DEFAULT_SCALES = ALERT_DEFAULT_SCALES
 DEFAULT_ROTATIONS = (0, -5, 5, -8, 8)
 DEFAULT_LOW_VARIANCE_THRESHOLD = 1.0
 DEFAULT_MAX_VARIANT_PIXELS = 24_000_000
+FULL_SCORE_TIE_EPSILON = 2e-6
+MAX_PARALLEL_VARIANT_WORKERS = 6
 MATCH_MODE_TEXT = "colored_text"
 MATCH_MODE_STATIC = "static_picture"
 MATCH_MODE_ANIMATED = "animated_picture"
@@ -125,7 +129,7 @@ class TemplateMatch:
 
 
 def normalize_match_mode(value, default=LEGACY_ALERT_MATCH_MODE):
-    return value if value in MATCH_MODE_VALUES else default
+    return value if isinstance(value, str) and value in MATCH_MODE_VALUES else default
 
 
 def capture_bgr(capture, target):
@@ -339,19 +343,35 @@ def preferred_resolution_scale(reference_size=None, current_size=None):
     return math.sqrt((current[0] / reference[0]) * (current[1] / reference[1]))
 
 
-def resize_template(template, scale, cache=None, interpolation=None):
-    if abs(float(scale) - 1.0) < 0.000001:
+def resize_template_xy(
+    template,
+    scale_x,
+    scale_y,
+    cache=None,
+    interpolation=None,
+):
+    """Resize a template independently on each axis with optional identity caching."""
+    scale_x = float(scale_x)
+    scale_y = float(scale_y)
+    if abs(scale_x - 1.0) < 0.000001 and abs(scale_y - 1.0) < 0.000001:
         return template
-    key = (id(template), round(float(scale), 6), interpolation)
+    key = (
+        id(template),
+        round(scale_x, 6),
+        round(scale_y, 6),
+        interpolation,
+    )
     if cache is not None:
         cached = cache.get(key)
         if cached is not None and cached[0] is template:
             return cached[1]
     height, width = template.shape[:2]
-    resized_width = max(1, round(width * float(scale)))
-    resized_height = max(1, round(height * float(scale)))
+    resized_width = max(1, round(width * scale_x))
+    resized_height = max(1, round(height * scale_y))
     if interpolation is None:
-        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        interpolation = (
+            cv2.INTER_AREA if scale_x < 1.0 or scale_y < 1.0 else cv2.INTER_LINEAR
+        )
     resized = cv2.resize(
         template,
         (resized_width, resized_height),
@@ -360,6 +380,17 @@ def resize_template(template, scale, cache=None, interpolation=None):
     if cache is not None:
         cache[key] = (template, resized)
     return resized
+
+
+def resize_template(template, scale, cache=None, interpolation=None):
+    """Compatibility wrapper for uniform template resizing."""
+    return resize_template_xy(
+        template,
+        scale,
+        scale,
+        cache=cache,
+        interpolation=interpolation,
+    )
 
 
 def box_iou(a, b):
@@ -569,8 +600,27 @@ def _score_map(screen, template, low_variance):
     return np.nan_to_num(raw, nan=-1.0, posinf=1.0, neginf=-1.0)
 
 
-def _best_variant_match(screen, template, low_variance, text_shape=False):
+def _pixel_mean_squared_error(screen, template, location):
+    x, y = location
+    height, width = template.shape[:2]
+    candidate = screen[y : y + height, x : x + width]
+    if candidate.shape != template.shape:
+        return math.inf
+    difference = candidate.astype(np.float64) - template.astype(np.float64)
+    return float(np.mean(difference * difference))
+
+
+def _best_variant_match(
+    screen,
+    template,
+    low_variance,
+    text_shape=False,
+    *,
+    return_pixel_error=False,
+):
     if template.shape[0] > screen.shape[0] or template.shape[1] > screen.shape[1]:
+        if return_pixel_error:
+            return -1.0, None, math.inf
         return -1.0, None
     scores = _score_map(screen, template, low_variance)
     _, max_score, _, max_location = cv2.minMaxLoc(scores)
@@ -581,22 +631,73 @@ def _best_variant_match(screen, template, low_variance, text_shape=False):
         best_score = -1.0
         best_location = max_location
         best_correlation = -1.0
+        best_pixel_error = math.inf
         for index in indices:
             y, x = np.unravel_index(int(index), scores.shape)
             location = (int(x), int(y))
             shape_score = _text_shape_score(screen, template, location)
             correlation = float(scores[y, x])
-            if shape_score > best_score or (
-                abs(shape_score - best_score) <= 1e-9 and correlation > best_correlation
+            pixel_error = _pixel_mean_squared_error(screen, template, location)
+            if pixel_error == 0.0:
+                shape_score = 1.0
+                correlation = 1.0
+            if (
+                shape_score > best_score + FULL_SCORE_TIE_EPSILON
+                or (
+                    abs(shape_score - best_score) <= FULL_SCORE_TIE_EPSILON
+                    and pixel_error < best_pixel_error
+                )
+                or (
+                    abs(shape_score - best_score) <= FULL_SCORE_TIE_EPSILON
+                    and abs(pixel_error - best_pixel_error) <= 1e-12
+                    and correlation > best_correlation
+                )
             ):
                 best_score = shape_score
                 best_location = location
                 best_correlation = correlation
+                best_pixel_error = pixel_error
+        if return_pixel_error:
+            return best_score, best_location, best_pixel_error
         return best_score, best_location
     if low_variance and scores.size > 1:
         if float(max_score) - float(scores.min()) <= 1e-6:
+            if return_pixel_error:
+                return -1.0, None, math.inf
             return -1.0, None
-    return float(max_score), max_location
+
+    best_score = float(max_score)
+    best_location = max_location
+    best_pixel_error = _pixel_mean_squared_error(screen, template, max_location)
+    if best_pixel_error == 0.0:
+        best_score = 1.0
+    elif best_score >= 1.0 - FULL_SCORE_TIE_EPSILON:
+        # TM_CCOEFF_NORMED uses float32 score maps. A one-value mutation can
+        # round to 1.0 while an exact patch rounds just below it. Inspect every
+        # numerically tied peak using the original integer pixels so the exact
+        # patch wins deterministically.
+        tied_indices = np.flatnonzero(
+            scores.reshape(-1) >= best_score - FULL_SCORE_TIE_EPSILON
+        )
+        result_width = scores.shape[1]
+        flat_scores = scores.reshape(-1)
+        for index in tied_indices:
+            location = (
+                int(index) % result_width,
+                int(index) // result_width,
+            )
+            pixel_error = _pixel_mean_squared_error(screen, template, location)
+            if pixel_error < best_pixel_error:
+                best_pixel_error = pixel_error
+                best_location = location
+                best_score = float(flat_scores[index])
+                if pixel_error == 0.0:
+                    best_score = 1.0
+                    break
+
+    if return_pixel_error:
+        return best_score, best_location, best_pixel_error
+    return best_score, best_location
 
 
 def _rotate_image(image, angle):
@@ -713,113 +814,127 @@ def _cancelled(cancel_event=None, stop_check: Optional[Callable] = None):
     return cancel_event is not None and cancel_event.is_set()
 
 
-def _coarse_multiscale_match(
+def _ordered_variant_items(variants, preferred_scale):
+    """Order variants by the documented exact-match preference."""
+    return sorted(
+        enumerate(variants),
+        key=lambda item: (
+            abs(float(item[1].get("scale", 1.0)) - preferred_scale),
+            abs(float(item[1].get("angle", 0.0))),
+            item[0],
+        ),
+    )
+
+
+def _variant_preference(order, variant, preferred_scale):
+    return (
+        abs(float(variant.get("scale", 1.0)) - preferred_scale),
+        abs(float(variant.get("angle", 0.0))),
+        order,
+    )
+
+
+def _parallel_full_resolution_multiscale_match(
     screen,
     variants,
-    early_exit_score=None,
     cancel_event=None,
     stop_check=None,
-    factor=0.5,
     preferred_scale=1.0,
-    low_variance_threshold=DEFAULT_LOW_VARIANCE_THRESHOLD,
+    early_exit_score=None,
 ):
-    small_screen = cv2.resize(
-        screen, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA
+    """Evaluate every large-screen variant without coarse proposal omissions.
+
+    OpenCV releases the GIL while matching. Small bounded batches therefore keep
+    full-screen searches near the old coarse-search latency without
+    allowing a fixed proposal budget to hide the correct location.
+    """
+
+    ordered_variants = _ordered_variant_items(variants, preferred_scale)
+    worker_count = min(
+        MAX_PARALLEL_VARIANT_WORKERS,
+        max(1, os.cpu_count() or 1),
+        max(1, len(ordered_variants)),
     )
-    zero_angle = [
-        variant for variant in variants if abs(float(variant.get("angle", 0))) < 1e-9
-    ]
-    initial = zero_angle or list(variants)
-    records = []
-
-    def evaluate(variant):
-        if _cancelled(cancel_event, stop_check):
-            return
-        template = variant["image"]
-        height, width = template.shape[:2]
-        small_width = max(1, round(width * factor))
-        small_height = max(1, round(height * factor))
-        if small_width > small_screen.shape[1] or small_height > small_screen.shape[0]:
-            return
-        small_template = cv2.resize(
-            template, (small_width, small_height), interpolation=cv2.INTER_AREA
-        )
-        score, location = _best_variant_match(
-            small_screen,
-            small_template,
-            _spatial_deviation(small_template) < low_variance_threshold,
-            text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
-        )
-        if location is not None:
-            records.append((score, location, variant))
-
-    for variant in initial:
-        evaluate(variant)
-    if not records or _cancelled(cancel_event, stop_check):
-        return -1.0, None, 1.0, None
-
-    best_base_scale = float(max(records, key=lambda record: record[0])[2]["scale"])
-    by_angle = {}
-    for variant in variants:
-        angle = float(variant.get("angle", 0))
-        if abs(angle) < 1e-9:
-            continue
-        by_angle.setdefault(angle, []).append(variant)
-    for angle_variants in by_angle.values():
-        for variant in sorted(
-            angle_variants,
-            key=lambda item: abs(float(item["scale"]) - best_base_scale),
-        )[:4]:
-            evaluate(variant)
-
     best_score, best_location, best_scale = -1.0, None, 1.0
-    best_angle = 0.0
+    best_pixel_error = math.inf
     best_variant = None
-    for _coarse_score, coarse_location, variant in sorted(
-        records, key=lambda item: item[0], reverse=True
-    ):
-        if _cancelled(cancel_event, stop_check):
-            break
-        template = variant["image"]
-        height, width = template.shape[:2]
-        expected_x = round(coarse_location[0] / factor)
-        expected_y = round(coarse_location[1] / factor)
-        margin = max(8, round(max(width, height) * 0.35))
-        left = max(0, expected_x - margin)
-        top = max(0, expected_y - margin)
-        right = min(screen.shape[1], expected_x + width + margin)
-        bottom = min(screen.shape[0], expected_y + height + margin)
-        local = screen[top:bottom, left:right]
-        score, local_location = _best_variant_match(
-            local,
-            template,
+    best_order = math.inf
+
+    def evaluate(item):
+        order, variant = item
+        if cancel_event is not None and cancel_event.is_set():
+            return order, variant, -1.0, None, math.inf
+        score, location, pixel_error = _best_variant_match(
+            screen,
+            variant["image"],
             bool(variant["low_variance"]),
             text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
+            return_pixel_error=True,
         )
-        if local_location is None:
-            continue
-        scale = float(variant["scale"])
-        angle = float(variant["angle"])
-        tied = abs(score - best_score) <= 1e-9
-        if (
-            score > best_score + 1e-9
-            or (
-                tied
-                and abs(scale - preferred_scale) < abs(best_scale - preferred_scale)
-            )
-            or (
-                tied
-                and abs(scale - best_scale) <= 1e-9
-                and abs(angle) < abs(best_angle)
-            )
-        ):
-            best_score = score
-            best_location = (left + local_location[0], top + local_location[1])
-            best_scale = scale
-            best_angle = angle
-            best_variant = variant
-            if early_exit_score is not None and best_score >= early_exit_score:
+        if cancel_event is not None and cancel_event.is_set():
+            return order, variant, -1.0, None, math.inf
+        return order, variant, score, location, pixel_error
+
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="template-match",
+    ) as executor:
+        for start in range(0, len(ordered_variants), worker_count):
+            if _cancelled(cancel_event, stop_check):
                 break
+            batch = ordered_variants[start : start + worker_count]
+            results = list(executor.map(evaluate, batch))
+            if _cancelled(cancel_event, stop_check):
+                break
+            batch_has_exact = False
+            for order, variant, score, location, pixel_error in results:
+                if location is None:
+                    continue
+                scale = float(variant["scale"])
+                if pixel_error == 0.0:
+                    score = 1.0
+                    batch_has_exact = True
+                tied = abs(score - best_score) <= FULL_SCORE_TIE_EPSILON
+                same_error = abs(pixel_error - best_pixel_error) <= 1e-12
+                preference = _variant_preference(
+                    order,
+                    variant,
+                    preferred_scale,
+                )
+                best_preference = (
+                    _variant_preference(
+                        best_order,
+                        best_variant,
+                        preferred_scale,
+                    )
+                    if best_variant is not None
+                    else (math.inf, math.inf, math.inf)
+                )
+                if (
+                    score > best_score + FULL_SCORE_TIE_EPSILON
+                    or (tied and pixel_error < best_pixel_error)
+                    or (tied and same_error and preference < best_preference)
+                ):
+                    best_score = score
+                    best_location = location
+                    best_scale = scale
+                    best_pixel_error = pixel_error
+                    best_variant = variant
+                    best_order = order
+
+            # The batch order follows the same scale/angle tie preference used
+            # above. Full-best callers may stop only on a verified exact patch.
+            # Passing early_exit_score explicitly selects threshold/any-match
+            # semantics for callers that only need a Boolean result (alerts and
+            # negated conditions). Each accepted match is still evaluated at
+            # full resolution, so this does not restore coarse-search omissions.
+            if batch_has_exact or (
+                early_exit_score is not None
+                and best_location is not None
+                and best_score >= early_exit_score
+            ):
+                break
+
     return best_score, best_location, best_scale, best_variant
 
 
@@ -843,8 +958,17 @@ def match_template_multiscale(
     max_variant_pixels=DEFAULT_MAX_VARIANT_PIXELS,
     return_details=False,
 ):
+    """Match prepared variants using either full-best or threshold-only policy.
+
+    With ``early_exit_score=None`` the globally best evaluated result is
+    returned, with deterministic exact-match tie preferences. Supplying a
+    threshold explicitly opts into any-match semantics: matching still occurs
+    at full resolution, but evaluation may stop after a score reaches the
+    threshold. That mode is intended for Boolean alert/negated-condition
+    callers, not callers that need the globally best click location.
+    """
     best_score, best_location, best_scale = -1.0, None, 1.0
-    best_angle = 0.0
+    best_pixel_error = math.inf
     best_variant = None
     preferred_scale = preferred_resolution_scale(reference_size, current_size)
     screen_bgr, offset = _crop_region(screen_bgr, region)
@@ -891,15 +1015,15 @@ def match_template_multiscale(
         and min(template_bgr.shape[:2]) >= 20
         and len(variants) > 8
     ):
-        score, location, scale, matched_variant = _coarse_multiscale_match(
-            screen,
-            variants,
-            early_exit_score=early_exit_score,
-            cancel_event=cancel_event,
-            stop_check=stop_check,
-            factor=0.5 if min(template_bgr.shape[:2]) >= 30 else 0.67,
-            preferred_scale=preferred_scale,
-            low_variance_threshold=low_variance_threshold,
+        score, location, scale, matched_variant = (
+            _parallel_full_resolution_multiscale_match(
+                screen,
+                variants,
+                cancel_event=cancel_event,
+                stop_check=stop_check,
+                preferred_scale=preferred_scale,
+                early_exit_score=early_exit_score,
+            )
         )
         if location is not None:
             location = (location[0] + offset[0], location[1] + offset[1])
@@ -908,43 +1032,52 @@ def match_template_multiscale(
         return score, location, scale
 
     screen_height, screen_width = screen.shape[:2]
-    for variant in variants:
+    best_order = math.inf
+    for order, variant in _ordered_variant_items(variants, preferred_scale):
         if _cancelled(cancel_event, stop_check):
             break
         resized = variant["image"]
         height, width = resized.shape[:2]
         if width > screen_width or height > screen_height:
             continue
-        score, location = _best_variant_match(
+        score, location, pixel_error = _best_variant_match(
             screen,
             resized,
             bool(variant["low_variance"]),
             text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
+            return_pixel_error=True,
         )
         if location is None:
             continue
         scale = float(variant["scale"])
-        angle = float(variant["angle"])
-        epsilon = 1e-6 if variant["low_variance"] else 1e-9
-        tied = abs(score - best_score) <= epsilon
+        if pixel_error == 0.0:
+            score = 1.0
+        tied = abs(score - best_score) <= FULL_SCORE_TIE_EPSILON
+        same_error = abs(pixel_error - best_pixel_error) <= 1e-12
+        preference = _variant_preference(order, variant, preferred_scale)
+        best_preference = (
+            _variant_preference(
+                best_order,
+                best_variant,
+                preferred_scale,
+            )
+            if best_variant is not None
+            else (math.inf, math.inf, math.inf)
+        )
         if (
-            score > best_score + epsilon
-            or (
-                tied
-                and abs(scale - preferred_scale) < abs(best_scale - preferred_scale)
-            )
-            or (
-                tied
-                and abs(scale - best_scale) <= 1e-9
-                and abs(angle) < abs(best_angle)
-            )
+            score > best_score + FULL_SCORE_TIE_EPSILON
+            or (tied and pixel_error < best_pixel_error)
+            or (tied and same_error and preference < best_preference)
         ):
             best_score = score
             best_location = (location[0] + offset[0], location[1] + offset[1])
             best_scale = scale
-            best_angle = angle
+            best_pixel_error = pixel_error
             best_variant = variant
-            if early_exit_score is not None and best_score >= early_exit_score:
+            best_order = order
+            if best_pixel_error == 0.0 or (
+                early_exit_score is not None and best_score >= early_exit_score
+            ):
                 break
     if return_details:
         return best_score, best_location, best_scale, best_variant
@@ -1064,6 +1197,10 @@ def find_template_matches(
         )
     variants = tuple(variants)
     if variants:
+        match_mode = normalize_match_mode(
+            variants[0].get("match_mode", match_mode),
+            default=match_mode,
+        )
         use_grayscale = bool(variants[0].get("use_grayscale", use_grayscale))
     if match_mode == MATCH_MODE_TEXT:
         profile = variants[0].get("text_profile") if variants else None

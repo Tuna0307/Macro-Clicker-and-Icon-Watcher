@@ -216,6 +216,66 @@ class MatchingRowActionTests(unittest.TestCase):
 
         self.assertEqual(selected, [target])
 
+    def test_row_targets_are_assigned_to_the_closest_vertical_reference_first(self):
+        engine = object.__new__(MacroEngine)
+        action = Action(
+            type="click_matching_row",
+            match_condition_index=0,
+            on_condition_index=1,
+            row_tolerance=60,
+            row_mode="all",
+            target_choice="leftmost",
+        )
+        upper_reference = {"center": (300, 100), "scale": 1.0}
+        lower_reference = {"center": (300, 150), "scale": 1.0}
+        upper_target = {"center": (200, 100), "scale": 1.0}
+        # This target is farther left, so horizontal selection would steal it
+        # for the upper row unless vertical association happens first.
+        lower_target = {"center": (100, 150), "scale": 1.0}
+
+        selections, _had_unreadable = engine._find_matching_row_selections(
+            action,
+            {
+                0: [upper_reference, lower_reference],
+                1: [upper_target, lower_target],
+            },
+            apply_level_filter=False,
+        )
+
+        self.assertEqual(
+            [(selection["reference"], selection["target"]) for selection in selections],
+            [
+                (upper_reference, upper_target),
+                (lower_reference, lower_target),
+            ],
+        )
+
+    def test_monitor_relative_condition_uses_monitor_size_with_target_window(self):
+        engine = object.__new__(MacroEngine)
+        engine.scenario = Scenario(
+            name="monitor scaling",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (0, 0, 1280, 720)
+        engine._selected_monitor = lambda: (
+            2,
+            {
+                "left": 1280,
+                "top": 0,
+                "width": 2560,
+                "height": 1440,
+            },
+        )
+        condition = ImageCondition(
+            template_path="monitor.png",
+            region_mode="monitor",
+            template_reference_size=[1920, 1080],
+        )
+
+        matching = engine._condition_matching_kwargs(condition)
+
+        self.assertEqual(matching["current_size"], (2560, 1440))
+
     def test_rally_level_roi_and_retry_offsets_scale_to_1440p(self):
         engine = object.__new__(MacroEngine)
         action = Action(

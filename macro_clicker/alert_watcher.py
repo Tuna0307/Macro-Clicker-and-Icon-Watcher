@@ -10,6 +10,8 @@ combined application with ``python -m macro_clicker`` or the Windows launcher.
 """
 
 import ctypes
+import copy
+import errno
 import json
 import math
 import os
@@ -19,6 +21,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from difflib import get_close_matches
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Optional
 
@@ -36,6 +39,7 @@ from .alert_settings import (
     AppSettings,
     load_settings,
     save_settings,
+    settings_load_errors,
 )
 from .alert_ui import AlertPopup, RegionOverlay, ScreenRegionPicker
 from .atomic_io import atomic_write_json as _atomic_write_json
@@ -243,24 +247,48 @@ class SingleInstanceLock:
         if folder:
             os.makedirs(folder, exist_ok=True)
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
             if os.path.getsize(self.path) == 0:
                 os.write(fd, b" ")
             os.lseek(fd, 0, os.SEEK_SET)
-            if sys.platform == "win32":
-                import msvcrt
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
 
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if isinstance(exc, BlockingIOError) or exc.errno in {
+                    errno.EACCES,
+                    errno.EAGAIN,
+                }:
+                    os.close(fd)
+                    return False
+                raise
+            locked = True
             os.ftruncate(fd, 0)
             os.write(fd, f"{os.getpid()}\n".encode("ascii"))
             os.fsync(fd)
-        except (OSError, BlockingIOError):
+        except Exception:
+            if locked:
+                try:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    if sys.platform == "win32":
+                        import msvcrt
+
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
             os.close(fd)
-            return False
+            raise
         self.fd = fd
         self._locked = True
         return True
@@ -316,6 +344,59 @@ def resolve_item_absolute_region(
     return REGION_UNAVAILABLE if resolved is None else resolved
 
 
+def _monitor_unique_id(monitor):
+    """Return the stable MSS monitor identity when the backend provides one."""
+    try:
+        value = monitor.get("unique_id")
+    except (AttributeError, TypeError):
+        return None
+    if value is None or isinstance(value, bool):
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def _monitor_unique_ids_available(monitors):
+    return any(_monitor_unique_id(monitor) is not None for monitor in monitors[1:])
+
+
+def _resolve_monitor_binding(monitors, monitor_index=None, monitor_unique_id=None):
+    """Resolve a saved physical-monitor binding without redirecting it.
+
+    Stable identities take precedence whenever the backend exposes at least
+    one of them. Ordinal fallback is retained for legacy settings and capture
+    backends that expose no stable identities at all.
+    """
+
+    if monitor_unique_id is not None:
+        saved_unique_id = str(monitor_unique_id)
+        unique_ids_available = False
+        for index, monitor in enumerate(monitors[1:], start=1):
+            current_unique_id = _monitor_unique_id(monitor)
+            unique_ids_available = unique_ids_available or current_unique_id is not None
+            if current_unique_id == saved_unique_id:
+                return index, monitor
+        if unique_ids_available:
+            return None
+    if (
+        isinstance(monitor_index, int)
+        and not isinstance(monitor_index, bool)
+        and 0 < monitor_index < len(monitors)
+    ):
+        return monitor_index, monitors[monitor_index]
+    return None
+
+
+def _item_matches_monitor_identity(item, monitor_index=None, monitor_unique_id=None):
+    saved_unique_id = item.get("monitor_unique_id")
+    if saved_unique_id is not None and monitor_unique_id is not None:
+        return str(saved_unique_id) == str(monitor_unique_id)
+    saved_index = item.get("monitor_index")
+    if saved_index is not None and monitor_index is not None:
+        return saved_index == monitor_index
+    return True
+
+
 # --------------------------------------------------------------------------
 # Detection core
 # --------------------------------------------------------------------------
@@ -338,6 +419,8 @@ def test_detection_on_screenshot(
     window_rect_provider=find_window_rect,
     monitor_box=None,
     apply_saved_regions=True,
+    monitor_index=None,
+    monitor_unique_id=None,
 ):
     screenshot = cv2.imread(path)
     if screenshot is None:
@@ -352,6 +435,27 @@ def test_detection_on_screenshot(
     )
     for item in template_items:
         if not item.get("enabled", True):
+            continue
+        if (
+            monitor_index is not None or monitor_unique_id is not None
+        ) and not _item_matches_monitor_identity(
+            item,
+            monitor_index,
+            monitor_unique_id,
+        ):
+            results.append(
+                {
+                    "id": item.get("id"),
+                    "name": item["name"],
+                    "threshold": item.get("threshold", DEFAULT_THRESHOLD),
+                    "score": -1.0,
+                    "loc": None,
+                    "scale": 1.0,
+                    "matched": False,
+                    "unavailable": True,
+                    "reason": "saved monitor does not match this screenshot",
+                }
+            )
             continue
         item_region = None
         if apply_saved_regions:
@@ -434,11 +538,36 @@ class TemplateState:
 # Template (persisted) data
 # --------------------------------------------------------------------------
 class TemplateManager:
+    _MANIFEST_FIELDS = frozenset({"items"})
+    _ITEM_FIELDS = frozenset(
+        {
+            "id",
+            "name",
+            "file",
+            "enabled",
+            "threshold",
+            "match_mode",
+            "region",
+            "region_mode",
+            "region_ratio",
+            "region_window_size",
+            "template_reference_size",
+            "template_reference_space",
+            "monitor_index",
+            "monitor_unique_id",
+        }
+    )
+
     def __init__(self):
         self.items = {}  # id -> {"name", "file", "threshold", "image"(np.array)}
+        # Keep manifest records whose image is temporarily unreadable.  They
+        # are omitted from runtime matching, but an unrelated settings save
+        # must not silently erase their user-authored metadata.
+        self._unreadable_entries = {}
         self._lock = threading.RLock()
         self._next_id = 1
         self.load_warnings = []
+        self._manifest_write_blocked = False
         self._load()
 
     @staticmethod
@@ -458,16 +587,27 @@ class TemplateManager:
         return candidate
 
     @staticmethod
-    def _valid_region(value):
+    def _valid_region(value, *, allow_negative_position=True):
         if value is None or isinstance(value, (str, bytes, dict)):
             return None
         try:
-            if any(isinstance(v, bool) for v in value):
+            values = tuple(value)
+            if any(isinstance(v, bool) for v in values):
                 return None
-            region = tuple(int(v) for v in value)
+            if any(
+                isinstance(v, float) and (not math.isfinite(v) or not v.is_integer())
+                for v in values
+            ):
+                return None
+            region = tuple(int(v) for v in values)
         except (TypeError, ValueError, OverflowError):
             return None
-        if len(region) != 4 or region[2] <= 0 or region[3] <= 0:
+        if (
+            len(region) != 4
+            or region[2] <= 0
+            or region[3] <= 0
+            or (not allow_negative_position and (region[0] < 0 or region[1] < 0))
+        ):
             return None
         return region
 
@@ -494,14 +634,53 @@ class TemplateManager:
         if value is None or isinstance(value, (str, bytes, dict)):
             return None
         try:
-            if any(isinstance(v, bool) for v in value):
+            values = tuple(value)
+            if any(isinstance(v, bool) for v in values):
                 return None
-            size = tuple(int(v) for v in value)
+            if any(
+                isinstance(v, float) and (not math.isfinite(v) or not v.is_integer())
+                for v in values
+            ):
+                return None
+            size = tuple(int(v) for v in values)
         except (TypeError, ValueError, OverflowError):
             return None
         if len(size) != 2 or size[0] <= 0 or size[1] <= 0:
             return None
         return size
+
+    @classmethod
+    def _unknown_entry_fields(cls, entry):
+        return [str(key) for key in entry if key not in cls._ITEM_FIELDS]
+
+    @classmethod
+    def _unknown_field_message(cls, field):
+        suggestion = get_close_matches(field, cls._ITEM_FIELDS, n=1)
+        suffix = f"; did you mean '{suggestion[0]}'?" if suggestion else ""
+        return f"unknown field '{field}'{suffix}"
+
+    @staticmethod
+    def _valid_monitor_index(value):
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+            else None
+        )
+
+    @staticmethod
+    def _valid_monitor_unique_id(value):
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return None
+        value = str(value).strip()
+        return value or None
+
+    @staticmethod
+    def _valid_reference_space(value):
+        return (
+            value if isinstance(value, str) and value in {"window", "monitor"} else None
+        )
 
     def _reserve_existing_template_ids(self):
         try:
@@ -528,71 +707,179 @@ class TemplateManager:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError, UnicodeError) as exc:
             self.load_warnings.append(f"Could not load template manifest: {exc}")
+            self._manifest_write_blocked = True
             return
-        if not isinstance(data, dict) or not isinstance(data.get("items", []), list):
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
             self.load_warnings.append("Template manifest must contain an 'items' list.")
+            self._manifest_write_blocked = True
+            return
+        unknown_manifest_fields = [
+            str(key) for key in data if key not in self._MANIFEST_FIELDS
+        ]
+        if unknown_manifest_fields:
+            fields = ", ".join(repr(field) for field in unknown_manifest_fields)
+            self.load_warnings.append(
+                f"Template manifest contains unknown field(s) {fields}; "
+                "no templates were loaded and the source file will not be rewritten."
+            )
+            self._manifest_write_blocked = True
             return
         used_paths = set()
         with self._lock:
-            for entry in data.get("items", []):
+            for entry in data["items"]:
                 if not isinstance(entry, dict):
                     self.load_warnings.append(
-                        "Ignored a malformed template manifest entry."
+                        "Ignored a malformed template manifest entry; "
+                        "the source file will not be rewritten."
                     )
+                    self._manifest_write_blocked = True
                     continue
                 tid = entry.get("id")
                 if isinstance(tid, bool) or not isinstance(tid, int) or tid <= 0:
-                    self.load_warnings.append("Ignored a template with an invalid ID.")
+                    self.load_warnings.append(
+                        "Ignored a template with an invalid ID; "
+                        "the source file will not be rewritten."
+                    )
+                    self._manifest_write_blocked = True
                     continue
                 self._next_id = max(self._next_id, tid + 1)
-                if tid in self.items:
-                    self.load_warnings.append(f"Ignored duplicate template ID {tid}.")
+                if tid in self.items or tid in self._unreadable_entries:
+                    self.load_warnings.append(
+                        f"Ignored duplicate template ID {tid}; "
+                        "the source file will not be rewritten."
+                    )
+                    self._manifest_write_blocked = True
                     continue
+                entry_errors = [
+                    self._unknown_field_message(field)
+                    for field in self._unknown_entry_fields(entry)
+                ]
                 try:
                     path = self._safe_template_path(entry.get("file"))
                 except ValueError as exc:
-                    self.load_warnings.append(str(exc))
+                    entry_errors.append(str(exc))
+                    path = None
+                if "name" in entry and (
+                    not isinstance(entry["name"], str) or not entry["name"].strip()
+                ):
+                    entry_errors.append("name must be non-empty text")
+                if "enabled" in entry and not isinstance(entry["enabled"], bool):
+                    entry_errors.append("enabled must be true or false")
+                try:
+                    if isinstance(entry.get("threshold", DEFAULT_THRESHOLD), bool):
+                        raise ValueError
+                    threshold = float(entry.get("threshold", DEFAULT_THRESHOLD))
+                    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+                        raise ValueError
+                except (TypeError, ValueError, OverflowError):
+                    threshold = DEFAULT_THRESHOLD
+                    entry_errors.append("threshold must be a finite number from 0 to 1")
+                raw_match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
+                if (
+                    not isinstance(raw_match_mode, str)
+                    or raw_match_mode not in MATCH_MODE_VALUES
+                ):
+                    entry_errors.append("match_mode is invalid")
+                    match_mode = LEGACY_MATCH_MODE
+                else:
+                    match_mode = normalize_match_mode(raw_match_mode)
+                region_mode = entry.get("region_mode", "screen")
+                if not isinstance(region_mode, str) or region_mode not in {
+                    "screen",
+                    "window",
+                    "monitor",
+                }:
+                    entry_errors.append("region_mode is invalid")
+                    region_mode = "screen"
+                raw_region = entry.get("region")
+                region = self._valid_region(
+                    raw_region,
+                    allow_negative_position=region_mode == "screen",
+                )
+                if raw_region is not None and region is None:
+                    entry_errors.append(
+                        "region must contain whole-number coordinates with positive "
+                        "size; relative offsets cannot be negative"
+                    )
+                raw_ratio = entry.get("region_ratio")
+                region_ratio = self._valid_ratio(raw_ratio)
+                if raw_ratio is not None and region_ratio is None:
+                    entry_errors.append(
+                        "region_ratio must describe a finite positive contained box"
+                    )
+                raw_region_size = entry.get("region_window_size")
+                region_window_size = self._valid_window_size(raw_region_size)
+                if raw_region_size is not None and region_window_size is None:
+                    entry_errors.append(
+                        "region_window_size must contain positive whole numbers"
+                    )
+                raw_reference_size = entry.get("template_reference_size")
+                template_reference_size = self._valid_window_size(raw_reference_size)
+                if raw_reference_size is not None and template_reference_size is None:
+                    entry_errors.append(
+                        "template_reference_size must contain positive whole numbers"
+                    )
+                raw_reference_space = entry.get("template_reference_space")
+                template_reference_space = self._valid_reference_space(
+                    raw_reference_space
+                )
+                if raw_reference_space is not None and template_reference_space is None:
+                    entry_errors.append(
+                        "template_reference_space must be 'window' or 'monitor'"
+                    )
+                raw_monitor_index = entry.get("monitor_index")
+                monitor_index = self._valid_monitor_index(raw_monitor_index)
+                if raw_monitor_index is not None and monitor_index is None:
+                    entry_errors.append("monitor_index must be a positive whole number")
+                raw_monitor_unique_id = entry.get("monitor_unique_id")
+                monitor_unique_id = self._valid_monitor_unique_id(raw_monitor_unique_id)
+                if raw_monitor_unique_id is not None and monitor_unique_id is None:
+                    entry_errors.append(
+                        "monitor_unique_id must be non-empty text or an integer"
+                    )
+                if region_mode == "screen" and (
+                    raw_ratio is not None or raw_region_size is not None
+                ):
+                    entry_errors.append(
+                        "screen regions cannot contain relative resize metadata"
+                    )
+                if region_mode in {"window", "monitor"} and region is not None:
+                    if (region_ratio is None) != (region_window_size is None):
+                        entry_errors.append(
+                            "relative regions need both ratio and reference size"
+                        )
+                if region_mode != "monitor" and (
+                    raw_monitor_index is not None or raw_monitor_unique_id is not None
+                ):
+                    entry_errors.append(
+                        "monitor identity is only valid for monitor-relative regions"
+                    )
+                if entry_errors:
+                    details = "; ".join(entry_errors)
+                    self.load_warnings.append(
+                        f"Template ID {tid} was disabled because {details}."
+                    )
+                    self._unreadable_entries[tid] = copy.deepcopy(entry)
                     continue
+                assert path is not None
                 normalized_path = os.path.normcase(path)
                 if normalized_path in used_paths:
                     self.load_warnings.append(
                         f"Ignored template ID {tid}; its image file is already in use."
                     )
+                    self._unreadable_entries[tid] = copy.deepcopy(entry)
                     continue
+                used_paths.add(normalized_path)
                 img = cv2.imread(path)
                 if img is None:
                     self.load_warnings.append(
                         f"Could not read template image for ID {tid}: {entry.get('file')!r}"
                     )
+                    self._unreadable_entries[tid] = copy.deepcopy(entry)
                     continue
-                used_paths.add(normalized_path)
                 name = entry.get("name")
-                if not isinstance(name, str) or not name.strip():
+                if name is None:
                     name = f"icon_{tid}"
-                try:
-                    threshold = float(entry.get("threshold", DEFAULT_THRESHOLD))
-                    if not math.isfinite(threshold):
-                        raise ValueError
-                    threshold = min(1.0, max(0.0, threshold))
-                except (TypeError, ValueError, OverflowError):
-                    threshold = DEFAULT_THRESHOLD
-                raw_match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
-                match_mode = normalize_match_mode(raw_match_mode)
-                if raw_match_mode not in MATCH_MODE_VALUES and "match_mode" in entry:
-                    self.load_warnings.append(
-                        f"Template ID {tid} has an invalid match mode; using animated picture."
-                    )
-                region = self._valid_region(entry.get("region"))
-                region_mode = entry.get("region_mode", "screen")
-                if region_mode not in ("screen", "window", "monitor"):
-                    region_mode = "screen"
-                region_ratio = self._valid_ratio(entry.get("region_ratio"))
-                region_window_size = self._valid_window_size(
-                    entry.get("region_window_size")
-                )
-                template_reference_size = self._valid_window_size(
-                    entry.get("template_reference_size")
-                )
                 if (
                     region is None
                     or region_mode == "screen"
@@ -615,13 +902,24 @@ class TemplateManager:
                     "region_ratio": region_ratio,
                     "region_window_size": region_window_size,
                     "template_reference_size": template_reference_size,
+                    "template_reference_space": template_reference_space,
+                    "monitor_index": monitor_index,
+                    "monitor_unique_id": monitor_unique_id,
                     "image": img,
                     "variant_cache": {},
                 }
 
     def _save(self):
         with self._lock:
-            items = []
+            if self._manifest_write_blocked:
+                raise ValueError(
+                    "The template manifest contains malformed data. "
+                    "Fix the reported fields before changing templates."
+                )
+            items_by_id = {
+                tid: copy.deepcopy(entry)
+                for tid, entry in self._unreadable_entries.items()
+            }
             for tid, v in sorted(self.items.items()):
                 item = {
                     "id": tid,
@@ -640,7 +938,14 @@ class TemplateManager:
                     item["region_window_size"] = list(v["region_window_size"])
                 if v.get("template_reference_size") is not None:
                     item["template_reference_size"] = list(v["template_reference_size"])
-                items.append(item)
+                if v.get("template_reference_space") is not None:
+                    item["template_reference_space"] = v["template_reference_space"]
+                if v.get("monitor_index") is not None:
+                    item["monitor_index"] = v["monitor_index"]
+                if v.get("monitor_unique_id") is not None:
+                    item["monitor_unique_id"] = v["monitor_unique_id"]
+                items_by_id[tid] = item
+            items = [items_by_id[tid] for tid in sorted(items_by_id)]
             _atomic_write_json(MANIFEST_PATH, {"items": items})
 
     def add(
@@ -650,12 +955,17 @@ class TemplateManager:
         threshold=DEFAULT_THRESHOLD,
         match_mode=DEFAULT_NEW_MATCH_MODE,
         template_reference_size=None,
+        template_reference_space=None,
     ):
         with self._lock:
             tid = self._next_id
             filename = f"template_{tid}.png"
             path = self._safe_template_path(filename)
-            while tid in self.items or os.path.exists(path):
+            while (
+                tid in self.items
+                or tid in self._unreadable_entries
+                or os.path.exists(path)
+            ):
                 tid += 1
                 filename = f"template_{tid}.png"
                 path = self._safe_template_path(filename)
@@ -669,13 +979,24 @@ class TemplateManager:
             if not math.isfinite(numeric_threshold):
                 raise ValueError("Template threshold must be a finite number")
             numeric_threshold = min(1.0, max(0.0, numeric_threshold))
-            parsed_match_mode = normalize_match_mode(match_mode, default="")
+            parsed_match_mode = (
+                normalize_match_mode(match_mode, default="")
+                if isinstance(match_mode, str)
+                else ""
+            )
             if parsed_match_mode not in MATCH_MODE_VALUES:
                 raise ValueError("Unknown template detection type")
             parsed_reference_size = self._valid_window_size(template_reference_size)
             if template_reference_size is not None and parsed_reference_size is None:
                 raise ValueError(
                     "Template reference size must contain a positive width and height"
+                )
+            parsed_reference_space = self._valid_reference_space(
+                template_reference_space
+            )
+            if template_reference_space is not None and parsed_reference_space is None:
+                raise ValueError(
+                    "Template reference space must be 'window' or 'monitor'"
                 )
             entry = {
                 "name": str(name).strip() or f"icon_{tid}",
@@ -688,6 +1009,9 @@ class TemplateManager:
                 "region_ratio": None,
                 "region_window_size": None,
                 "template_reference_size": parsed_reference_size,
+                "template_reference_space": parsed_reference_space,
+                "monitor_index": None,
+                "monitor_unique_id": None,
                 "image": image_bgr.copy(),
                 "variant_cache": {},
             }
@@ -756,6 +1080,8 @@ class TemplateManager:
                     raise
 
     def set_match_mode(self, tid, match_mode, save=True):
+        if not isinstance(match_mode, str):
+            raise ValueError("Unknown template detection type")
         parsed = normalize_match_mode(match_mode, default="")
         if parsed not in MATCH_MODE_VALUES:
             raise ValueError("Unknown template detection type")
@@ -786,13 +1112,19 @@ class TemplateManager:
         region_mode="screen",
         region_ratio=None,
         region_window_size=None,
+        monitor_index=None,
+        monitor_unique_id=None,
     ):
         if region_mode not in ("screen", "window", "monitor"):
             raise ValueError("Region mode must be 'screen', 'window', or 'monitor'.")
-        parsed_region = self._valid_region(region)
+        parsed_region = self._valid_region(
+            region,
+            allow_negative_position=region_mode == "screen",
+        )
         if region is not None and parsed_region is None:
             raise ValueError(
-                "Region must contain four whole numbers with positive size."
+                "Region must contain four whole numbers with positive size; "
+                "window/monitor-relative offsets cannot be negative."
             )
         parsed_ratio = self._valid_ratio(region_ratio)
         parsed_window_size = self._valid_window_size(region_window_size)
@@ -803,6 +1135,18 @@ class TemplateManager:
             region_ratio is not None or region_window_size is not None
         ):
             raise ValueError("Screen regions cannot contain window resize metadata.")
+        parsed_monitor_index = self._valid_monitor_index(monitor_index)
+        parsed_monitor_unique_id = self._valid_monitor_unique_id(monitor_unique_id)
+        if monitor_index is not None and parsed_monitor_index is None:
+            raise ValueError("Monitor index must be a positive whole number.")
+        if monitor_unique_id is not None and parsed_monitor_unique_id is None:
+            raise ValueError("Monitor identity must be non-empty text or an integer.")
+        if region_mode != "monitor" and (
+            monitor_index is not None or monitor_unique_id is not None
+        ):
+            raise ValueError(
+                "Monitor identity is only valid for monitor-relative regions."
+            )
         with self._lock:
             if tid not in self.items:
                 return
@@ -813,12 +1157,16 @@ class TemplateManager:
                     "region_mode",
                     "region_ratio",
                     "region_window_size",
+                    "monitor_index",
+                    "monitor_unique_id",
                 )
             }
             self.items[tid]["region"] = parsed_region
             self.items[tid]["region_mode"] = region_mode
             self.items[tid]["region_ratio"] = parsed_ratio
             self.items[tid]["region_window_size"] = parsed_window_size
+            self.items[tid]["monitor_index"] = parsed_monitor_index
+            self.items[tid]["monitor_unique_id"] = parsed_monitor_unique_id
             try:
                 self._save()
             except Exception:
@@ -826,7 +1174,7 @@ class TemplateManager:
                 raise
 
     def clear_region(self, tid):
-        self.set_region(tid, None, "screen", None, None)
+        self.set_region(tid, None, "screen", None, None, None, None)
 
     def get(self, tid):
         with self._lock:
@@ -838,46 +1186,101 @@ class TemplateManager:
             result.pop("variant_cache", None)
             return result
 
-    def _variants_for_entry(
+    def _variant_context(
         self,
         entry,
         use_grayscale,
         current_window_size=None,
-        cancel_event=None,
+        current_monitor_size=None,
     ):
-        cache = entry.setdefault("variant_cache", {})
         match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
         grayscale_key = bool(use_grayscale) if match_mode != MATCH_MODE_TEXT else False
         reference_size = entry.get("template_reference_size") or entry.get(
             "region_window_size"
         )
-        parsed_current_size = self._valid_window_size(current_window_size)
+        reference_space = entry.get("template_reference_space")
+        if reference_space is None and entry.get("region_mode") == "monitor":
+            reference_space = "monitor"
+        parsed_window_size = self._valid_window_size(current_window_size)
+        parsed_monitor_size = self._valid_window_size(current_monitor_size)
+        if reference_space == "monitor":
+            parsed_current_size = parsed_monitor_size
+        elif reference_space == "window":
+            parsed_current_size = parsed_window_size
+        else:
+            # Legacy templates did not record where their reference size came
+            # from. Retain the old window-first heuristic for those entries.
+            parsed_current_size = parsed_window_size or parsed_monitor_size
         key = (
             grayscale_key,
             match_mode,
             tuple(reference_size) if reference_size else None,
             parsed_current_size,
         )
-        if key not in cache:
+        return key, grayscale_key, match_mode, reference_size, parsed_current_size
+
+    def _variants_for_snapshot(
+        self,
+        tid,
+        entry,
+        use_grayscale,
+        current_window_size=None,
+        current_monitor_size=None,
+        cancel_event=None,
+    ):
+        context = self._variant_context(
+            entry,
+            use_grayscale,
+            current_window_size,
+            current_monitor_size,
+        )
+        key, grayscale_key, match_mode, reference_size, parsed_current_size = context
+        with self._lock:
+            live_entry = self.items.get(tid)
+            if live_entry is not None:
+                cached = live_entry.setdefault("variant_cache", {}).get(key)
+                if cached is not None:
+                    return cached
+
+        # Variant preparation can resize and rotate many images. Do that work
+        # outside the manager lock so Tk selection/edit operations stay live.
+        variants = prepare_template_variants(
+            entry["image"],
+            use_grayscale=grayscale_key,
+            match_mode=match_mode,
+            reference_size=reference_size,
+            current_size=parsed_current_size,
+            cancel_event=cancel_event,
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            return variants
+
+        with self._lock:
+            live_entry = self.items.get(tid)
+            if live_entry is None or live_entry.get("image") is not entry["image"]:
+                return variants
+            live_context = self._variant_context(
+                live_entry,
+                use_grayscale,
+                current_window_size,
+                current_monitor_size,
+            )
+            if live_context[0] != key:
+                return variants
+            cache = live_entry.setdefault("variant_cache", {})
+            existing = cache.get(key)
+            if existing is not None:
+                return existing
             if len(cache) >= 8:
                 cache.pop(next(iter(cache)))
-            variants = prepare_template_variants(
-                entry["image"],
-                use_grayscale=grayscale_key,
-                match_mode=match_mode,
-                reference_size=reference_size,
-                current_size=parsed_current_size,
-                cancel_event=cancel_event,
-            )
-            if cancel_event is not None and cancel_event.is_set():
-                return variants
             cache[key] = variants
-        return cache[key]
+        return variants
 
     def snapshot(
         self,
         use_grayscale=None,
         current_window_size=None,
+        current_monitor_size=None,
         cancel_event=None,
         enabled_only=False,
     ):
@@ -898,22 +1301,92 @@ class TemplateManager:
                     "region_ratio": entry.get("region_ratio"),
                     "region_window_size": entry.get("region_window_size"),
                     "template_reference_size": entry.get("template_reference_size"),
+                    "template_reference_space": entry.get("template_reference_space"),
+                    "monitor_index": entry.get("monitor_index"),
+                    "monitor_unique_id": entry.get("monitor_unique_id"),
                     "image": entry["image"],
                 }
-                if use_grayscale is not None:
-                    item["variants"] = self._variants_for_entry(
-                        entry,
-                        use_grayscale,
-                        current_window_size,
-                        cancel_event,
-                    )
                 items.append(item)
-            return items
+        if use_grayscale is not None:
+            for item in items:
+                item["variants"] = self._variants_for_snapshot(
+                    item["id"],
+                    item,
+                    use_grayscale,
+                    current_window_size,
+                    current_monitor_size,
+                    cancel_event,
+                )
+        return items
 
 
 # --------------------------------------------------------------------------
 # Background watcher thread
 # --------------------------------------------------------------------------
+class _RefreshingCaptureSession:
+    """Own one MSS context at a time and replace it between scan cycles."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._context = None
+        self._capture = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return self._close_current(exc_type, exc, traceback)
+
+    def _close_current(self, exc_type=None, exc=None, traceback=None):
+        context = self._context
+        capture = self._capture
+        self._context = None
+        self._capture = None
+        if context is None:
+            return False
+        exit_method = getattr(context, "__exit__", None)
+        if callable(exit_method):
+            return bool(exit_method(exc_type, exc, traceback))
+        close = getattr(capture, "close", None)
+        if not callable(close):
+            close = getattr(context, "close", None)
+        if callable(close):
+            close()
+        return False
+
+    @staticmethod
+    def _close_unentered(context, exc_info):
+        """Best-effort cleanup when a context manager fails during ``__enter__``."""
+
+        close = getattr(context, "close", None)
+        if callable(close):
+            close()
+            return
+        exit_method = getattr(context, "__exit__", None)
+        if callable(exit_method):
+            exit_method(*exc_info)
+
+    def refresh(self):
+        self._close_current()
+        context = self._factory()
+        enter_method = getattr(context, "__enter__", None)
+        try:
+            capture = enter_method() if callable(enter_method) else context
+        except BaseException:
+            exc_info = sys.exc_info()
+            try:
+                self._close_unentered(context, exc_info)
+            except Exception:
+                # Preserve the original initialization failure. A cleanup
+                # failure is secondary and the next scan cycle will retry with
+                # a new context.
+                pass
+            raise
+        self._context = context
+        self._capture = capture
+        return capture
+
+
 class WatcherThread(threading.Thread):
     def __init__(
         self,
@@ -921,6 +1394,7 @@ class WatcherThread(threading.Thread):
         event_queue,
         log_queue,
         monitor_filter=None,
+        monitor_unique_id=None,
         scan_region=None,
         use_grayscale=True,
         debug=False,
@@ -936,6 +1410,7 @@ class WatcherThread(threading.Thread):
         self.event_queue = event_queue
         self.log_queue = log_queue
         self.monitor_filter = monitor_filter
+        self.monitor_unique_id = monitor_unique_id
         self.scan_region = scan_region
         self.scan_region_mode = scan_region_mode
         self.scan_region_ratio = scan_region_ratio
@@ -963,6 +1438,7 @@ class WatcherThread(threading.Thread):
         self,
         *,
         monitor_filter=None,
+        monitor_unique_id=None,
         scan_region=None,
         scan_region_mode="screen",
         scan_region_ratio=None,
@@ -974,6 +1450,7 @@ class WatcherThread(threading.Thread):
     ):
         with self._config_lock:
             self.monitor_filter = monitor_filter
+            self.monitor_unique_id = monitor_unique_id
             self.scan_region = scan_region
             self.scan_region_mode = scan_region_mode
             self.scan_region_ratio = scan_region_ratio
@@ -992,6 +1469,7 @@ class WatcherThread(threading.Thread):
         with self._config_lock:
             return {
                 "monitor_filter": self.monitor_filter,
+                "monitor_unique_id": self.monitor_unique_id,
                 "scan_region": self.scan_region,
                 "scan_region_mode": self.scan_region_mode,
                 "scan_region_ratio": self.scan_region_ratio,
@@ -1031,30 +1509,62 @@ class WatcherThread(threading.Thread):
                 self.states[tid].threshold = item["threshold"]
                 self.states[tid].cooldown_sec = cooldown_sec
 
-    def _snapshot_items(self, use_grayscale=None, current_window_size=None):
+    def _snapshot_items(
+        self,
+        use_grayscale=None,
+        current_window_size=None,
+        current_monitor_size=None,
+    ):
         try:
             items = self.tm.snapshot(
                 use_grayscale=use_grayscale,
                 current_window_size=current_window_size,
+                current_monitor_size=current_monitor_size,
                 enabled_only=True,
                 cancel_event=(self._stop_flag if use_grayscale is not None else None),
             )
         except TypeError as exc:
             if not any(
                 name in str(exc)
-                for name in ("current_window_size", "cancel_event", "enabled_only")
+                for name in (
+                    "current_window_size",
+                    "current_monitor_size",
+                    "cancel_event",
+                    "enabled_only",
+                )
             ):
                 raise
             try:
                 items = self.tm.snapshot(
                     use_grayscale=use_grayscale,
-                    current_window_size=current_window_size,
+                    current_window_size=(current_window_size or current_monitor_size),
                 )
             except TypeError as fallback_exc:
                 if "current_window_size" not in str(fallback_exc):
                     raise
                 items = self.tm.snapshot(use_grayscale=use_grayscale)
         return [item for item in items if item.get("enabled", True)]
+
+    @staticmethod
+    def _item_matches_monitor(
+        item,
+        monitor_index,
+        monitor,
+        *,
+        unique_ids_available=False,
+    ):
+        saved_unique_id = item.get("monitor_unique_id")
+        current_unique_id = _monitor_unique_id(monitor)
+        if saved_unique_id is not None and current_unique_id is not None:
+            return str(saved_unique_id) == current_unique_id
+        if saved_unique_id is not None and unique_ids_available:
+            return False
+        saved_index = item.get("monitor_index")
+        if saved_index is not None:
+            return saved_index == monitor_index
+        # Entries saved before monitor identity support retain their legacy
+        # behavior and are eligible on every monitor in the selected scope.
+        return True
 
     def _emit_aggregated_matches(self, items, best_scores, now, complete_ids=None):
         if complete_ids is None:
@@ -1225,16 +1735,17 @@ class WatcherThread(threading.Thread):
 
     def run(self):
         try:
-            with mss.MSS() as sct:
+            with _RefreshingCaptureSession(mss.MSS) as capture_session:
                 # monitors[0] is the combined virtual screen; skip it here,
                 # we want each physical monitor captured separately.
                 last_monitor_status = None
                 last_capture_error = {}
+                last_refresh_error_at = None
                 last_debug_log = 0.0
                 while not self._stop_flag.is_set():
                     config = self._config_snapshot()
                     monitor_filter = config["monitor_filter"]
-                    all_monitors = list(enumerate(sct.monitors[1:], start=1))
+                    monitor_unique_id = config["monitor_unique_id"]
                     items = self._snapshot_items()
                     self._sync_states(items, config["cooldown_sec"])
                     if not items:
@@ -1248,33 +1759,72 @@ class WatcherThread(threading.Thread):
                     if absolute_scan_region is REGION_UNAVAILABLE:
                         self._wait_for_next_cycle()
                         continue
-                    if window_rect is not None:
-                        followed = set(
-                            monitor_indices_for_rect(sct.monitors, window_rect)
+                    # MSS caches monitor geometry on each instance. Opening a
+                    # fresh context for every active scan makes hot-plug and
+                    # resolution changes visible without restarting watching.
+                    try:
+                        sct = capture_session.refresh()
+                        capture_monitors = sct.monitors
+                        all_monitors = list(enumerate(capture_monitors[1:], start=1))
+                        unique_ids_available = _monitor_unique_ids_available(
+                            capture_monitors
                         )
-                        monitors = [
-                            (idx, mon) for idx, mon in all_monitors if idx in followed
-                        ]
-                        monitor_scope = ("target", tuple(sorted(followed)))
-                    else:
-                        monitors = all_monitors
-                        if monitor_filter is not None:
+                        monitor_scope: tuple[Any, ...]
+                        if window_rect is not None:
+                            followed = set(
+                                monitor_indices_for_rect(
+                                    capture_monitors,
+                                    window_rect,
+                                )
+                            )
                             monitors = [
                                 (idx, mon)
                                 for idx, mon in all_monitors
-                                if idx == monitor_filter
+                                if idx in followed
                             ]
-                        monitor_scope = ("selected", monitor_filter)
-                    signature = tuple(
-                        (
-                            idx,
-                            mon["left"],
-                            mon["top"],
-                            mon["width"],
-                            mon["height"],
+                            monitor_scope = ("target", tuple(sorted(followed)))
+                        else:
+                            if monitor_filter is None:
+                                monitors = all_monitors
+                            else:
+                                selected_monitor = _resolve_monitor_binding(
+                                    capture_monitors,
+                                    monitor_filter,
+                                    monitor_unique_id,
+                                )
+                                monitors = (
+                                    [selected_monitor]
+                                    if selected_monitor is not None
+                                    else []
+                                )
+                            monitor_scope = (
+                                "selected",
+                                monitor_filter,
+                                monitor_unique_id,
+                                tuple(idx for idx, _monitor in monitors),
+                            )
+                        signature = tuple(
+                            (
+                                idx,
+                                mon["left"],
+                                mon["top"],
+                                mon["width"],
+                                mon["height"],
+                                _monitor_unique_id(mon),
+                            )
+                            for idx, mon in all_monitors
                         )
-                        for idx, mon in all_monitors
-                    )
+                    except Exception as exc:
+                        if (
+                            last_refresh_error_at is None
+                            or now - last_refresh_error_at >= 10.0
+                        ):
+                            self.log_queue.put(
+                                f"Screen capture refresh failed; will retry: {exc}"
+                            )
+                            last_refresh_error_at = now
+                        self._wait_for_next_cycle()
+                        continue
                     monitor_status = (monitor_scope, signature)
                     if monitor_status != last_monitor_status:
                         if window_rect is not None and monitors:
@@ -1288,7 +1838,8 @@ class WatcherThread(threading.Thread):
                             )
                         elif monitor_filter is not None and not monitors:
                             self.log_queue.put(
-                                f"Monitor {monitor_filter} is unavailable; "
+                                f"Monitor {monitor_filter} is unavailable or no "
+                                "longer matches the saved display; "
                                 "no screen will be scanned."
                             )
                         else:
@@ -1297,7 +1848,19 @@ class WatcherThread(threading.Thread):
                     best_scores: dict[int, tuple[float, Optional[int]]] = {
                         item["id"]: (-1.0, None) for item in items
                     }
-                    complete_ids = {item["id"] for item in items} if monitors else set()
+                    complete_ids = {
+                        item["id"]
+                        for item in items
+                        if any(
+                            self._item_matches_monitor(
+                                item,
+                                idx,
+                                mon,
+                                unique_ids_available=unique_ids_available,
+                            )
+                            for idx, mon in monitors
+                        )
+                    }
                     for mon_index, mon in monitors:
                         if self._stop_flag.is_set():
                             break
@@ -1310,13 +1873,16 @@ class WatcherThread(threading.Thread):
                                     f"Monitor {mon_index} capture failed: {exc}"
                                 )
                                 last_capture_error[mon_index] = now
-                            complete_ids.clear()
+                            for item in items:
+                                if self._item_matches_monitor(
+                                    item,
+                                    mon_index,
+                                    mon,
+                                    unique_ids_available=unique_ids_available,
+                                ):
+                                    complete_ids.discard(item["id"])
                             continue
                         last_capture_error.pop(mon_index, None)
-                        current_size = window_size or (
-                            int(mon["width"]),
-                            int(mon["height"]),
-                        )
                         monitor_box = monitor_rect(mon)
                         monitor_scan_region = absolute_scan_region
                         if absolute_scan_region is MONITOR_REGION_PENDING:
@@ -1329,7 +1895,11 @@ class WatcherThread(threading.Thread):
                             )
                         scan_items = self._snapshot_items(
                             use_grayscale=config["use_grayscale"],
-                            current_window_size=current_size,
+                            current_window_size=window_size,
+                            current_monitor_size=(
+                                int(mon["width"]),
+                                int(mon["height"]),
+                            ),
                         )
                         for entry in scan_items:
                             if self._stop_flag.is_set():
@@ -1338,6 +1908,13 @@ class WatcherThread(threading.Thread):
                             # A template added after the cycle's state snapshot is
                             # picked up safely on the next cycle.
                             if tid not in best_scores:
+                                continue
+                            if not self._item_matches_monitor(
+                                entry,
+                                mon_index,
+                                mon,
+                                unique_ids_available=unique_ids_available,
+                            ):
                                 continue
                             item_region = self._resolve_item_scan_region(
                                 entry,
@@ -1380,7 +1957,10 @@ class WatcherThread(threading.Thread):
                     if self._stop_flag.is_set():
                         break
                     self._emit_aggregated_matches(
-                        items, best_scores, now, complete_ids=complete_ids
+                        items,
+                        best_scores,
+                        time.monotonic(),
+                        complete_ids=complete_ids,
                     )
                     if config["debug"] and debug_lines and now - last_debug_log >= 5.0:
                         self.log_queue.put("Debug scores: " + "; ".join(debug_lines))
@@ -1473,7 +2053,15 @@ def play_alert_sound(volume=DEFAULT_ALERT_VOLUME):
             return
         _SOUND_THREAD = threading.Thread(target=_sound_worker, daemon=True)
         worker = _SOUND_THREAD
-    worker.start()
+    try:
+        worker.start()
+    except Exception:
+        # A rare interpreter/threading failure must not leave a never-started
+        # object blocking every later alert sound request.
+        with _SOUND_QUEUE_LOCK:
+            if _SOUND_THREAD is worker:
+                _SOUND_THREAD = None
+                _PENDING_SOUND_VOLUME = None
 
 
 # --------------------------------------------------------------------------
@@ -1489,6 +2077,9 @@ class AlertWatcherFrame(ttk.Frame):
         self.log_queue = queue.Queue()
         self.watcher = None
         self.settings = load_settings()
+        self._settings_load_errors = settings_load_errors(self.settings)
+        self._settings_save_blocked_logged = False
+        self.monitor_unique_id = self.settings.monitor_unique_id
         self.scan_region = self.settings.scan_region
         self.scan_region_mode = self.settings.scan_region_mode
         self.scan_region_ratio = self.settings.scan_region_ratio
@@ -1513,6 +2104,11 @@ class AlertWatcherFrame(ttk.Frame):
         self._apply_loaded_settings()
         for warning in self.tm.load_warnings:
             self._append_log(warning)
+        for error in self._settings_load_errors:
+            self._append_log(
+                f"Alert settings were not applied safely: {error}. "
+                "The source file will not be rewritten."
+            )
         self._setup_hotkeys()
         if not self.embedded:
             self._setup_tray()
@@ -1728,6 +2324,10 @@ class AlertWatcherFrame(ttk.Frame):
             width=18,
         )
         self.monitor_combo.pack(fill="x", pady=(3, 4))
+        self.monitor_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_monitor_selected,
+        )
         ttk.Label(right, text="Target window", style="Surface.TLabel").pack(
             anchor="w", pady=(8, 0)
         )
@@ -1878,11 +2478,84 @@ class AlertWatcherFrame(ttk.Frame):
             count = 0
         return ["All monitors"] + [f"Monitor {i}" for i in range(1, count + 1)]
 
+    def _refresh_monitor_choices(self):
+        if not hasattr(self, "monitor_combo"):
+            return True
+        current = self.monitor_var.get()
+        available = self._monitor_choices()
+        saved_unique_id = getattr(self, "monitor_unique_id", None)
+        if current == "All monitors":
+            if hasattr(self, "monitor_unique_id"):
+                self.monitor_unique_id = None
+            is_available = True
+        elif saved_unique_id is not None:
+            monitor_index = self._monitor_index_from_choice(current)
+            try:
+                with mss.MSS() as capture:
+                    selected = _resolve_monitor_binding(
+                        capture.monitors,
+                        monitor_index,
+                        saved_unique_id,
+                    )
+            except Exception:
+                selected = None
+            if selected is None:
+                is_available = False
+            else:
+                resolved_choice = f"Monitor {selected[0]}"
+                is_available = resolved_choice in available
+                if resolved_choice != current:
+                    self.monitor_var.set(resolved_choice)
+                    current = resolved_choice
+        else:
+            is_available = current in available
+            if is_available and hasattr(self, "monitor_unique_id"):
+                self.monitor_unique_id = self._monitor_unique_id_for_choice(current)
+        if not is_available and current and current not in available:
+            available.append(current)
+        self.monitor_combo["values"] = tuple(available)
+        return is_available
+
+    @staticmethod
+    def _monitor_index_from_choice(value):
+        if value == "All monitors":
+            return None
+        try:
+            index = int(value.split()[-1])
+        except (AttributeError, ValueError, IndexError):
+            return None
+        return index if index > 0 else None
+
+    def _monitor_unique_id_for_choice(self, choice):
+        monitor_index = self._monitor_index_from_choice(choice)
+        if monitor_index is None:
+            return None
+        try:
+            with mss.MSS() as capture:
+                selected = _resolve_monitor_binding(
+                    capture.monitors,
+                    monitor_index,
+                )
+                if selected is not None:
+                    return _monitor_unique_id(selected[1])
+        except Exception:
+            pass
+        return None
+
+    def _on_monitor_selected(self, _event=None):
+        self.monitor_unique_id = self._monitor_unique_id_for_choice(
+            self.monitor_var.get()
+        )
+        self._on_settings_changed()
+
     def _apply_loaded_settings(self):
         self._refresh_window_list()
-        choices = list(self.monitor_combo["values"])
-        if self.monitor_var.get() not in choices:
-            self.monitor_var.set("All monitors")
+        if not self._refresh_monitor_choices():
+            unavailable_choice = self.monitor_var.get()
+            self._append_log(
+                f"{unavailable_choice} is currently unavailable; "
+                "the saved selection was preserved."
+            )
         self._update_region_label()
         if not HAVE_KEYBOARD:
             self._append_log(
@@ -1908,6 +2581,11 @@ class AlertWatcherFrame(ttk.Frame):
     def _current_settings(self):
         return AppSettings(
             monitor_choice=self.monitor_var.get(),
+            monitor_unique_id=(
+                getattr(self, "monitor_unique_id", None)
+                if self._selected_monitor_filter() is not None
+                else None
+            ),
             grayscale=bool(self.grayscale_var.get()),
             debug=bool(self.debug_var.get()),
             cooldown_sec=self._cooldown_seconds(),
@@ -1926,6 +2604,14 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _save_settings(self):
         self._settings_save_after_id = None
+        if getattr(self, "_settings_load_errors", ()):
+            if not getattr(self, "_settings_save_blocked_logged", False):
+                self._append_log(
+                    "Settings were not saved because the source file contains "
+                    "unknown or malformed fields."
+                )
+                self._settings_save_blocked_logged = True
+            return
         self.settings = self._current_settings()
         try:
             save_settings(SETTINGS_PATH, self.settings)
@@ -1936,6 +2622,7 @@ class AlertWatcherFrame(ttk.Frame):
         if watcher is not None and watcher.is_alive():
             watcher.update_config(
                 monitor_filter=self._selected_monitor_filter(),
+                monitor_unique_id=getattr(self, "monitor_unique_id", None),
                 scan_region=self.scan_region,
                 scan_region_mode=self.scan_region_mode,
                 scan_region_ratio=self.scan_region_ratio,
@@ -1966,6 +2653,8 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _on_settings_changed(self):
         if hasattr(self, "monitor_var") and hasattr(self, "tray_var"):
+            if hasattr(self, "region_label"):
+                self._update_region_label()
             self._schedule_settings_save()
 
     def _on_volume_change(self, _value):
@@ -1995,14 +2684,43 @@ class AlertWatcherFrame(ttk.Frame):
             self.target_window_combo["values"] = visible_window_titles()
         except Exception as exc:
             self._append_log(f"Could not list windows: {exc}")
+        self._refresh_monitor_choices()
 
     def _setup_hotkeys(self):
         if not HAVE_KEYBOARD:
             return
-        for hotkey, callback in (
-            (self.settings.start_stop_hotkey, self._toggle_watching_from_hotkey),
-            (self.settings.test_alert_hotkey, self._test_alert_from_hotkey),
-        ):
+        from .hotkeys import find_hotkey_conflicts
+
+        bindings = (
+            (
+                "Icon Alerts start/stop",
+                self.settings.start_stop_hotkey,
+                self._toggle_watching_from_hotkey,
+            ),
+            (
+                "Icon Alerts test alert",
+                self.settings.test_alert_hotkey,
+                self._test_alert_from_hotkey,
+            ),
+        )
+        blocked_labels = set()
+        try:
+            conflicts = find_hotkey_conflicts(
+                (label, hotkey) for label, hotkey, _callback in bindings
+            )
+        except ValueError as exc:
+            self._append_log(f"Could not validate alert hotkeys: {exc}")
+        else:
+            for first, second in conflicts:
+                blocked_labels.add(second)
+                self._append_log(
+                    f"Hotkey conflict: {second} duplicates {first}; "
+                    f"{second} was not registered."
+                )
+
+        for label, hotkey, callback in bindings:
+            if label in blocked_labels:
+                continue
             try:
                 handle = keyboard.add_hotkey(hotkey, callback)
                 self.hotkey_handles.append(handle)
@@ -2021,12 +2739,18 @@ class AlertWatcherFrame(ttk.Frame):
         self.hotkey_handles = []
 
     def _toggle_watching_from_hotkey(self):
+        if getattr(self, "_shutting_down", False):
+            return
         self.event_queue.put({"type": "ui_command", "command": "toggle"})
 
     def _test_alert_from_hotkey(self):
+        if getattr(self, "_shutting_down", False):
+            return
         self.event_queue.put({"type": "ui_command", "command": "test_alert"})
 
     def _toggle_watching(self):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.watcher and self.watcher.is_alive():
             self._stop_watching()
         else:
@@ -2063,14 +2787,46 @@ class AlertWatcherFrame(ttk.Frame):
             ),
             pystray.MenuItem("Quit", quit_app),
         )
-        self.tray_icon = pystray.Icon(
+        icon = pystray.Icon(
             "Icon Alert Watcher",
             self._make_tray_image(),
             "Icon Alert Watcher",
             menu,
         )
-        self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
-        self.tray_thread.start()
+        self.tray_icon = icon
+
+        def run_tray():
+            error = None
+            try:
+                icon.run()
+            except Exception as exc:
+                error = str(exc)
+            finally:
+                self.event_queue.put(
+                    {
+                        "type": "tray_unavailable",
+                        "icon": icon,
+                        "error": error,
+                    }
+                )
+
+        tray_thread = threading.Thread(
+            target=run_tray,
+            name="icon-alert-tray",
+            daemon=True,
+        )
+        self.tray_thread = tray_thread
+        try:
+            tray_thread.start()
+        except Exception as exc:
+            self.tray_icon = None
+            self.tray_thread = None
+            self.tray_var.set(False)
+            self._append_log(f"System tray could not start: {exc}")
+
+    def _tray_is_alive(self):
+        thread = self.tray_thread
+        return self.tray_icon is not None and thread is not None and thread.is_alive()
 
     def _show_from_tray(self):
         self.deiconify()
@@ -2081,12 +2837,21 @@ class AlertWatcherFrame(ttk.Frame):
         self._request_app_quit()
 
     def _cleanup_tray(self):
-        if self.tray_icon is not None:
+        icon = self.tray_icon
+        tray_thread = self.tray_thread
+        self.tray_icon = None
+        self.tray_thread = None
+        if icon is not None:
             try:
-                self.tray_icon.stop()
+                icon.stop()
             except Exception:
                 pass
-            self.tray_icon = None
+        if (
+            tray_thread is not None
+            and tray_thread is not threading.current_thread()
+            and tray_thread.is_alive()
+        ):
+            tray_thread.join(timeout=0.5)
 
     # ---------------- template list helpers ----------------
     def _refresh_list(self, selected_tid=None):
@@ -2111,9 +2876,19 @@ class AlertWatcherFrame(ttk.Frame):
             index = self._id_order.index(selected_tid)
             self.listbox.selection_set(index)
             self.listbox.see(index)
-        elif not self._id_order and hasattr(self, "detect_enabled_check"):
-            self.detect_enabled_var.set(False)
-            self.detect_enabled_check.config(state="disabled")
+        elif hasattr(self, "detect_enabled_check"):
+            self._clear_selected_icon_controls()
+
+    def _clear_selected_icon_controls(self):
+        self.detect_enabled_var.set(False)
+        self.detect_enabled_check.config(state="disabled")
+        self.match_mode_combo.config(state="disabled")
+        self.thresh_scale.config(state="disabled")
+        self.thresh_var.set(DEFAULT_THRESHOLD)
+        self.thresh_label.config(text=f"{DEFAULT_THRESHOLD:.2f}")
+        self.icon_region_label.config(text="Icon region: global")
+        self.preview_label.configure(image="", text="Select an icon")
+        self.preview_label.image = None
 
     def _selected_id(self):
         sel = self.listbox.curselection()
@@ -2130,6 +2905,8 @@ class AlertWatcherFrame(ttk.Frame):
             return
         self.detect_enabled_var.set(entry.get("enabled", True))
         self.detect_enabled_check.config(state="normal")
+        self.match_mode_combo.config(state="readonly")
+        self.thresh_scale.config(state="normal")
         self.thresh_var.set(entry["threshold"])
         self.thresh_label.config(text=f"{entry['threshold']:.2f}")
         match_mode = entry.get("match_mode", LEGACY_MATCH_MODE)
@@ -2183,7 +2960,7 @@ class AlertWatcherFrame(ttk.Frame):
         img = Image.fromarray(rgb)
         img.thumbnail((120, 120))
         tk_img = ImageTk.PhotoImage(img)
-        self.preview_label.configure(image=tk_img)
+        self.preview_label.configure(image=tk_img, text="")
         self.preview_label.image = tk_img
 
     def _on_threshold_change(self, _value):
@@ -2275,28 +3052,41 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _on_region_picked(self, image_bgr, abs_box):
         self.deiconify()
+        reference_size, reference_space = self._reference_context_for_capture(abs_box)
         self._prompt_name_and_add(
             image_bgr,
-            template_reference_size=self._reference_size_for_capture(abs_box),
+            template_reference_size=reference_size,
+            template_reference_space=reference_space,
         )
 
     def _reference_size_for_capture(self, abs_box):
+        return self._reference_context_for_capture(abs_box)[0]
+
+    def _reference_context_for_capture(self, abs_box):
         title = self.target_window_var.get().strip()
         if title:
             rect = find_window_rect(title)
             if rect:
-                return rect[2], rect[3]
+                return (rect[2], rect[3]), "window"
         try:
             with mss.MSS() as capture:
                 index = monitor_index_for_rect(capture.monitors, abs_box)
                 if index is not None:
                     monitor = capture.monitors[index]
-                    return int(monitor["width"]), int(monitor["height"])
+                    return (
+                        (int(monitor["width"]), int(monitor["height"])),
+                        "monitor",
+                    )
         except Exception:
             pass
-        return None
+        return None, None
 
-    def _prompt_name_and_add(self, image_bgr, template_reference_size=None):
+    def _prompt_name_and_add(
+        self,
+        image_bgr,
+        template_reference_size=None,
+        template_reference_space=None,
+    ):
         name = simpledialog.askstring(
             "Name this icon", "Give this icon a short name:", parent=self
         )
@@ -2312,6 +3102,7 @@ class AlertWatcherFrame(ttk.Frame):
                 name,
                 DEFAULT_THRESHOLD,
                 template_reference_size=template_reference_size,
+                template_reference_space=template_reference_space,
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Could not add icon", str(exc), parent=self)
@@ -2342,17 +3133,32 @@ class AlertWatcherFrame(ttk.Frame):
             window_rect = find_window_rect(title)
             if not window_rect:
                 raise ValueError(f"No visible window title contains: {title}")
+            if not self._rect_contains(window_rect, abs_box):
+                raise ValueError(
+                    "Keep the selected region completely inside the target window."
+                )
             return {
                 "region": relative_region_from_window(abs_box, window_rect),
                 "region_mode": "window",
                 "region_ratio": proportional_region_from_window(abs_box, window_rect),
                 "region_window_size": (window_rect[2], window_rect[3]),
+                "monitor_index": None,
             }
         with mss.MSS() as capture:
-            index = monitor_index_for_rect(capture.monitors, abs_box)
-            if index is None:
+            indices = monitor_indices_for_rect(capture.monitors, abs_box)
+            if not indices:
                 raise ValueError("The selected region is outside every monitor.")
+            if len(indices) != 1:
+                raise ValueError(
+                    "Keep the selected region completely inside one monitor."
+                )
+            index = indices[0]
             selected_monitor = monitor_rect(capture.monitors[index])
+            selected_monitor_unique_id = _monitor_unique_id(capture.monitors[index])
+            if not self._rect_contains(selected_monitor, abs_box):
+                raise ValueError(
+                    "Keep the selected region completely inside one monitor."
+                )
         return {
             "region": relative_region_from_window(abs_box, selected_monitor),
             "region_mode": "monitor",
@@ -2364,7 +3170,26 @@ class AlertWatcherFrame(ttk.Frame):
                 selected_monitor[2],
                 selected_monitor[3],
             ),
+            "monitor_index": index,
+            "monitor_unique_id": selected_monitor_unique_id,
         }
+
+    @staticmethod
+    def _rect_contains(container, candidate):
+        left, top, width, height = (int(value) for value in container)
+        child_left, child_top, child_width, child_height = (
+            int(value) for value in candidate
+        )
+        return (
+            width > 0
+            and height > 0
+            and child_width > 0
+            and child_height > 0
+            and child_left >= left
+            and child_top >= top
+            and child_left + child_width <= left + width
+            and child_top + child_height <= top + height
+        )
 
     def _set_selected_icon_region(self):
         tid = self._selected_id()
@@ -2393,6 +3218,8 @@ class AlertWatcherFrame(ttk.Frame):
                 meta["region_mode"],
                 meta["region_ratio"],
                 meta["region_window_size"],
+                monitor_index=meta.get("monitor_index"),
+                monitor_unique_id=meta.get("monitor_unique_id"),
             )
         except (OSError, TypeError, ValueError) as exc:
             messagebox.showerror("Could not save icon region", str(exc), parent=self)
@@ -2429,8 +3256,18 @@ class AlertWatcherFrame(ttk.Frame):
             )
             if target_index is not None:
                 mon = sct.monitors[target_index]
-            elif monitor_filter is not None and monitor_filter < len(sct.monitors):
-                mon = sct.monitors[monitor_filter]
+            elif monitor_filter is not None:
+                selected = _resolve_monitor_binding(
+                    sct.monitors,
+                    monitor_filter,
+                    getattr(self, "monitor_unique_id", None),
+                )
+                if selected is None:
+                    raise ValueError(
+                        f"Monitor {monitor_filter} is unavailable or no longer "
+                        "matches the saved display."
+                    )
+                mon = selected[1]
             elif screenshot_size is not None:
                 width, height = screenshot_size
                 matching = [
@@ -2443,6 +3280,47 @@ class AlertWatcherFrame(ttk.Frame):
             else:
                 mon = sct.monitors[0]
         return (mon["left"], mon["top"], mon["width"], mon["height"])
+
+    def _entry_monitor_box(self, entry):
+        saved_unique_id = entry.get("monitor_unique_id")
+        saved_index = entry.get("monitor_index")
+        if saved_unique_id is None and saved_index is None:
+            return self._selected_monitor_box()
+        with mss.MSS() as capture:
+            monitors = capture.monitors
+            if saved_unique_id is not None:
+                unique_ids_available = False
+                for monitor in monitors[1:]:
+                    current_unique_id = _monitor_unique_id(monitor)
+                    unique_ids_available = (
+                        unique_ids_available or current_unique_id is not None
+                    )
+                    if current_unique_id == str(saved_unique_id):
+                        return monitor_rect(monitor)
+                if unique_ids_available:
+                    # The backend can identify displays and the saved display
+                    # is absent. Falling back to its old ordinal could redirect
+                    # this icon to a different physical monitor.
+                    return None
+            if (
+                isinstance(saved_index, int)
+                and not isinstance(saved_index, bool)
+                and 0 < saved_index < len(monitors)
+            ):
+                return monitor_rect(monitors[saved_index])
+        return None
+
+    @staticmethod
+    def _monitor_identity_for_box(box):
+        normalized_box = tuple(int(value) for value in box)
+        try:
+            with mss.MSS() as capture:
+                for index, monitor in enumerate(capture.monitors[1:], start=1):
+                    if monitor_rect(monitor) == normalized_box:
+                        return index, _monitor_unique_id(monitor)
+        except Exception:
+            pass
+        return None, None
 
     def _resolve_global_scan_region_for_display(self):
         title = self.target_window_var.get().strip()
@@ -2481,12 +3359,21 @@ class AlertWatcherFrame(ttk.Frame):
             return
         try:
             global_region = self._resolve_global_scan_region_for_display()
+            monitor_box = (
+                self._entry_monitor_box(entry)
+                if entry.get("region_mode") == "monitor"
+                else self._selected_monitor_box()
+            )
+            if entry.get("region_mode") == "monitor" and monitor_box is None:
+                raise ValueError(
+                    "The monitor saved for this icon is currently unavailable."
+                )
             region = resolve_item_absolute_region(
                 entry,
                 global_region,
                 self.target_window_var.get().strip(),
                 find_window_rect,
-                self._selected_monitor_box(),
+                monitor_box,
             )
             if region is REGION_UNAVAILABLE:
                 raise ValueError(
@@ -2515,6 +3402,13 @@ class AlertWatcherFrame(ttk.Frame):
         self.scan_region_mode = meta["region_mode"]
         self.scan_region_ratio = meta["region_ratio"]
         self.scan_region_window_size = meta["region_window_size"]
+        monitor_index = meta.get("monitor_index")
+        if monitor_index is not None:
+            # A monitor-relative box is meaningful only on the monitor it was
+            # picked from.  Keep the scan source and saved coordinates bound
+            # together instead of silently applying them to the old dropdown.
+            self.monitor_unique_id = meta.get("monitor_unique_id")
+            self.monitor_var.set(f"Monitor {monitor_index}")
         self._update_region_label()
         x, y, w, h = self.scan_region
         scope = {
@@ -2536,13 +3430,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._save_settings()
 
     def _selected_monitor_filter(self):
-        value = self.monitor_var.get()
-        if value == "All monitors":
-            return None
-        try:
-            return int(value.split()[-1])
-        except (ValueError, IndexError):
-            return None
+        return self._monitor_index_from_choice(self.monitor_var.get())
 
     def _cooldown_seconds(self):
         try:
@@ -2564,6 +3452,19 @@ class AlertWatcherFrame(ttk.Frame):
 
     # ---------------- monitoring control ----------------
     def _start_watching(self):
+        if getattr(self, "_shutting_down", False):
+            return
+        settings_load_errors = getattr(self, "_settings_load_errors", ())
+        if settings_load_errors:
+            messagebox.showerror(
+                "Invalid alert settings",
+                "Monitoring was not started because the alert settings file "
+                "contains unknown or malformed fields:\n\n"
+                + "\n".join(settings_load_errors),
+                parent=self,
+            )
+            return
+        self._refresh_monitor_choices()
         items = self.tm.snapshot()
         if not items:
             messagebox.showinfo("No icons", "Add at least one icon to watch first.")
@@ -2586,6 +3487,7 @@ class AlertWatcherFrame(ttk.Frame):
             self.event_queue,
             self.log_queue,
             monitor_filter=self._selected_monitor_filter(),
+            monitor_unique_id=getattr(self, "monitor_unique_id", None),
             scan_region=self.scan_region,
             scan_region_mode=self.scan_region_mode,
             scan_region_ratio=self.scan_region_ratio,
@@ -2651,6 +3553,8 @@ class AlertWatcherFrame(ttk.Frame):
             self._finish_app_quit()
 
     def _test_alert(self):
+        if getattr(self, "_shutting_down", False):
+            return
         tid = self._selected_id()
         entry = self.tm.get(tid) if tid is not None else None
         name = entry["name"] if entry else "Test"
@@ -2660,9 +3564,17 @@ class AlertWatcherFrame(ttk.Frame):
             thumb = Image.fromarray(rgb)
             thumb.thumbnail((64, 64))
         play_alert_sound(self._alert_volume())
-        AlertPopup(self, name, monitor="-", thumb_img=thumb)
+        AlertPopup(
+            self,
+            name,
+            monitor="-",
+            thumb_img=thumb,
+            animations_enabled=self.ui_preferences.animations_enabled,
+        )
 
     def _test_screenshot(self):
+        if getattr(self, "_shutting_down", False):
+            return
         if self._screenshot_test_running:
             self._append_log("A screenshot test is already running.")
             return
@@ -2694,6 +3606,9 @@ class AlertWatcherFrame(ttk.Frame):
                 target_rect=target_rect,
                 screenshot_size=screenshot_size,
             )
+            screenshot_monitor_index, screenshot_monitor_unique_id = (
+                self._monitor_identity_for_box(monitor_box)
+            )
         except Exception as exc:
             messagebox.showerror("Could not resolve scan region", str(exc), parent=self)
             return
@@ -2703,23 +3618,16 @@ class AlertWatcherFrame(ttk.Frame):
             monitor_box[3],
         )
         if target_rect:
-            current_size = (target_rect[2], target_rect[3])
-        elif is_full_monitor_screenshot or self._selected_monitor_filter() is not None:
-            current_size = (monitor_box[2], monitor_box[3])
+            current_window_size = (target_rect[2], target_rect[3])
+        else:
+            current_window_size = None
+        if is_full_monitor_screenshot or self._selected_monitor_filter() is not None:
+            current_monitor_size = (monitor_box[2], monitor_box[3])
         else:
             # A crop plus "All monitors" does not contain enough information
             # to identify its source resolution. Legacy scales are safer than
             # treating the virtual desktop as one enormous monitor.
-            current_size = None
-        template_items = [
-            item
-            for item in self.tm.snapshot(
-                use_grayscale=use_grayscale,
-                current_window_size=current_size,
-                enabled_only=True,
-            )
-            if item.get("enabled", True)
-        ]
+            current_monitor_size = None
         if is_full_monitor_screenshot:
             test_region = global_region
             origin = (monitor_box[0], monitor_box[1])
@@ -2736,6 +3644,19 @@ class AlertWatcherFrame(ttk.Frame):
 
         def _worker():
             try:
+                # Variant generation can be expensive for uncached templates
+                # and resolutions.  Keep it off Tk's event thread together
+                # with the actual screenshot matching.
+                template_items = [
+                    item
+                    for item in self.tm.snapshot(
+                        use_grayscale=use_grayscale,
+                        current_window_size=current_window_size,
+                        current_monitor_size=current_monitor_size,
+                        enabled_only=True,
+                    )
+                    if item.get("enabled", True)
+                ]
                 results = test_detection_on_screenshot(
                     path,
                     template_items,
@@ -2744,6 +3665,8 @@ class AlertWatcherFrame(ttk.Frame):
                     region_origin=origin,
                     target_window_title=target_window_title,
                     monitor_box=monitor_box,
+                    monitor_index=screenshot_monitor_index,
+                    monitor_unique_id=screenshot_monitor_unique_id,
                     apply_saved_regions=is_full_monitor_screenshot,
                 )
                 event = {"type": "screenshot_test_complete", "results": results}
@@ -2751,7 +3674,18 @@ class AlertWatcherFrame(ttk.Frame):
                 event = {"type": "screenshot_test_error", "error": str(exc)}
             self.event_queue.put(event)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        try:
+            worker = threading.Thread(target=_worker, daemon=True)
+            worker.start()
+        except Exception as exc:
+            self._screenshot_test_running = False
+            self.test_screenshot_btn.config(state="normal", text="Test screenshot")
+            self._append_log(f"Could not start screenshot test: {exc}")
+            messagebox.showerror(
+                "Screenshot test failed",
+                f"Could not start the background worker:\n{exc}",
+                parent=self,
+            )
 
     # ---------------- queue polling ----------------
     def _append_log(self, msg):
@@ -2771,6 +3705,8 @@ class AlertWatcherFrame(ttk.Frame):
         for ev in _drain_queue(self.event_queue):
             event_type = ev.get("type")
             if event_type == "ui_command":
+                if getattr(self, "_shutting_down", False):
+                    continue
                 command = ev.get("command")
                 callbacks = {
                     "show": self._show_from_tray,
@@ -2781,6 +3717,28 @@ class AlertWatcherFrame(ttk.Frame):
                 callback = callbacks.get(command)
                 if callback is not None:
                     callback()
+                continue
+            if event_type == "tray_unavailable":
+                if ev.get("icon") is not self.tray_icon:
+                    continue
+                self.tray_icon = None
+                self.tray_thread = None
+                if self.embedded or self._shutting_down:
+                    continue
+                was_enabled = bool(self.tray_var.get())
+                self.tray_var.set(False)
+                self.deiconify()
+                self._lift_window()
+                error = ev.get("error")
+                detail = f": {error}" if error else ""
+                self._append_log(f"System tray stopped unexpectedly{detail}")
+                if was_enabled:
+                    messagebox.showwarning(
+                        "System tray unavailable",
+                        "The system tray stopped, so the alert window was restored "
+                        "instead of remaining hidden.",
+                        parent=self,
+                    )
                 continue
             if event_type in ("watcher_error", "watcher_stopped"):
                 if ev.get("watcher") not in (None, self.watcher):
@@ -2802,6 +3760,8 @@ class AlertWatcherFrame(ttk.Frame):
                 self._watcher_finished(ev.get("watcher"))
                 continue
             if event_type == "screenshot_test_error":
+                if getattr(self, "_shutting_down", False):
+                    continue
                 self._screenshot_test_running = False
                 self.test_screenshot_btn.config(state="normal", text="Test screenshot")
                 messagebox.showerror(
@@ -2809,6 +3769,8 @@ class AlertWatcherFrame(ttk.Frame):
                 )
                 continue
             if event_type == "screenshot_test_complete":
+                if getattr(self, "_shutting_down", False):
+                    continue
                 self._screenshot_test_running = False
                 self.test_screenshot_btn.config(state="normal", text="Test screenshot")
                 lines = [
@@ -2823,6 +3785,8 @@ class AlertWatcherFrame(ttk.Frame):
                 )
                 self._append_log("Screenshot test: " + "; ".join(lines))
                 continue
+            if getattr(self, "_shutting_down", False):
+                continue
             entry = self.tm.get(ev["id"])
             thumb = None
             if entry is not None:
@@ -2830,7 +3794,13 @@ class AlertWatcherFrame(ttk.Frame):
                 thumb = Image.fromarray(rgb)
                 thumb.thumbnail((64, 64))
             play_alert_sound(self._alert_volume())
-            AlertPopup(self, ev["name"], ev["monitor"], thumb)
+            AlertPopup(
+                self,
+                ev["name"],
+                ev["monitor"],
+                thumb,
+                animations_enabled=self.ui_preferences.animations_enabled,
+            )
             self._append_log(
                 f"ALERT: '{ev['name']}' seen on monitor {ev['monitor']} (score {ev['score']:.2f})"
             )
@@ -2874,8 +3844,19 @@ class AlertWatcherFrame(ttk.Frame):
             self._flush_template_save()
         self._save_settings()
         if not self.embedded and self.tray_var.get() and HAVE_PYSTRAY:
-            self.withdraw()
-            self._append_log("Window hidden to system tray.")
+            if self._tray_is_alive():
+                self.withdraw()
+                self._append_log("Window hidden to system tray.")
+                return
+            self.tray_var.set(False)
+            self._append_log(
+                "System tray is unavailable; keeping the alert window visible."
+            )
+            messagebox.showwarning(
+                "System tray unavailable",
+                "The system tray is not running, so the alert window was not hidden.",
+                parent=self,
+            )
             return
         if not self.embedded:
             self._request_app_quit()
@@ -2897,17 +3878,33 @@ class App(tk.Tk):
         self.content.on_close()
 
 
-if __name__ == "__main__":
+def main():
+    """Run the standalone Icon Alert application."""
     instance_lock = SingleInstanceLock()
-    if not instance_lock.acquire():
+    try:
+        acquired = instance_lock.acquire()
+    except Exception as exc:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Icon Alert Watcher could not start",
+            "The application could not acquire its single-instance lock. "
+            "No second copy was started.\n\n"
+            f"{type(exc).__name__}: {exc}",
+            parent=root,
+        )
+        root.destroy()
+        return 1
+    if not acquired:
         root = tk.Tk()
         root.withdraw()
         messagebox.showwarning(
             "Icon Alert Watcher already running",
             "Another copy of Icon Alert Watcher is already running.",
+            parent=root,
         )
         root.destroy()
-        sys.exit(1)
+        return 1
 
     try:
         app = App()
@@ -2915,3 +3912,8 @@ if __name__ == "__main__":
         app.mainloop()
     finally:
         instance_lock.release()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

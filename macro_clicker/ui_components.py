@@ -506,10 +506,18 @@ def configure_theme(root):
 
 
 class CollapsibleSection(ttk.Frame):
-    def __init__(self, parent, title, expanded=False, style="Surface.TFrame"):
+    def __init__(
+        self,
+        parent,
+        title,
+        expanded=False,
+        style="Surface.TFrame",
+        on_toggle=None,
+    ):
         super().__init__(parent, style=style)
         self.title = title
         self.expanded = bool(expanded)
+        self.on_toggle = on_toggle
         self.columnconfigure(0, weight=1)
         self.toggle_button = ttk.Button(
             self,
@@ -531,6 +539,8 @@ class CollapsibleSection(ttk.Frame):
     def toggle(self):
         self.expanded = not self.expanded
         self._render()
+        if self.on_toggle is not None:
+            self.on_toggle()
 
     def set_expanded(self, expanded):
         self.expanded = bool(expanded)

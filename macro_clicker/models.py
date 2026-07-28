@@ -14,12 +14,14 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from difflib import get_close_matches
 from typing import List, Optional
 
 import keyboard
 
 from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
+from .hotkeys import canonical_hotkey, hotkeys_conflict
 from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
 
@@ -174,6 +176,27 @@ def _require_dict(value, label):
     return value
 
 
+def _reject_unknown_fields(value, model_type, label):
+    """Reject misspelled JSON keys before defaults can change their meaning."""
+
+    allowed = {item.name for item in fields(model_type)}
+    unknown = [key for key in value if key not in allowed]
+    if not unknown:
+        return
+
+    descriptions = []
+    choices = sorted(allowed)
+    for key in sorted(unknown, key=lambda item: str(item).casefold()):
+        description = repr(key)
+        if isinstance(key, str):
+            suggestion = get_close_matches(key, choices, n=1, cutoff=0.6)
+            if suggestion:
+                description += f" (did you mean {suggestion[0]!r}?)"
+        descriptions.append(description)
+    noun = "field" if len(descriptions) == 1 else "fields"
+    raise ValueError(f"{label} has unknown {noun}: {', '.join(descriptions)}")
+
+
 def _require_list(value, label):
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a JSON array")
@@ -282,6 +305,7 @@ class ImageCondition:
     @staticmethod
     def from_dict(d):
         d = _require_dict(d, "condition")
+        _reject_unknown_fields(d, ImageCondition, "condition")
         condition_type = str(d.get("condition_type", "template") or "template")
         if condition_type != "template":
             raise ValueError(f"unsupported condition type: {condition_type!r}")
@@ -442,6 +466,7 @@ class Action:
     @staticmethod
     def from_dict(d):
         d = _require_dict(d, "action")
+        _reject_unknown_fields(d, Action, "action")
         a = Action()
         a.type = str(d.get("type", a.type) or a.type)
         if a.type not in ACTION_TYPES:
@@ -674,6 +699,7 @@ class Step:
     @staticmethod
     def from_dict(d):
         d = _require_dict(d, "step")
+        _reject_unknown_fields(d, Step, "step")
         raw_conditions = _require_list(d.get("conditions", []), "step conditions")
         raw_actions = _require_list(d.get("actions", []), "step actions")
         condition_operator = str(d.get("condition_operator", "AND") or "AND").upper()
@@ -722,6 +748,7 @@ class Scenario:
     @staticmethod
     def from_dict(d):
         d = _require_dict(d, "scenario")
+        _reject_unknown_fields(d, Scenario, "scenario")
         raw_steps = _require_list(d.get("steps", []), "scenario steps")
         steps = [Step.from_dict(s) for s in raw_steps]
         poll_interval = _float_value(d.get("poll_interval"), 0.25)
@@ -853,19 +880,19 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("start_hotkey cannot be blank")
     if not isinstance(scenario.kill_switch, str) or not scenario.kill_switch.strip():
         raise ValueError("kill_switch cannot be blank")
-    if (
-        scenario.start_hotkey.strip().casefold()
-        == scenario.kill_switch.strip().casefold()
-    ):
-        raise ValueError("start_hotkey and kill_switch must use different keys")
     for label, hotkey in (
         ("start_hotkey", scenario.start_hotkey),
         ("kill_switch", scenario.kill_switch),
     ):
         try:
-            keyboard.parse_hotkey(hotkey.strip())
+            canonical_hotkey(hotkey)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{label} is invalid: {exc}") from exc
+    if hotkeys_conflict(scenario.start_hotkey, scenario.kill_switch):
+        raise ValueError(
+            "start_hotkey and kill_switch must not use overlapping physical "
+            "key sequences; aliases and reordered modifiers count as the same keys"
+        )
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")
     if not isinstance(scenario.diagnostics_enabled, bool):
@@ -1168,6 +1195,12 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     raise ValueError(
                         f"{prefix} has invalid {field_name}={condition_index}; "
                         f"the step has {condition_count} condition(s)"
+                    )
+                if step.conditions[condition_index].negate:
+                    raise ValueError(
+                        f"{prefix} {field_name} references negated condition "
+                        f"#{condition_index + 1}; negated conditions cannot be "
+                        "used as action targets"
                     )
             if action.type == "click_matching_row":
                 if (

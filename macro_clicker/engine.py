@@ -33,6 +33,7 @@ from .detection_core import (
     prepare_template_variants,
     resolution_scale_pairs,
     resize_template,
+    resize_template_xy,
 )
 from .diagnostics import get_diagnostic_collector
 from .level_ocr import LevelOcrReader
@@ -53,6 +54,7 @@ from .rally_matching import (
 )
 from .window_locator import (
     find_window_rect,
+    is_window_foreground,
     resolve_saved_capture_region,
 )
 
@@ -81,6 +83,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_level_diagnostics = {}
         self._matching_row_snapshot = None
         self._pending_rally_level = None
+        self._pending_rally_team_selected: Optional[dict[str, object]] = None
         self._last_rally_team_busy_state: Optional[tuple[bool, bool, Optional[int]]] = (
             None
         )
@@ -97,6 +100,7 @@ class MacroEngine(RallyMatchingMixin):
         self._monitor_bounds_warning_logged = False
         self._monitor_bounds_validation_failed = False
         self._window_rect_provider = find_window_rect
+        self._foreground_window_provider = is_window_foreground
         self._window_rect_lookup_cache: Optional[dict] = None
         self.sct = mss.MSS()
         self._sct_closed = False
@@ -109,6 +113,9 @@ class MacroEngine(RallyMatchingMixin):
         self.perf_log_interval = 10.0
         self.capture_retry_attempts = 3
         self.capture_retry_backoff = 0.05
+        self.foreground_warning_interval = 2.0
+        self._last_foreground_click_warning: Optional[tuple[object, float]] = None
+        self._foreground_click_blocked = False
         self.low_variance_threshold = 1.0
         self.max_matches_per_scale = 128
         self.max_multiscale_candidates = 512
@@ -149,6 +156,7 @@ class MacroEngine(RallyMatchingMixin):
         self._ready_event.clear()
         self._stop_logged = False
         self._pending_rally_level = None
+        self._pending_rally_team_selected = None
         self._last_rally_team_busy_state = None
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
@@ -1241,6 +1249,19 @@ class MacroEngine(RallyMatchingMixin):
     def _run_action(self, step: Step, action: Action, points: dict, matches: dict):
         if self._stop_requested():
             return False
+        if action.type in {"click", "click_matching_row", "select_rally_team", "key"}:
+            scenario = getattr(self, "scenario", None)
+            if (
+                scenario is not None
+                and scenario.target_window_title.strip()
+                and self._get_target_window_rect() is None
+            ):
+                self.log(
+                    f"  [safety] '{step.name}' {action.type} skipped because "
+                    "the target window is unavailable"
+                )
+                self._retry_current_step = True
+                return False
         if action.type == "click":
             geometry_match = None
             if action.x is not None and action.y is not None:
@@ -1409,6 +1430,7 @@ class MacroEngine(RallyMatchingMixin):
                     return clicked or delayed
                 clicked = True
                 self._pending_rally_level = selection.get("level")
+                self._pending_rally_team_selected = None
                 self.log(f"  click matching row ({x}, {y})")
             if clicked and pre_click_delay <= 0.0:
                 # The evidence uses the already-frozen atomic snapshot, so it
@@ -1427,6 +1449,28 @@ class MacroEngine(RallyMatchingMixin):
             return self._run_select_rally_team_action(action, points, matches)
 
         elif action.type == "key":
+            title = self.scenario.target_window_title.strip()
+            foreground_provider = getattr(
+                self,
+                "_foreground_window_provider",
+                is_window_foreground,
+            )
+            if title:
+                try:
+                    target_is_foreground = bool(foreground_provider(title))
+                except Exception as exc:
+                    self.log(
+                        "  [safety] key skipped because foreground-window "
+                        f"validation failed ({type(exc).__name__}: {exc})"
+                    )
+                    target_is_foreground = False
+                if not target_is_foreground:
+                    self.log(
+                        f"  [safety] key '{action.key}' skipped because the "
+                        "target window is not in the foreground"
+                    )
+                    self._retry_current_step = True
+                    return False
             if action.hold > 0:
                 try:
                     if self._stop_requested():
@@ -1463,6 +1507,15 @@ class MacroEngine(RallyMatchingMixin):
         return False
 
     @staticmethod
+    def _action_uses_detection_context(action: Action):
+        """Return whether an action consumes match points from step evaluation."""
+        if action.type == "select_rally_team":
+            return True
+        if action.type != "click":
+            return False
+        return action.x is None and action.y is None
+
+    @staticmethod
     def _scaled_relative_region(anchor, region, scale_x, scale_y):
         anchor_x, anchor_y = anchor
         left, top, width, height = region
@@ -1478,6 +1531,16 @@ class MacroEngine(RallyMatchingMixin):
         if level is None:
             self.log("  [skip] no carried rally level is available for team selection")
             self._retry_current_step = True
+            return False
+        selected_context = getattr(self, "_pending_rally_team_selected", None)
+        if (
+            isinstance(selected_context, dict)
+            and selected_context.get("level") == level
+        ):
+            self.log(
+                f"  resume previously selected Team {selected_context.get('team')} "
+                f"for mob level {level}"
+            )
             return False
 
         anchor_index = action.on_condition_index
@@ -1553,9 +1616,10 @@ class MacroEngine(RallyMatchingMixin):
         selected = None
         for index, candidate in enumerate(candidates):
             idle_template = self._load_template(candidate["template_path"])
-            scaled_template = resize_template(
+            scaled_template = resize_template_xy(
                 idle_template,
-                template_scale,
+                scale_x,
+                scale_y,
                 cache=self._scaled_template_cache,
             )
             region = candidate["region"]
@@ -1581,6 +1645,8 @@ class MacroEngine(RallyMatchingMixin):
                     ),
                     "score": float(score),
                     "scale": template_scale,
+                    "scale_x": scale_x,
+                    "scale_y": scale_y,
                 }
             ]
             if score >= action.team_idle_confidence:
@@ -1638,6 +1704,7 @@ class MacroEngine(RallyMatchingMixin):
                     "continuing state cleanup"
                 )
             self._pending_rally_level = None
+            self._pending_rally_team_selected = None
             self._pending_rally_team_availability = None
             self._retry_current_step = False
             self._cleanup_after_abort = True
@@ -1648,6 +1715,10 @@ class MacroEngine(RallyMatchingMixin):
         if self._click_point(click_x, click_y, action.button) is False:
             self._retry_current_step = True
             return False
+        self._pending_rally_team_selected = {
+            "level": level,
+            "team": selected["team"],
+        }
         preferred_team_evaluated = any(
             candidate["team"] == 3 for candidate in evaluated_candidates
         )
@@ -1666,7 +1737,6 @@ class MacroEngine(RallyMatchingMixin):
                 key=f"team:preferred-fallback:{level}",
                 context_snapshot=snapshot,
             )
-        self._pending_rally_level = None
         self.log(
             f"  select idle Team {selected['team']} for mob level {level} "
             f"({score_text})"
@@ -1735,14 +1805,39 @@ class MacroEngine(RallyMatchingMixin):
     def _click_point(self, x, y, button):
         if self._stop_requested():
             return False
+        scenario = getattr(self, "scenario", None)
+        target_title = (
+            scenario.target_window_title.strip() if scenario is not None else ""
+        )
+        if target_title:
+            target_rect = self._get_target_window_rect()
+            if target_rect is None:
+                self.log(
+                    f"  [safety] click ({x}, {y}) skipped because the target "
+                    "window is unavailable"
+                )
+                return False
+            left, top, width, height = target_rect
+            if not (left <= x < left + width and top <= y < top + height):
+                self.log(
+                    f"  [safety] click ({x}, {y}) skipped because it is outside "
+                    "the target window"
+                )
+                return False
         if not self._point_is_on_a_monitor(x, y):
             if not getattr(self, "_monitor_bounds_validation_failed", False):
                 self.log(f"  [skip] click point ({x}, {y}) is outside every monitor")
+            return False
+        if target_title and not self._target_is_foreground_for_click(target_title):
             return False
         move_duration = getattr(self, "click_move_duration", 0.0)
         if move_duration:
             pyautogui.moveTo(x, y, duration=move_duration)
             if self._stop_requested():
+                return False
+            # Focus can change while the pointer is moving. Validate again at
+            # the final input boundary instead of trusting the earlier check.
+            if target_title and not self._target_is_foreground_for_click(target_title):
                 return False
             pyautogui.click(button=button)
         else:
@@ -1750,6 +1845,50 @@ class MacroEngine(RallyMatchingMixin):
                 return False
             pyautogui.click(x=x, y=y, button=button)
         return True
+
+    def _target_is_foreground_for_click(self, target_title):
+        foreground_provider = getattr(
+            self,
+            "_foreground_window_provider",
+            is_window_foreground,
+        )
+        try:
+            target_is_foreground = bool(foreground_provider(target_title))
+        except Exception as exc:
+            self._foreground_click_blocked = True
+            self._log_foreground_click_warning(
+                ("validation", type(exc).__name__, str(exc)),
+                "  [safety] click skipped because foreground-window "
+                f"validation failed ({type(exc).__name__}: {exc})",
+            )
+            return False
+        if not target_is_foreground:
+            self._foreground_click_blocked = True
+            self._log_foreground_click_warning(
+                ("not-foreground", target_title.casefold()),
+                "  [safety] click skipped because the target window is not "
+                "in the foreground",
+            )
+            return False
+        self._last_foreground_click_warning = None
+        return True
+
+    def _log_foreground_click_warning(self, key, message):
+        now = time.monotonic()
+        interval = max(
+            0.0,
+            float(getattr(self, "foreground_warning_interval", 2.0)),
+        )
+        previous = getattr(self, "_last_foreground_click_warning", None)
+        if (
+            previous is not None
+            and previous[0] == key
+            and now >= previous[1]
+            and now - previous[1] < interval
+        ):
+            return
+        self._last_foreground_click_warning = (key, now)
+        self.log(message)
 
     def _point_is_on_a_monitor(self, x, y):
         sct = getattr(self, "sct", None)
@@ -1811,6 +1950,11 @@ class MacroEngine(RallyMatchingMixin):
         now = time.monotonic()
         cycle_start = time.perf_counter()
         fired_any = False
+        # A matching step whose click is blocked by another foreground window
+        # still needs to retry, but it is not a successful post-fire action.
+        # Keep that retry on the configured poll interval instead of the 30 ms
+        # fast path used after a committed action.
+        self._foreground_click_blocked = False
         steps = self._refresh_step_caches()
         frame_cache = {}
         evaluate_step = self._evaluate_step
@@ -1854,12 +1998,36 @@ class MacroEngine(RallyMatchingMixin):
                 self.log(f"[fire] {step.name}")
                 fired_any = True
                 retry_step = False
+                detection_context_stale = False
                 self._abort_current_step = False
                 self._cleanup_after_abort = False
                 for action_index, action in enumerate(step.actions):
                     if self._stop_requested():
                         return fired_any
                     self._retry_current_step = False
+                    if detection_context_stale and self._action_uses_detection_context(
+                        action
+                    ):
+                        frame_cache.clear()
+                        self._window_rect_lookup_cache = {}
+                        if evaluate_uses_frame_cache:
+                            refreshed_met, refreshed_points, refreshed_matches = (
+                                evaluate_step(step, frame_cache=frame_cache)
+                            )
+                        else:
+                            refreshed_met, refreshed_points, refreshed_matches = (
+                                evaluate_step(step)
+                            )
+                        if not refreshed_met:
+                            self.log(
+                                f"  [skip] '{step.name}' conditions changed before "
+                                f"action #{action_index + 1}"
+                            )
+                            retry_step = True
+                            break
+                        points = refreshed_points
+                        matches = refreshed_matches
+                        detection_context_stale = False
                     snapshot = frame_cache.get(_MATCHING_ROW_SNAPSHOT_KEY)
                     can_reuse_matching_row_evaluation = (
                         action.type == "click_matching_row"
@@ -1880,6 +2048,7 @@ class MacroEngine(RallyMatchingMixin):
                     if invalidates_frame:
                         frame_cache.clear()
                         self._window_rect_lookup_cache = {}
+                        detection_context_stale = True
                     if getattr(self, "_abort_current_step", False):
                         if getattr(self, "_cleanup_after_abort", False):
                             try:
@@ -1902,6 +2071,15 @@ class MacroEngine(RallyMatchingMixin):
                         return fired_any
 
                 if not retry_step:
+                    if any(
+                        action.type == "select_rally_team" for action in step.actions
+                    ):
+                        # Keep the selected mob level through transient
+                        # post-selection misses. It is safe to discard only
+                        # after the complete dispatch/Attack step commits.
+                        self._pending_rally_level = None
+                        self._pending_rally_team_selected = None
+                        self._pending_rally_team_availability = None
                     self._last_fired[step.name] = now
                     if not step.repeatable:
                         step.enabled = False
@@ -1910,7 +2088,7 @@ class MacroEngine(RallyMatchingMixin):
                 self, "slow_cycle_threshold", 0.35
             ) and self._should_log_perf(("cycle",), now):
                 self.log(f"[perf] cycle took {cycle_elapsed:.3f}s")
-            return fired_any
+            return fired_any and not self._foreground_click_blocked
         except _StopRequested:
             return fired_any
         finally:

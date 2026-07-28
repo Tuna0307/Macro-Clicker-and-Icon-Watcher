@@ -17,6 +17,7 @@ rewrite user assets.
 | `rally_matching.py` | Atomic rally snapshots, same-row selection, level OCR decisions, and rally evidence |
 | `detection_core.py` | Shared capture, scaling, template preparation, and match scoring |
 | `models.py` | Scenario dataclasses, JSON conversion, validation, and scenario persistence |
+| `hotkeys.py` | Physical hotkey normalization and cross-feature conflict detection |
 | `level_ocr.py` | OCR engine lifecycle, preprocessing, text extraction, and confidence handling |
 | `diagnostics.py` | Asynchronous bounded evidence and rotating decision metadata |
 | `atomic_io.py` | Crash-safe JSON and PNG replacement |

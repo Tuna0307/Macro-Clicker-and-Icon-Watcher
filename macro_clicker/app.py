@@ -41,6 +41,7 @@ from .editors import (
     schedule_mouse_position_fill as schedule_mouse_position_fill,
     step_dialog,
 )
+from .hotkeys import canonical_hotkey, hotkeys_conflict
 from .log_maintenance import (
     DEFAULT_DEBUG_MAX_AGE_DAYS,
     DEFAULT_DEBUG_MAX_FILES,
@@ -99,6 +100,7 @@ class App:
         self.log_queue = queue.Queue()
         self.control_queue = queue.Queue()
         self._start_hotkey_handle = None
+        self._start_hotkey_registration_token = None
         self.log_dir = LOG_DIR
         self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
         self.log_max_bytes = DEFAULT_MAX_LOG_BYTES
@@ -502,7 +504,8 @@ class App:
             return True
         messagebox.showwarning(
             "Macro running",
-            "Stop the macro before changing, loading, duplicating, or deleting a scenario.",
+            "Stop the macro before changing scenario settings, loading, "
+            "duplicating, or deleting a scenario.",
             parent=self.root,
         )
         return False
@@ -538,7 +541,14 @@ class App:
         try:
             self.target_window_combo["values"] = visible_window_titles()
         except Exception as e:
-            self._log(f"[warn] could not list windows: {e}")
+            message = f"[warn] could not list windows: {e}"
+            if hasattr(self, "log_text"):
+                self._log(message)
+            else:
+                # Initial window enumeration runs before the activity widget
+                # exists. Queue the warning so an optional provider failure
+                # cannot turn into an AttributeError during application startup.
+                self._queue_log(message)
 
     def _on_scenario_selected(self, event=None):
         name = self.scenario_var.get()
@@ -588,6 +598,8 @@ class App:
             self.scenario.diagnostics_enabled = bool(diagnostics_var.get())
 
     def _open_scenario_settings(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         win = tk.Toplevel(self.root)
         win.title("Scenario settings")
         win.transient(self.root)
@@ -660,6 +672,10 @@ class App:
         buttons.grid(row=10, column=0, columnspan=2, sticky="e", pady=(20, 0))
 
         def save_settings():
+            # Recheck in case a non-UI caller started the engine while this
+            # modal dialog was open.
+            if not self._require_stopped_for_scenario_change():
+                return
             try:
                 poll = float(poll_var.get())
                 monitor = int(monitor_var.get())
@@ -684,22 +700,27 @@ class App:
                 return
             start_key = start_var.get().strip() or START_MACRO_HOTKEY
             stop_key = kill_var.get().strip() or "f12"
-            if start_key.casefold() == stop_key.casefold():
-                messagebox.showerror(
-                    "Invalid settings",
-                    "Start key and Stop key must be different.",
-                    parent=win,
-                )
-                return
             try:
-                keyboard.parse_hotkey(start_key)
-                keyboard.parse_hotkey(stop_key)
+                canonical_hotkey(start_key)
+                canonical_hotkey(stop_key)
             except (ValueError, TypeError) as exc:
                 messagebox.showerror(
                     "Invalid settings",
                     f"Start key or Stop key is invalid: {exc}",
                     parent=win,
                 )
+                return
+            if hotkeys_conflict(start_key, stop_key):
+                messagebox.showerror(
+                    "Invalid settings",
+                    "Start key and Stop key must not use overlapping physical "
+                    "key sequences.",
+                    parent=win,
+                )
+                return
+            conflict = self._macro_alert_hotkey_conflict(start_key, stop_key)
+            if conflict:
+                messagebox.showerror("Hotkey conflict", conflict, parent=win)
                 return
             try:
                 _monitor_box(monitor)
@@ -1261,10 +1282,27 @@ class App:
         win = tk.Toplevel(self.root)
         win.title(f"Test Step - {step.name}")
         win.geometry("900x700")
+        body = tk.Frame(win)
+        body.pack(fill="both", expand=True)
+        canvas = tk.Canvas(body, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        content = tk.Frame(canvas)
+        content_window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        content.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(content_window, width=event.width),
+        )
 
         summary = "MATCH" if preview["met"] else "NO MATCH"
         tk.Label(
-            win,
+            content,
             text=f"{summary}: {len(preview['matches'])} detection(s)",
             font=("Segoe UI", 11, "bold"),
             fg="#2e7d32" if preview["met"] else "#c62828",
@@ -1272,11 +1310,11 @@ class App:
 
         previews = preview.get("condition_previews") or []
         if not previews:
-            tk.Label(win, text="No screenshot available.").pack(
+            tk.Label(content, text="No screenshot available.").pack(
                 anchor="w", padx=8, pady=4
             )
         else:
-            images_frame = tk.Frame(win)
+            images_frame = tk.Frame(content)
             images_frame.pack(fill="x", padx=8, pady=4)
             image_refs = []
 
@@ -1327,8 +1365,8 @@ class App:
                 img_label.pack(anchor="w", pady=2)
             win._preview_image_refs = image_refs
 
-        details = tk.Text(win, height=6, state="normal")
-        details.pack(fill="both", expand=True, padx=8, pady=8)
+        details = tk.Text(content, height=8, state="normal")
+        details.pack(fill="x", padx=8, pady=8)
         if preview["matches"]:
             for match in preview["matches"]:
                 details.insert(
@@ -1381,6 +1419,12 @@ class App:
         engine = None
         try:
             self._sync_scenario_settings()
+            conflict = self._macro_alert_hotkey_conflict(
+                self.scenario.start_hotkey,
+                self.scenario.kill_switch,
+            )
+            if conflict:
+                raise ValueError(conflict)
             validate_scenario(self.scenario, require_files=True)
             engine = MacroEngine(self.scenario, log=self._queue_log)
             engine.start()
@@ -1429,42 +1473,119 @@ class App:
         return True
 
     def _register_start_hotkey(self):
+        old_handle = getattr(self, "_start_hotkey_handle", None)
+        self._start_hotkey_handle = None
+        self._registered_start_hotkey = None
+        self._start_hotkey_registration_token = None
+        if old_handle is not None:
+            try:
+                keyboard.remove_hotkey(old_handle)
+            except Exception:
+                pass
         scenario = getattr(self, "scenario", None)
         hotkey = (
             self.start_var.get().strip()
             if hasattr(self, "start_var")
             else getattr(scenario, "start_hotkey", START_MACRO_HOTKEY)
         ) or START_MACRO_HOTKEY
+        stop_hotkey = (
+            self.kill_var.get().strip()
+            if hasattr(self, "kill_var")
+            else getattr(scenario, "kill_switch", "f12")
+        ) or "f12"
+        conflict = self._macro_alert_hotkey_conflict(
+            hotkey,
+            stop_hotkey,
+            include_stop=False,
+        )
+        if conflict:
+            self._queue_log(f"[warn] start hotkey was not registered: {conflict}")
+            return False
+        registration_token = object()
         try:
-            new_handle = keyboard.add_hotkey(hotkey, self._request_start_from_hotkey)
+            new_handle = keyboard.add_hotkey(
+                hotkey,
+                lambda token=registration_token: self._request_start_from_hotkey(token),
+            )
         except Exception as exc:
             self._queue_log(
                 f"[warn] could not register start hotkey {hotkey.upper()}: {exc}"
             )
             return False
-        old_handle = getattr(self, "_start_hotkey_handle", None)
         self._start_hotkey_handle = new_handle
         self._registered_start_hotkey = hotkey
-        if old_handle is not None:
-            try:
-                keyboard.remove_hotkey(old_handle)
-            except Exception:
-                pass
+        self._start_hotkey_registration_token = registration_token
         if hasattr(self, "run_tooltip"):
             self.run_tooltip.text = f"Start the selected scenario ({hotkey.upper()})"
         return True
 
-    def _request_start_from_hotkey(self):
-        self.control_queue.put("start")
+    def _macro_alert_hotkey_conflict(
+        self,
+        start_hotkey,
+        stop_hotkey,
+        *,
+        include_stop=True,
+    ):
+        alert_tab = getattr(self, "alert_tab", None)
+        alert_settings = getattr(alert_tab, "settings", None)
+        if alert_settings is None:
+            return None
+        macro_bindings = [("Macro start", start_hotkey)]
+        if include_stop:
+            macro_bindings.append(("Macro stop", stop_hotkey))
+        alert_bindings = (
+            ("Icon Alerts start/stop", alert_settings.start_stop_hotkey),
+            ("Icon Alerts test", alert_settings.test_alert_hotkey),
+        )
+        for macro_label, macro_hotkey in macro_bindings:
+            for alert_label, alert_hotkey in alert_bindings:
+                try:
+                    conflict = hotkeys_conflict(macro_hotkey, alert_hotkey)
+                except (TypeError, ValueError):
+                    # Alert registration reports its own malformed setting.
+                    continue
+                if conflict:
+                    return (
+                        f"{macro_label} and {alert_label} use overlapping physical "
+                        f"key sequences ({macro_hotkey!r} / {alert_hotkey!r}). "
+                        "Choose different hotkeys before running the macro."
+                    )
+        return None
+
+    def _request_start_from_hotkey(self, registration_token=None):
+        current_token = getattr(self, "_start_hotkey_registration_token", None)
+        if registration_token is None:
+            registration_token = current_token
+        if registration_token is None or registration_token is not current_token:
+            return
+        if self._engine_is_active_or_stopping():
+            return
+        # Carry the registration identity through the Tk queue. A callback can
+        # be valid when it runs on the keyboard thread, then become stale
+        # before the UI thread consumes this command after a scenario switch.
+        self.control_queue.put(("start", registration_token))
+
+    def _engine_is_active_or_stopping(self):
+        engine = getattr(self, "engine", None)
+        return bool(
+            getattr(self, "_engine_ui_active", False)
+            or (engine is not None and engine.is_running)
+        )
 
     def _start_engine_from_hotkey(self):
-        if self.engine and self.engine.is_running:
+        # Recheck on the Tk thread. Multiple callbacks may already be queued,
+        # and a queued callback must not restart a run that is still stopping.
+        if self._engine_is_active_or_stopping():
             return
         root = getattr(self, "root", None)
         try:
             if root is not None and root.grab_current() is not None:
+                registered_hotkey = (
+                    getattr(self, "_registered_start_hotkey", None)
+                    or START_MACRO_HOTKEY
+                )
                 self._queue_log(
-                    f"[safety] {getattr(self, '_registered_start_hotkey', START_MACRO_HOTKEY).upper()} "
+                    f"[safety] {registered_hotkey.upper()} "
                     "ignored while a dialog is open"
                 )
                 return
@@ -1473,6 +1594,8 @@ class App:
         self._start_engine()
 
     def _remove_start_hotkey(self):
+        self._start_hotkey_registration_token = None
+        self._registered_start_hotkey = None
         handle = getattr(self, "_start_hotkey_handle", None)
         if handle is None:
             return
@@ -1490,8 +1613,20 @@ class App:
         try:
             while True:
                 command = self.control_queue.get_nowait()
-                if command == "start":
-                    self._start_engine_from_hotkey()
+                if (
+                    isinstance(command, tuple)
+                    and len(command) == 2
+                    and command[0] == "start"
+                ):
+                    registration_token = command[1]
+                    current_token = getattr(
+                        self, "_start_hotkey_registration_token", None
+                    )
+                    if (
+                        registration_token is not None
+                        and registration_token is current_token
+                    ):
+                        self._start_engine_from_hotkey()
                 elif (
                     isinstance(command, tuple)
                     and len(command) == 4
@@ -1613,13 +1748,21 @@ def main():
     if not acquired:
         notice = tk.Tk()
         notice.withdraw()
-        detail = f"\n\nLock error: {lock_error}" if lock_error is not None else ""
-        messagebox.showwarning(
-            "PC Macro Builder already running",
-            "Another copy of PC Macro Builder or Icon Alert Watcher is already running."
-            + detail,
-            parent=notice,
-        )
+        if lock_error is None:
+            messagebox.showwarning(
+                "PC Macro Builder already running",
+                "Another copy of PC Macro Builder or Icon Alert Watcher is "
+                "already running.",
+                parent=notice,
+            )
+        else:
+            messagebox.showerror(
+                "PC Macro Builder could not start",
+                "The application could not acquire its single-instance lock. "
+                "No second copy was started.\n\n"
+                f"{type(lock_error).__name__}: {lock_error}",
+                parent=notice,
+            )
         notice.destroy()
         return 1
 

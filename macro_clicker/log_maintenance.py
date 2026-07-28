@@ -50,7 +50,14 @@ def cleanup_directory(
     files = []
     preserved = {str(name).casefold() for name in (preserve_names or ())}
 
-    for name in os.listdir(path):
+    try:
+        names = os.listdir(path)
+    except OSError:
+        # Cleanup is best-effort and must never prevent the application from
+        # starting when a log directory is temporarily inaccessible.
+        return 0
+
+    for name in names:
         if name.casefold() in preserved:
             continue
         full_path = os.path.join(path, name)

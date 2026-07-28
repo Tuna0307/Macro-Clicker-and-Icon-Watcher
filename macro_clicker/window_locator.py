@@ -21,6 +21,43 @@ def _safe_window_snapshot(win):
     return title, (left, top, width, height)
 
 
+def _window_handle(win):
+    """Return a stable native identity when the window backend exposes one."""
+    for attribute in ("_hWnd", "hWnd", "_handle", "handle"):
+        try:
+            value = getattr(win, attribute)
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            continue
+        if value is not None:
+            return value
+    return None
+
+
+def _select_matching_window(title_contains: str, window_provider: Callable):
+    """Select the same exact/shortest visible title used by target capture."""
+    candidates = []
+    for order, win in enumerate(window_provider()):
+        snapshot = _safe_window_snapshot(win)
+        if snapshot is None:
+            continue
+        title, rect = snapshot
+        folded_title = title.casefold()
+        if title_contains in folded_title:
+            candidates.append(
+                (
+                    folded_title != title_contains,
+                    len(title),
+                    order,
+                    win,
+                    title,
+                    rect,
+                )
+            )
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate[:3])[3:]
+
+
 def absolute_region_from_window(region: Sequence[int], window_rect: Rect) -> Rect:
     """Convert a window-relative region to absolute screen coordinates."""
     left, top, _, _ = window_rect
@@ -142,19 +179,51 @@ def find_window_rect(
             ) from exc
         window_provider = gw.getAllWindows
 
-    candidates = []
-    for order, win in enumerate(window_provider()):
-        snapshot = _safe_window_snapshot(win)
-        if snapshot is None:
-            continue
-        title, rect = snapshot
-        if title_contains in title.casefold():
-            # Prefer an exact title, then the shortest containing title. This
-            # avoids attaching to an unrelated window that merely happens to
-            # contain the same short text and was enumerated first.
-            folded_title = title.casefold()
-            candidates.append((folded_title != title_contains, len(title), order, rect))
-    return min(candidates)[-1] if candidates else None
+    selected = _select_matching_window(title_contains, window_provider)
+    return selected[2] if selected is not None else None
+
+
+def is_window_foreground(
+    title_contains: str,
+    active_window_provider: Optional[Callable] = None,
+    window_provider: Optional[Callable] = None,
+) -> bool:
+    """Return whether the active window is the exact selected target window."""
+    title_contains = title_contains.strip().casefold()
+    if not title_contains:
+        return False
+    if active_window_provider is None or window_provider is None:
+        try:
+            import pygetwindow as gw
+        except ImportError as exc:
+            raise RuntimeError(
+                "pygetwindow is required for target-window mode. "
+                "Install requirements.txt again."
+            ) from exc
+        if active_window_provider is None:
+            active_window_provider = gw.getActiveWindow
+        if window_provider is None:
+            window_provider = gw.getAllWindows
+
+    active_window = active_window_provider()
+    active_snapshot = _safe_window_snapshot(active_window)
+    if active_snapshot is None:
+        return False
+    selected = _select_matching_window(title_contains, window_provider)
+    if selected is None:
+        return False
+    selected_window, selected_title, selected_rect = selected
+
+    active_handle = _window_handle(active_window)
+    selected_handle = _window_handle(selected_window)
+    if active_handle is not None and selected_handle is not None:
+        return active_handle == selected_handle
+
+    active_title, active_rect = active_snapshot
+    return (
+        active_title.casefold() == selected_title.casefold()
+        and active_rect == selected_rect
+    )
 
 
 def visible_window_titles(window_provider: Optional[Callable] = None):

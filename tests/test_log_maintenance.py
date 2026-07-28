@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from macro_clicker.log_maintenance import cleanup_directory, rotate_log_file
 
@@ -85,6 +86,16 @@ class LogMaintenanceTests(unittest.TestCase):
 
             self.assertTrue(os.path.exists(labels))
             self.assertFalse(os.path.exists(old_crop))
+
+    def test_cleanup_directory_access_error_is_best_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "macro_clicker.log_maintenance.os.listdir",
+                side_effect=PermissionError("blocked"),
+            ):
+                removed = cleanup_directory(tmp)
+
+        self.assertEqual(removed, 0)
 
 
 if __name__ == "__main__":

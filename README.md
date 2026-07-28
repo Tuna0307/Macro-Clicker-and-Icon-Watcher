@@ -83,6 +83,9 @@ When a target window is set:
   window size.
 - If the window cannot be found while running, the step is skipped
   instead of clicking in the wrong place.
+- Clicks are rejected if their resolved point is outside that target window.
+  Clicks and key actions run only while the exact selected target window is in
+  the foreground; the application never raises or focuses it automatically.
 
 Leave the field blank to use the old full-screen / absolute-region
 behavior.
@@ -192,6 +195,11 @@ The repository includes one-team and two-team rally scenarios. They use
 safe back-out states. Their template paths are project-relative, so the folder
 can be moved to another computer without rewriting the scenario JSON.
 
+In the smart two-team scenario, the visible Team 1 and Team 3 maximum-level
+fields are the only upper-level limits. Team 3 is preferred whenever it is
+idle and accepts the detected level; Team 1 remains the immediate fallback.
+The ordinary row maximum remains available only to one-team/non-smart actions.
+
 Scenario JSON files are editable runtime configuration. Personal level limits,
 delays, and similar tuning can remain as uncommitted local changes; commit them
 only when they are intended to become the project defaults.
@@ -210,7 +218,7 @@ Alert templates and Macro Builder conditions use the same detection types:
 
 The Icon Alerts **Grayscale pictures** option applies to its picture templates;
 Macro Builder stores the same choice per condition. New templates and old Macro
-  conditions default to **Static picture**. Older alert manifests without a
+conditions default to **Static picture**. Older alert manifests without a
 detection type retain the previous animated/rotating behavior.
 
 ## Tips
@@ -224,7 +232,9 @@ detection type retain the previous animated/rotating behavior.
 - Use `click_matching_row` when one condition identifies the row and
   another condition is the button to click in that same row.
 - Each scenario can configure its own start key (default F8) and stop key
-  under **Scenario settings**. The two keys must be different.
+  under **Scenario settings**. Their physical key sequences must not overlap;
+  aliases, reordered modifiers, and one sequence being a prefix of another
+  count as conflicts.
 - The kill-switch key (default F12) is required before a scenario starts and
   is checked between captures, matches, and every action, even while the game
   has focus.
