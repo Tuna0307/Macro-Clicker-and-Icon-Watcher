@@ -1504,6 +1504,11 @@ class MacroEngine(RallyMatchingMixin):
                 scenario_step.enabled = action.set_enabled
                 state = "enabled" if action.set_enabled else "disabled"
                 self.log(f"  step '{action.step_name}' -> {state}")
+        elif action.type == "stop":
+            if self._stop_requested():
+                return False
+            self.log("Scenario completed.")
+            self.stop()
         return False
 
     @staticmethod

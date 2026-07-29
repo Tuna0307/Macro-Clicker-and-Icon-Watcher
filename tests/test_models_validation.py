@@ -159,6 +159,13 @@ class ModelValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported action type"):
             Action.from_dict({"type": "wa1t", "seconds": 1})
 
+    def test_stop_action_round_trips_and_has_a_clear_summary(self):
+        action = Action.from_dict({"type": "stop"})
+
+        self.assertEqual(action.type, "stop")
+        self.assertEqual(Action.from_dict(action.to_dict()), action)
+        self.assertEqual(action.summary(), "Stop scenario")
+
     def test_matching_row_pre_click_delay_round_trips_and_rejects_invalid_values(self):
         action = Action(type="click_matching_row", pre_click_delay=1.5)
 

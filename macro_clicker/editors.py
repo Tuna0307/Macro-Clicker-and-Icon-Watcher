@@ -698,6 +698,7 @@ def action_dialog(
         "key": "Press key",
         "wait": "Wait",
         "set_step": "Enable / disable step",
+        "stop": "Stop scenario",
     }
     action_type_values = {label: value for value, label in action_type_labels.items()}
 
@@ -723,6 +724,7 @@ def action_dialog(
     key_frame = ttk.LabelFrame(body, text="Key press")
     wait_frame = ttk.LabelFrame(body, text="Wait")
     step_frame = ttk.LabelFrame(body, text="Enable / disable a step")
+    stop_frame = ttk.LabelFrame(body, text="Stop scenario")
     frames = {
         "click": click_frame,
         "click_matching_row": row_click_frame,
@@ -730,7 +732,14 @@ def action_dialog(
         "key": key_frame,
         "wait": wait_frame,
         "set_step": step_frame,
+        "stop": stop_frame,
     }
+
+    ttk.Label(
+        stop_frame,
+        text="End the running scenario after this step matches.",
+        style="Surface.TLabel",
+    ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
 
     # --- click fields ---
     cond_idx_var = tk.StringVar(

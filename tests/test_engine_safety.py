@@ -43,6 +43,24 @@ class EngineSafetyTests(unittest.TestCase):
 
         self.assertEqual(clicked, [])
 
+    def test_stop_action_finishes_scenario_without_sending_a_key(self):
+        engine = self._bare_engine()
+        engine.stop = Mock(side_effect=engine._stop_event.set)
+        logs = []
+        engine.log = logs.append
+
+        result = engine._run_action(
+            Step(name="complete"),
+            Action(type="stop"),
+            {},
+            {},
+        )
+
+        self.assertFalse(result)
+        self.assertTrue(engine._stop_event.is_set())
+        engine.stop.assert_called_once_with()
+        self.assertEqual(logs, ["Scenario completed."])
+
     def test_click_point_rechecks_stop_after_mouse_move(self):
         engine = self._bare_engine()
         engine.click_move_duration = 0.2

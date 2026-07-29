@@ -184,9 +184,9 @@ the next poll without consuming its cooldown.
   *absent* instead). Multiple conditions on one step are combined
   with AND or OR. Use "Capture from screen..." to drag-select the
   icon directly instead of cropping screenshots by hand.
-- **Action** -- `click`, `click_matching_row`, `key`, `wait`, or `set_step`
-  (enable/disable another step). Actions run top to bottom once a step's
-  conditions are met.
+- **Action** -- `click`, `click_matching_row`, `key`, `wait`, `set_step`
+  (enable/disable another step), or `stop` (finish the running scenario).
+  Actions run top to bottom once a step's conditions are met.
 
 ## Included scenarios
 

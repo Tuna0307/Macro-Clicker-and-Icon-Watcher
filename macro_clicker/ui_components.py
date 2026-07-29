@@ -730,6 +730,8 @@ def action_display_summary(action, conditions):
     if action.type == "set_step":
         verb = "Enable" if action.set_enabled else "Disable"
         return f"{verb} {action.step_name or 'step'}"
+    if action.type == "stop":
+        return "Stop scenario"
     return action.summary()
 
 

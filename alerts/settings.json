@@ -1,5 +1,6 @@
 {
   "monitor_choice": "Monitor 1",
+  "monitor_unique_id": "\\\\?\\DISPLAY#CSW150F#4&36deee54&0&UID8388688#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
   "grayscale": true,
   "debug": false,
   "cooldown_sec": 0.5,

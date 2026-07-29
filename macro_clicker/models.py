@@ -26,7 +26,15 @@ from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
 
 ACTION_TYPES = frozenset(
-    {"click", "click_matching_row", "select_rally_team", "key", "wait", "set_step"}
+    {
+        "click",
+        "click_matching_row",
+        "select_rally_team",
+        "key",
+        "wait",
+        "set_step",
+        "stop",
+    }
 )
 APP_DIR = str(PROJECT_ROOT)
 SCENARIOS_DIR = str(SCENARIO_PATH)
@@ -658,6 +666,8 @@ class Action:
         if self.type == "set_step":
             verb = "Enable" if self.set_enabled else "Disable"
             return f"{verb} step '{self.step_name}'"
+        if self.type == "stop":
+            return "Stop scenario"
         return self.type
 
 

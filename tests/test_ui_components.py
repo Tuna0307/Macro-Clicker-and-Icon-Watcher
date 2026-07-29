@@ -121,6 +121,12 @@ class UiComponentTests(unittest.TestCase):
         self.assertIn("Team 1 (unlimited)", summary)
         self.assertNotIn("None", summary)
 
+    def test_stop_action_has_a_clear_display_summary(self):
+        self.assertEqual(
+            action_display_summary(Action(type="stop"), self.conditions),
+            "Stop scenario",
+        )
+
     def test_collapsed_advanced_options_preserve_unset_level_roi(self):
         defaults = (-90, -45, 220, 100)
 
