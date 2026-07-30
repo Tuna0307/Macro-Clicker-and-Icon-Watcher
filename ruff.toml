@@ -1,0 +1,12 @@
+line-length = 88
+target-version = "py312"
+include = ["*.py", "*.pyw"]
+
+[lint]
+# Keep the project's established correctness-focused rule set explicit so
+# upgrading Ruff cannot silently enable hundreds of unrelated rules.
+select = ["E4", "E7", "E9", "F"]
+
+[format]
+# Match the repository's .gitattributes policy on every operating system.
+line-ending = "lf"
