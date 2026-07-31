@@ -23,7 +23,7 @@ import time
 import tkinter as tk
 from difflib import get_close_matches
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import mss
@@ -1404,6 +1404,7 @@ class WatcherThread(threading.Thread):
         scan_region_window_size=None,
         target_window_title="",
         window_rect_provider=find_window_rect,
+        run_token=None,
     ):
         super().__init__(daemon=True)
         self.tm = template_manager
@@ -1417,6 +1418,7 @@ class WatcherThread(threading.Thread):
         self.scan_region_window_size = scan_region_window_size
         self.target_window_title = target_window_title.strip()
         self.window_rect_provider = window_rect_provider
+        self.run_token = run_token if run_token is not None else object()
         self._target_window_missing_logged = False
         self.use_grayscale = use_grayscale
         self.debug = debug
@@ -1571,7 +1573,10 @@ class WatcherThread(threading.Thread):
             complete_ids = {item["id"] for item in items}
         for entry in items:
             tid = entry["id"]
-            score, monitor = best_scores.get(tid, (-1.0, None))
+            match = best_scores.get(tid, (-1.0, None))
+            score, monitor = match[:2]
+            monitor_unique_id = match[2] if len(match) > 2 else None
+            detected_monitor_rect = match[3] if len(match) > 3 else None
             # A partial scan may safely activate a positive detection, but it
             # must never disarm a template based on monitors that were not read.
             if tid not in complete_ids and score < self.states[tid].threshold:
@@ -1582,7 +1587,11 @@ class WatcherThread(threading.Thread):
                         "id": tid,
                         "name": entry["name"],
                         "monitor": monitor,
+                        "monitor_unique_id": monitor_unique_id,
+                        "monitor_rect": detected_monitor_rect,
                         "score": score,
+                        "run_token": self.run_token,
+                        "watcher": self,
                     }
                 )
 
@@ -1666,13 +1675,22 @@ class WatcherThread(threading.Thread):
         if config is None:
             config = self._config_snapshot()
         window_rect = None
-        if config["scan_region_mode"] == "window" or config["target_window_title"]:
-            rect = self.window_rect_provider(config["target_window_title"])
+        target_title = config["target_window_title"].strip()
+        if config["scan_region_mode"] == "window" and not target_title:
+            if config["scan_region"] is None:
+                return None, None, None
+            if not self._target_window_missing_logged:
+                self.log_queue.put(
+                    "A target window is required for the configured "
+                    "window-relative scan region."
+                )
+                self._target_window_missing_logged = True
+            return None, None, REGION_UNAVAILABLE
+        if config["scan_region_mode"] == "window" or target_title:
+            rect = self.window_rect_provider(target_title)
             if not rect:
                 if not self._target_window_missing_logged:
-                    self.log_queue.put(
-                        f"Target window not found: '{config['target_window_title']}'"
-                    )
+                    self.log_queue.put(f"Target window not found: '{target_title}'")
                     self._target_window_missing_logged = True
                 return None, None, REGION_UNAVAILABLE
             self._target_window_missing_logged = False
@@ -1742,6 +1760,7 @@ class WatcherThread(threading.Thread):
                 last_capture_error = {}
                 last_refresh_error_at = None
                 last_debug_log = 0.0
+                last_ineligible_status = None
                 while not self._stop_flag.is_set():
                     config = self._config_snapshot()
                     monitor_filter = config["monitor_filter"]
@@ -1845,7 +1864,7 @@ class WatcherThread(threading.Thread):
                         else:
                             self.log_queue.put(f"Watching {len(monitors)} monitor(s).")
                         last_monitor_status = monitor_status
-                    best_scores: dict[int, tuple[float, Optional[int]]] = {
+                    best_scores: dict[int, tuple] = {
                         item["id"]: (-1.0, None) for item in items
                     }
                     complete_ids = {
@@ -1861,6 +1880,21 @@ class WatcherThread(threading.Thread):
                             for idx, mon in monitors
                         )
                     }
+                    ineligible_items = tuple(
+                        sorted(
+                            item["name"]
+                            for item in items
+                            if item["id"] not in complete_ids
+                        )
+                    )
+                    ineligible_status = (monitor_status, ineligible_items)
+                    if ineligible_status != last_ineligible_status:
+                        if ineligible_items:
+                            self.log_queue.put(
+                                "Enabled icon(s) outside the selected scan source "
+                                "will not be checked: " + ", ".join(ineligible_items)
+                            )
+                        last_ineligible_status = ineligible_status
                     for mon_index, mon in monitors:
                         if self._stop_flag.is_set():
                             break
@@ -1953,7 +1987,12 @@ class WatcherThread(threading.Thread):
                                     f"(th {entry['threshold']:.2f})"
                                 )
                             if score > best_scores[tid][0]:
-                                best_scores[tid] = (score, mon_index)
+                                best_scores[tid] = (
+                                    score,
+                                    mon_index,
+                                    _monitor_unique_id(mon),
+                                    monitor_box,
+                                )
                     if self._stop_flag.is_set():
                         break
                     self._emit_aggregated_matches(
@@ -2096,6 +2135,7 @@ class AlertWatcherFrame(ttk.Frame):
         self._destroy_scheduled = False
         self._shutting_down = False
         self._errored_watcher = None
+        self._active_alert_run_token = None
         self.ui_preferences = load_ui_preferences()
         self._watcher_status_pulse = None
 
@@ -2653,6 +2693,13 @@ class AlertWatcherFrame(ttk.Frame):
 
     def _on_settings_changed(self):
         if hasattr(self, "monitor_var") and hasattr(self, "tray_var"):
+            if (
+                hasattr(self, "target_window_var")
+                and not self.target_window_var.get().strip()
+                and self.scan_region is None
+                and self.scan_region_mode == "window"
+            ):
+                self.scan_region_mode = "screen"
             if hasattr(self, "region_label"):
                 self._update_region_label()
             self._schedule_settings_save()
@@ -3480,9 +3527,35 @@ class AlertWatcherFrame(ttk.Frame):
                 self._append_log("Watcher is already running or still stopping.")
                 return
             self.watcher = None
+        if (
+            self.scan_region is None
+            and not self.target_window_var.get().strip()
+            and any(
+                item.get("match_mode") == MATCH_MODE_ANIMATED
+                and item.get("region") is None
+                for item in items
+            )
+        ):
+            self._append_log(
+                "[performance] An animated icon has no bounded region; "
+                "full-screen negative scans can take several seconds."
+            )
+        if (
+            self.scan_region_mode == "window"
+            and self.scan_region is not None
+            and not self.target_window_var.get().strip()
+        ):
+            messagebox.showerror(
+                "Target window required",
+                "Choose a target window or clear the window-relative scan region "
+                "before starting monitoring.",
+                parent=self,
+            )
+            return
         self._save_settings()
         self._errored_watcher = None
-        self.watcher = WatcherThread(
+        run_token = object()
+        watcher = WatcherThread(
             self.tm,
             self.event_queue,
             self.log_queue,
@@ -3496,8 +3569,23 @@ class AlertWatcherFrame(ttk.Frame):
             use_grayscale=self.grayscale_var.get(),
             debug=self.debug_var.get(),
             cooldown_sec=self._cooldown_seconds(),
+            run_token=run_token,
         )
-        self.watcher.start()
+        self.watcher = watcher
+        self._active_alert_run_token = run_token
+        try:
+            watcher.start()
+        except Exception as exc:
+            self.watcher = None
+            self._active_alert_run_token = None
+            self._set_idle_controls()
+            self._append_log(f"Could not start watcher: {exc}")
+            messagebox.showerror(
+                "Monitoring failed",
+                f"Could not start the watcher thread:\n{exc}",
+                parent=self,
+            )
+            return
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.status_label.config(text="Watching", style="Watching.Status.TLabel")
@@ -3506,6 +3594,7 @@ class AlertWatcherFrame(ttk.Frame):
             status_pulse.start()
 
     def _stop_watching(self):
+        self._active_alert_run_token = None
         watcher = self.watcher
         if watcher is None:
             self._set_idle_controls()
@@ -3538,6 +3627,7 @@ class AlertWatcherFrame(ttk.Frame):
             return
         errored = watcher is self._errored_watcher
         self.watcher = None
+        self._active_alert_run_token = None
         if errored:
             status_pulse = getattr(self, "_watcher_status_pulse", None)
             if status_pulse is not None:
@@ -3787,6 +3877,12 @@ class AlertWatcherFrame(ttk.Frame):
                 continue
             if getattr(self, "_shutting_down", False):
                 continue
+            event_token = ev.get("run_token")
+            active_token = getattr(self, "_active_alert_run_token", None)
+            if (
+                event_token is not None or active_token is not None
+            ) and event_token is not active_token:
+                continue
             entry = self.tm.get(ev["id"])
             thumb = None
             if entry is not None:
@@ -3800,6 +3896,8 @@ class AlertWatcherFrame(ttk.Frame):
                 ev["monitor"],
                 thumb,
                 animations_enabled=self.ui_preferences.animations_enabled,
+                monitor_unique_id=ev.get("monitor_unique_id"),
+                detected_monitor_rect=ev.get("monitor_rect"),
             )
             self._append_log(
                 f"ALERT: '{ev['name']}' seen on monitor {ev['monitor']} (score {ev['score']:.2f})"

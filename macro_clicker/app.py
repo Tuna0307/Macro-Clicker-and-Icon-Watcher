@@ -16,7 +16,7 @@ import tkinter as tk
 import traceback
 from datetime import datetime
 from tkinter import messagebox, simpledialog, ttk
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 import keyboard
 from PIL import ImageDraw, ImageTk
@@ -41,7 +41,11 @@ from .editors import (
     schedule_mouse_position_fill as schedule_mouse_position_fill,
     step_dialog,
 )
-from .hotkeys import canonical_hotkey, hotkeys_conflict
+from .hotkeys import (
+    canonical_hotkey,
+    hotkeys_conflict,
+    permissive_single_key_conflict,
+)
 from .log_maintenance import (
     DEFAULT_DEBUG_MAX_AGE_DAYS,
     DEFAULT_DEBUG_MAX_FILES,
@@ -78,6 +82,12 @@ from .window_locator import visible_window_titles
 START_MACRO_HOTKEY = "f8"
 
 
+def _start_stop_hotkeys_conflict(start_key, stop_key):
+    """Apply the runtime's permissive single-key Stop behavior."""
+
+    return permissive_single_key_conflict(stop_key, start_key)
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -97,10 +107,14 @@ class App:
         self._loaded_scenario_name = None
         self._engine_ui_active = False
         self._step_test_running = False
+        self._runtime_locked_widget_states: Optional[dict[Any, bool]] = None
         self.log_queue = queue.Queue()
         self.control_queue = queue.Queue()
         self._start_hotkey_handle = None
         self._start_hotkey_registration_token = None
+        self._start_request_generation = 0
+        self._pending_start_request = None
+        self._start_request_in_progress = False
         self.log_dir = LOG_DIR
         self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
         self.log_max_bytes = DEFAULT_MAX_LOG_BYTES
@@ -499,8 +513,7 @@ class App:
         return True
 
     def _require_stopped_for_scenario_change(self):
-        engine = getattr(self, "engine", None)
-        if engine is None or not engine.is_running:
+        if not self._engine_is_active_or_stopping():
             return True
         messagebox.showwarning(
             "Macro running",
@@ -710,7 +723,7 @@ class App:
                     parent=win,
                 )
                 return
-            if hotkeys_conflict(start_key, stop_key):
+            if _start_stop_hotkeys_conflict(start_key, stop_key):
                 messagebox.showerror(
                     "Invalid settings",
                     "Start key and Stop key must not use overlapping physical "
@@ -1077,6 +1090,8 @@ class App:
             )
 
     def _edit_selected_condition(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         step_index = self._selected_step_index()
         selection = self.condition_tree.selection()
         if step_index is None or not selection:
@@ -1095,6 +1110,8 @@ class App:
             self.condition_tree.selection_set(str(condition_index))
 
     def _edit_selected_action(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         step_index = self._selected_step_index()
         selection = self.action_tree.selection()
         if step_index is None or not selection:
@@ -1114,6 +1131,8 @@ class App:
             self.action_tree.selection_set(str(action_index))
 
     def _add_step(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         existing = {s.name for s in self.scenario.steps}
         all_names = [s.name for s in self.scenario.steps]
         s = step_dialog(
@@ -1131,6 +1150,8 @@ class App:
             self.steps_tree.focus(str(new_index))
 
     def _edit_step(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         idx = self._selected_step_index()
         if idx is None:
             return
@@ -1152,6 +1173,8 @@ class App:
             self._refresh_steps()
 
     def _remove_step(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         index = self._selected_step_index()
         if index is not None and messagebox.askyesno(
             "Remove step", "Remove the selected step?"
@@ -1168,6 +1191,8 @@ class App:
                 )
 
     def _duplicate_step(self):
+        if not self._require_stopped_for_scenario_change():
+            return
         index = self._selected_step_index()
         if index is None:
             return
@@ -1199,12 +1224,22 @@ class App:
         step = scenario.steps[index]
         self._step_test_running = True
         self.test_step_btn.configure(state="disabled", text="Testing...")
-        threading.Thread(
+        worker = threading.Thread(
             target=self._run_step_preview_worker,
             args=(scenario, step),
             name="macro-step-preview",
             daemon=True,
-        ).start()
+        )
+        try:
+            worker.start()
+        except Exception as exc:
+            self._step_test_running = False
+            self.test_step_btn.configure(state="normal", text="Test")
+            messagebox.showerror(
+                "Test failed",
+                f"Could not start the preview worker:\n{exc}",
+                parent=self.root,
+            )
 
     def _run_step_preview_worker(self, scenario, step):
         engine = None
@@ -1379,6 +1414,8 @@ class App:
         details.config(state="disabled")
 
     def _move_step(self, delta):
+        if not self._require_stopped_for_scenario_change():
+            return
         idx = self._selected_step_index()
         if idx is None:
             return
@@ -1390,6 +1427,56 @@ class App:
             self.steps_tree.selection_set(str(new_idx))
 
     # ---- engine control ----
+    def _set_macro_editor_locked(self, locked):
+        macro_tab = getattr(self, "macro_tab", None)
+        if macro_tab is None:
+            return
+        if locked:
+            if getattr(self, "_runtime_locked_widget_states", None) is not None:
+                return
+            states: dict[Any, bool] = {}
+            stack = [macro_tab]
+            excluded = {
+                getattr(self, "run_btn", None),
+                getattr(self, "stop_btn", None),
+            }
+            while stack:
+                parent = stack.pop()
+                try:
+                    children = parent.winfo_children()
+                except (AttributeError, tk.TclError):
+                    continue
+                stack.extend(children)
+                for widget in children:
+                    if widget in excluded or not isinstance(
+                        widget,
+                        (ttk.Button, ttk.Combobox, ttk.Treeview),
+                    ):
+                        continue
+                    try:
+                        states[widget] = bool(widget.instate(("disabled",)))
+                        widget.state(["disabled"])
+                    except tk.TclError:
+                        pass
+            self._runtime_locked_widget_states = states
+            return
+
+        saved_states: Optional[dict[Any, bool]] = getattr(
+            self,
+            "_runtime_locked_widget_states",
+            None,
+        )
+        self._runtime_locked_widget_states = None
+        if not saved_states:
+            return
+        for widget, was_disabled in saved_states.items():
+            if was_disabled:
+                continue
+            try:
+                widget.state(["!disabled"])
+            except tk.TclError:
+                pass
+
     def _set_engine_stopped_ui(self):
         was_active = getattr(self, "_engine_ui_active", False)
         self._engine_ui_active = False
@@ -1397,6 +1484,7 @@ class App:
             self.status_pulse.stop("Stopped.Status.TLabel")
         self.run_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
+        self._set_macro_editor_locked(False)
         self.status_label.config(text="● Stopped", style="Stopped.Status.TLabel")
         if was_active:
             self.ui_feedback.play("stop")
@@ -1411,6 +1499,15 @@ class App:
         self.ui_feedback.play("start")
 
     def _start_engine(self):
+        previous_start_state = getattr(self, "_start_request_in_progress", False)
+        self._start_request_in_progress = True
+        try:
+            return self._start_engine_attempt()
+        finally:
+            self._start_request_in_progress = previous_start_state
+
+    def _start_engine_attempt(self):
+        self._invalidate_queued_start_requests()
         if self.engine and self.engine.is_running:
             return
         if not self.scenario.steps:
@@ -1442,6 +1539,7 @@ class App:
         self.engine = engine
         self._engine_ui_active = True
         self._engine_ready_announced = False
+        self._set_macro_editor_locked(True)
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         if engine.is_ready:
@@ -1452,6 +1550,7 @@ class App:
             )
 
     def _stop_engine(self):
+        self._invalidate_queued_start_requests()
         if self.engine:
             try:
                 self.engine.request_stop()
@@ -1473,6 +1572,7 @@ class App:
         return True
 
     def _register_start_hotkey(self):
+        self._invalidate_queued_start_requests()
         old_handle = getattr(self, "_start_hotkey_handle", None)
         self._start_hotkey_handle = None
         self._registered_start_hotkey = None
@@ -1540,7 +1640,14 @@ class App:
         for macro_label, macro_hotkey in macro_bindings:
             for alert_label, alert_hotkey in alert_bindings:
                 try:
-                    conflict = hotkeys_conflict(macro_hotkey, alert_hotkey)
+                    conflict = (
+                        permissive_single_key_conflict(
+                            macro_hotkey,
+                            alert_hotkey,
+                        )
+                        if macro_label == "Macro stop"
+                        else hotkeys_conflict(macro_hotkey, alert_hotkey)
+                    )
                 except (TypeError, ValueError):
                     # Alert registration reports its own malformed setting.
                     continue
@@ -1558,12 +1665,26 @@ class App:
             registration_token = current_token
         if registration_token is None or registration_token is not current_token:
             return
+        if getattr(self, "_start_request_in_progress", False):
+            return
         if self._engine_is_active_or_stopping():
             return
+        generation = getattr(self, "_start_request_generation", 0)
+        request_identity = (registration_token, generation)
+        if getattr(self, "_pending_start_request", None) == request_identity:
+            return
+        self._pending_start_request = request_identity
         # Carry the registration identity through the Tk queue. A callback can
         # be valid when it runs on the keyboard thread, then become stale
-        # before the UI thread consumes this command after a scenario switch.
-        self.control_queue.put(("start", registration_token))
+        # before the UI thread consumes this command after a scenario switch
+        # or a newer Run/Stop generation.
+        self.control_queue.put(("start", registration_token, generation))
+
+    def _invalidate_queued_start_requests(self):
+        self._start_request_generation = (
+            getattr(self, "_start_request_generation", 0) + 1
+        )
+        self._pending_start_request = None
 
     def _engine_is_active_or_stopping(self):
         engine = getattr(self, "engine", None)
@@ -1594,6 +1715,7 @@ class App:
         self._start_engine()
 
     def _remove_start_hotkey(self):
+        self._invalidate_queued_start_requests()
         self._start_hotkey_registration_token = None
         self._registered_start_hotkey = None
         handle = getattr(self, "_start_hotkey_handle", None)
@@ -1615,18 +1737,26 @@ class App:
                 command = self.control_queue.get_nowait()
                 if (
                     isinstance(command, tuple)
-                    and len(command) == 2
+                    and len(command) == 3
                     and command[0] == "start"
                 ):
                     registration_token = command[1]
+                    generation = command[2]
                     current_token = getattr(
                         self, "_start_hotkey_registration_token", None
                     )
+                    current_generation = getattr(self, "_start_request_generation", 0)
                     if (
                         registration_token is not None
                         and registration_token is current_token
+                        and generation == current_generation
                     ):
-                        self._start_engine_from_hotkey()
+                        self._start_request_in_progress = True
+                        self._pending_start_request = None
+                        try:
+                            self._start_engine_from_hotkey()
+                        finally:
+                            self._start_request_in_progress = False
                 elif (
                     isinstance(command, tuple)
                     and len(command) == 4

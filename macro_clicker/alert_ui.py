@@ -5,6 +5,8 @@ Keeping screen selection and transient alert presentation here leaves
 The classes are re-exported by ``alert_watcher`` for backwards compatibility.
 """
 
+import ctypes
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -192,6 +194,8 @@ class AlertPopup(tk.Toplevel):
         thumb_img,
         *,
         animations_enabled=True,
+        monitor_unique_id=None,
+        detected_monitor_rect=None,
     ):
         super().__init__(master)
         self.title("Icon Alert")
@@ -237,7 +241,12 @@ class AlertPopup(tk.Toplevel):
         )
 
         self.update_idletasks()
-        left, top, width, height = self._alert_monitor_rect(monitor)
+        self._exclude_from_screen_capture()
+        left, top, width, height = self._alert_monitor_rect(
+            monitor,
+            monitor_unique_id=monitor_unique_id,
+            detected_monitor_rect=detected_monitor_rect,
+        )
         popup_width = self.winfo_width()
         popup_height = self.winfo_height()
         active = self._active_popups(master, (left, top, width, height))
@@ -266,7 +275,42 @@ class AlertPopup(tk.Toplevel):
                 pass
         self._close_after_id = self.after(8000, self._begin_close)
 
-    def _alert_monitor_rect(self, requested_monitor):
+    def _exclude_from_screen_capture(self):
+        """Best-effort Windows protection against matching our own popup."""
+
+        if sys.platform != "win32":
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            widget_hwnd = int(self.winfo_id())
+            get_ancestor = user32.GetAncestor
+            get_ancestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            get_ancestor.restype = ctypes.c_void_p
+            # Tk may expose an inner drawable HWND. Display affinity applies
+            # only to a top-level window, so resolve the actual popup root.
+            root_hwnd = get_ancestor(ctypes.c_void_p(widget_hwnd), 2)  # GA_ROOT
+            hwnd = int(root_hwnd or widget_hwnd)
+            set_affinity = user32.SetWindowDisplayAffinity
+            set_affinity.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            set_affinity.restype = ctypes.c_int
+            # WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+) makes the popup absent
+            # from screen captures while keeping it visible to the user.
+            return bool(
+                set_affinity(
+                    ctypes.c_void_p(hwnd),
+                    ctypes.c_uint32(0x00000011),
+                )
+            )
+        except Exception:
+            return False
+
+    def _alert_monitor_rect(
+        self,
+        requested_monitor,
+        *,
+        monitor_unique_id=None,
+        detected_monitor_rect=None,
+    ):
         try:
             requested_index = int(requested_monitor)
         except (TypeError, ValueError):
@@ -274,6 +318,22 @@ class AlertPopup(tk.Toplevel):
         try:
             with mss.MSS() as sct:
                 monitors = sct.monitors
+                if monitor_unique_id is not None:
+                    saved_unique_id = str(monitor_unique_id)
+                    for candidate in monitors[1:]:
+                        current_unique_id = candidate.get("unique_id")
+                        if (
+                            current_unique_id is not None
+                            and str(current_unique_id) == saved_unique_id
+                        ):
+                            return (
+                                int(candidate["left"]),
+                                int(candidate["top"]),
+                                int(candidate["width"]),
+                                int(candidate["height"]),
+                            )
+                    if detected_monitor_rect is not None:
+                        return tuple(int(value) for value in detected_monitor_rect)
                 index = (
                     requested_index
                     if 1 <= requested_index < len(monitors)
@@ -287,6 +347,11 @@ class AlertPopup(tk.Toplevel):
                 int(monitor["height"]),
             )
         except Exception:
+            if detected_monitor_rect is not None:
+                try:
+                    return tuple(int(value) for value in detected_monitor_rect)
+                except (TypeError, ValueError):
+                    pass
             return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
 
     @staticmethod

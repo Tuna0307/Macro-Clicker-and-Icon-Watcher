@@ -863,6 +863,90 @@ class SharedMatcherTests(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_near_perfect_tie_break_is_bounded(self):
+        screen = np.zeros((1001, 1001), dtype=np.uint8)
+        template = np.zeros((2, 2), dtype=np.uint8)
+        scores = np.ones((1000, 1000), dtype=np.float32)
+        squared_differences = np.zeros_like(scores)
+
+        with (
+            patch.object(core, "_score_map", return_value=scores),
+            patch.object(
+                core.cv2,
+                "matchTemplate",
+                return_value=squared_differences,
+            ),
+            patch.object(
+                core,
+                "_pixel_mean_squared_error",
+                return_value=1.0,
+            ) as pixel_error,
+        ):
+            score, location = core._best_variant_match(
+                screen,
+                template,
+                low_variance=False,
+            )
+
+        self.assertEqual(score, 1.0)
+        self.assertIsNotNone(location)
+        self.assertLessEqual(
+            pixel_error.call_count,
+            core.MAX_PIXEL_TIE_CANDIDATES + 1,
+        )
+
+    def test_best_variant_match_observes_cancellation_after_score_map(self):
+        cancel_event = threading.Event()
+        screen = np.zeros((40, 40), dtype=np.uint8)
+        template = np.zeros((3, 3), dtype=np.uint8)
+
+        def score_and_cancel(*_args):
+            cancel_event.set()
+            return np.ones((38, 38), dtype=np.float32)
+
+        with (
+            patch.object(core, "_score_map", side_effect=score_and_cancel),
+            patch.object(core, "_pixel_mean_squared_error") as pixel_error,
+        ):
+            score, location = core._best_variant_match(
+                screen,
+                template,
+                low_variance=False,
+                cancel_event=cancel_event,
+            )
+
+        self.assertEqual(score, -1.0)
+        self.assertIsNone(location)
+        pixel_error.assert_not_called()
+
+    def test_colored_text_shape_checks_distinct_candidates_beyond_top_eight(self):
+        screen = np.zeros((7, 63), dtype=np.uint8)
+        template = np.zeros((3, 3), dtype=np.uint8)
+        scores = np.full((5, 61), -1.0, dtype=np.float32)
+        wrong_locations = [(x, 1) for x in range(0, 48, 4)]
+        for rank, (x, y) in enumerate(wrong_locations):
+            scores[y, x] = 0.99 - rank * 0.01
+        correct_location = (52, 1)
+        scores[correct_location[1], correct_location[0]] = 0.40
+
+        def shape_score(_screen, _template, location):
+            return 0.95 if location == correct_location else 0.20
+
+        with (
+            patch.object(core, "_score_map", return_value=scores),
+            patch.object(core, "_text_shape_score", side_effect=shape_score),
+            patch.object(core, "_pixel_mean_squared_error", return_value=10.0),
+        ):
+            score, location = core._best_variant_match(
+                screen,
+                template,
+                low_variance=False,
+                text_shape=True,
+            )
+
+        self.assertEqual(location, correct_location)
+        self.assertAlmostEqual(score, 0.95)
+
 
 class SharedCaptureTests(unittest.TestCase):
     def test_capture_uses_bgr_contract(self):

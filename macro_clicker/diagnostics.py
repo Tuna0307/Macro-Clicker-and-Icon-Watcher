@@ -101,13 +101,25 @@ class DiagnosticCollector:
                 name="diagnostic-writer",
                 daemon=True,
             )
-            self._worker.start()
             self._decision_worker = threading.Thread(
                 target=self._run_decisions,
                 name="diagnostic-decision-writer",
                 daemon=True,
             )
-            self._decision_worker.start()
+            started_workers = []
+            try:
+                self._worker.start()
+                started_workers.append(self._worker)
+                self._decision_worker.start()
+                started_workers.append(self._decision_worker)
+            except Exception:
+                self._closed = True
+                self._stop_event.set()
+                for worker in started_workers:
+                    worker.join(timeout=1.0)
+                self._worker = None
+                self._decision_worker = None
+                raise
 
     @staticmethod
     def _category_name(category):

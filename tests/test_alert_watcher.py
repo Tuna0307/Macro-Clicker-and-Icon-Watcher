@@ -969,6 +969,20 @@ class WatcherThreadTests(unittest.TestCase):
         self.assertTrue(thread.templates_changed() is None)
         self.assertTrue(thread._wake_flag.is_set())
 
+    def test_empty_window_target_without_region_scans_the_selected_screen(self):
+        provider = Mock(side_effect=AssertionError("empty title must not be queried"))
+        thread = watcher.WatcherThread(
+            Mock(),
+            queue.Queue(),
+            queue.Queue(),
+            scan_region_mode="window",
+            target_window_title="",
+            window_rect_provider=provider,
+        )
+
+        self.assertEqual(thread._resolve_scan_context(), (None, None, None))
+        provider.assert_not_called()
+
     def test_each_monitor_prepares_templates_for_its_own_resolution(self):
         item = self._template_item()
         snapshot_sizes = []
@@ -1433,6 +1447,33 @@ class WatcherThreadTests(unittest.TestCase):
         )
         self.assertFalse(thread.states[1].active)
 
+    def test_alert_event_keeps_run_and_physical_monitor_identity(self):
+        item = self._template_item()
+        events = queue.Queue()
+        run_token = object()
+        thread = watcher.WatcherThread(
+            Mock(),
+            events,
+            queue.Queue(),
+            cooldown_sec=0.0,
+            run_token=run_token,
+        )
+        thread._sync_states([item], cooldown_sec=0.0)
+        monitor_rect = (-1920, 0, 1920, 1080)
+
+        thread._emit_aggregated_matches(
+            [item],
+            {1: (0.91, 2, "DISPLAY-B", monitor_rect)},
+            now=10.0,
+            complete_ids={1},
+        )
+
+        event = events.get_nowait()
+        self.assertIs(event["run_token"], run_token)
+        self.assertIs(event["watcher"], thread)
+        self.assertEqual(event["monitor_unique_id"], "DISPLAY-B")
+        self.assertEqual(event["monitor_rect"], monitor_rect)
+
     def test_run_stamps_alert_cooldown_after_scan_finishes(self):
         item = self._template_item()
 
@@ -1679,6 +1720,71 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
             "Watcher is already running or still stopping."
         )
 
+    def test_watcher_thread_start_failure_restores_idle_state(self):
+        class FailedWatcher:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("thread unavailable")
+
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._shutting_down = False
+        frame._settings_load_errors = ()
+        frame._refresh_monitor_choices = Mock()
+        frame.tm = Mock()
+        frame.tm.snapshot.return_value = [
+            {
+                "id": 1,
+                "name": "icon",
+                "enabled": True,
+                "match_mode": watcher.MATCH_MODE_STATIC,
+                "region": (1, 2, 3, 4),
+            }
+        ]
+        frame.event_queue = queue.Queue()
+        frame.log_queue = queue.Queue()
+        frame.watcher = None
+        frame.scan_region = None
+        frame.scan_region_mode = "screen"
+        frame.scan_region_ratio = None
+        frame.scan_region_window_size = None
+        frame.target_window_var = Mock()
+        frame.target_window_var.get.return_value = ""
+        frame.grayscale_var = Mock()
+        frame.grayscale_var.get.return_value = True
+        frame.debug_var = Mock()
+        frame.debug_var.get.return_value = False
+        frame.monitor_unique_id = None
+        frame._selected_monitor_filter = Mock(return_value=1)
+        frame._cooldown_seconds = Mock(return_value=0.5)
+        frame._save_settings = Mock()
+        frame._append_log = Mock()
+        frame._watcher_status_pulse = Mock()
+        frame.start_btn = self.FakeControl()
+        frame.stop_btn = self.FakeControl()
+        frame.status_label = self.FakeControl()
+        frame.ui_preferences = Mock(animations_enabled=False)
+
+        with (
+            patch.object(watcher, "WatcherThread", FailedWatcher),
+            patch.object(watcher.messagebox, "showerror") as showerror,
+        ):
+            frame._start_watching()
+
+        self.assertIsNone(frame.watcher)
+        self.assertIsNone(frame._active_alert_run_token)
+        self.assertEqual(frame.start_btn.options["state"], "normal")
+        self.assertEqual(frame.stop_btn.options["state"], "disabled")
+        self.assertEqual(frame.status_label.options["text"], "Idle")
+        self.assertTrue(
+            any(
+                "Could not start watcher" in call.args[0]
+                for call in frame._append_log.call_args_list
+            )
+        )
+        showerror.assert_called_once()
+
     def test_shutdown_guards_start_and_test_callbacks(self):
         frame = object.__new__(watcher.AlertWatcherFrame)
         frame._shutting_down = True
@@ -1733,6 +1839,36 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         frame.tm.get.assert_not_called()
         popup.assert_not_called()
         sound.assert_not_called()
+
+    def test_stale_alert_from_previous_run_is_discarded(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._shutting_down = False
+        frame.log_queue = queue.Queue()
+        frame.event_queue = queue.Queue()
+        frame.event_queue.put(
+            {
+                "id": 1,
+                "name": "stale alert",
+                "monitor": 1,
+                "score": 0.99,
+                "run_token": object(),
+            }
+        )
+        frame._active_alert_run_token = object()
+        frame.tm = Mock()
+        frame._append_log = Mock()
+        frame.after = Mock()
+
+        with (
+            patch.object(watcher, "AlertPopup") as popup,
+            patch.object(watcher, "play_alert_sound") as sound,
+        ):
+            frame._poll_queues()
+
+        frame.tm.get.assert_not_called()
+        popup.assert_not_called()
+        sound.assert_not_called()
+        frame.after.assert_called_once_with(150, frame._poll_queues)
 
     def test_hotkey_callback_queues_ui_work_without_calling_tk(self):
         frame = object.__new__(watcher.AlertWatcherFrame)
@@ -2456,6 +2592,63 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(loaded.scan_region)
         self.assertIsNone(loaded.scan_region_ratio)
         self.assertIsNone(loaded.scan_region_window_size)
+
+    def test_boolean_numeric_settings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"cooldown_sec": True, "alert_volume": False}, handle)
+
+            loaded = watcher.load_settings(path)
+
+        self.assertEqual(loaded.cooldown_sec, watcher.DEFAULT_COOLDOWN_SEC)
+        self.assertEqual(loaded.alert_volume, watcher.DEFAULT_ALERT_VOLUME)
+        errors = watcher.settings_load_errors(loaded)
+        self.assertTrue(any("cooldown_sec" in error for error in errors))
+        self.assertTrue(any("alert_volume" in error for error in errors))
+
+    def test_orphan_relative_resize_metadata_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "scan_region": None,
+                        "scan_region_mode": "monitor",
+                        "scan_region_ratio": [0.1, 0.2, 0.3, 0.4],
+                        "scan_region_window_size": [1920, 1080],
+                    },
+                    handle,
+                )
+
+            loaded = watcher.load_settings(path)
+
+        self.assertIsNone(loaded.scan_region_ratio)
+        self.assertIsNone(loaded.scan_region_window_size)
+        self.assertTrue(
+            any(
+                "relative resize metadata requires a scan region" in error
+                for error in watcher.settings_load_errors(loaded)
+            )
+        )
+
+    def test_empty_window_target_without_region_normalizes_to_screen(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "scan_region": None,
+                        "scan_region_mode": "window",
+                        "target_window_title": "",
+                    },
+                    handle,
+                )
+
+            loaded = watcher.load_settings(path)
+
+        self.assertEqual(loaded.scan_region_mode, "screen")
+        self.assertFalse(watcher.settings_load_errors(loaded))
 
 
 class SoundTests(unittest.TestCase):

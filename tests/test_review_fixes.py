@@ -186,6 +186,37 @@ class ReviewFixTests(unittest.TestCase):
         self.assertIsNone(command[3])
         self.assertEqual(stopped, [True])
 
+    def test_step_preview_thread_start_failure_restores_test_button(self):
+        class FailedThread:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("thread unavailable")
+
+        app_instance = object.__new__(app.App)
+        app_instance.engine = None
+        app_instance._step_test_running = False
+        app_instance.scenario = Scenario(name="preview", steps=[Step(name="row")])
+        app_instance._selected_step_index = Mock(return_value=0)
+        app_instance._sync_scenario_settings = Mock()
+        app_instance.test_step_btn = Mock()
+        app_instance.root = Mock()
+
+        with (
+            patch.object(app, "validate_scenario"),
+            patch.object(app.threading, "Thread", FailedThread),
+            patch.object(app.messagebox, "showerror") as showerror,
+        ):
+            app_instance._test_step()
+
+        self.assertFalse(app_instance._step_test_running)
+        app_instance.test_step_btn.configure.assert_called_with(
+            state="normal",
+            text="Test",
+        )
+        showerror.assert_called_once()
+
     def test_engine_stop_closes_capture_without_spurious_log_when_never_started(self):
         logs = []
         closed = []

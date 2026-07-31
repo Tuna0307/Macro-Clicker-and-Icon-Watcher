@@ -5,9 +5,11 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
+from macro_clicker import diagnostics as diagnostics_module
 from macro_clicker.diagnostics import (
     DEFAULT_STALE_TEMP_AGE_SECONDS,
     DiagnosticCollector,
@@ -52,6 +54,36 @@ class DiagnosticCollectorTests(unittest.TestCase):
             ) as handle:
                 decision = json.loads(handle.readline())
             self.assertEqual(decision["decision"], "accepted")
+
+    def test_second_writer_start_failure_stops_first_writer(self):
+        workers = []
+
+        class FakeThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+                self.joined = False
+                workers.append(self)
+
+            def start(self):
+                if self.name == "diagnostic-decision-writer":
+                    raise OSError("cannot start second writer")
+
+            def join(self, timeout=None):
+                self.joined = True
+                self.timeout = timeout
+
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(diagnostics_module.threading, "Thread", FakeThread),
+            self.assertRaisesRegex(OSError, "second writer"),
+        ):
+            DiagnosticCollector(folder)
+
+        self.assertEqual(len(workers), 2)
+        self.assertTrue(workers[0].joined)
+        self.assertFalse(workers[1].joined)
 
     def test_retention_is_bounded_by_event_count(self):
         with tempfile.TemporaryDirectory() as folder:

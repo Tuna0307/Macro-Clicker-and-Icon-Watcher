@@ -36,6 +36,7 @@ from .detection_core import (
     resize_template_xy,
 )
 from .diagnostics import get_diagnostic_collector
+from .hotkeys import is_single_key_hotkey
 from .level_ocr import LevelOcrReader
 from .models import (
     Action,
@@ -121,8 +122,10 @@ class MacroEngine(RallyMatchingMixin):
         self.max_multiscale_candidates = 512
         self._last_perf_log = {}
         self._hotkey_handle = None
+        self._hotkey_is_key_hook = False
         self._ever_started = False
         self._stop_logged = False
+        self._stop_pending_logged = False
         self._all_match_indices = {}
         self._step_lookup = {}
         self._step_names_snapshot = ()
@@ -155,6 +158,7 @@ class MacroEngine(RallyMatchingMixin):
         self._stop_event.clear()
         self._ready_event.clear()
         self._stop_logged = False
+        self._stop_pending_logged = False
         self._pending_rally_level = None
         self._pending_rally_team_selected = None
         self._last_rally_team_busy_state = None
@@ -172,9 +176,18 @@ class MacroEngine(RallyMatchingMixin):
         for s in self.scenario.steps:
             self._last_fired[s.name] = 0.0
         try:
-            self._hotkey_handle = keyboard.add_hotkey(
-                self.scenario.kill_switch, self.stop
-            )
+            if is_single_key_hotkey(self.scenario.kill_switch):
+                self._hotkey_handle = keyboard.on_press_key(
+                    self.scenario.kill_switch,
+                    lambda _event: self.stop(),
+                )
+                self._hotkey_is_key_hook = True
+            else:
+                self._hotkey_handle = keyboard.add_hotkey(
+                    self.scenario.kill_switch,
+                    self.stop,
+                )
+                self._hotkey_is_key_hook = False
         except Exception as e:
             self._close_capture()
             raise RuntimeError(
@@ -211,12 +224,25 @@ class MacroEngine(RallyMatchingMixin):
         was_active = self.request_stop()
         running = self.is_running
         thread = getattr(self, "_thread", None)
-        if running and thread is not None and threading.current_thread() is not thread:
+        called_from_worker = thread is not None and threading.current_thread() is thread
+        if running and thread is not None and not called_from_worker:
             thread.join(timeout=2.0)
             running = thread.is_alive()
         if not running:
             self._close_capture()
-        if was_active and not getattr(self, "_stop_logged", False):
+        if (
+            was_active
+            and running
+            and not called_from_worker
+            and not getattr(self, "_stop_pending_logged", False)
+        ):
+            self.log("[warn] stop requested; the scenario worker is still finishing.")
+            self._stop_pending_logged = True
+        elif was_active and not running:
+            self._log_stopped()
+
+    def _log_stopped(self):
+        if not getattr(self, "_stop_logged", False):
             self.log("Scenario stopped.")
             self._stop_logged = True
             self._ever_started = False
@@ -241,10 +267,14 @@ class MacroEngine(RallyMatchingMixin):
     def _remove_hotkey(self):
         if self._hotkey_handle is not None:
             try:
-                keyboard.remove_hotkey(self._hotkey_handle)
+                if getattr(self, "_hotkey_is_key_hook", False):
+                    keyboard.unhook(self._hotkey_handle)
+                else:
+                    keyboard.remove_hotkey(self._hotkey_handle)
             except Exception:
                 pass
             self._hotkey_handle = None
+            self._hotkey_is_key_hook = False
 
     def _close_capture(self):
         if getattr(self, "_sct_closed", False):
@@ -311,6 +341,8 @@ class MacroEngine(RallyMatchingMixin):
             self.log(f"[error] engine stopped ({type(e).__name__}): {e}")
         finally:
             self._cleanup_runtime()
+            if self._stop_requested():
+                self._log_stopped()
 
     def _run_after_ocr_warmup(self):
         ready = self._warm_up_level_ocr()
@@ -393,13 +425,13 @@ class MacroEngine(RallyMatchingMixin):
         self._raise_if_stopped()
         return frame, monitor["left"], monitor["top"]
 
-    def _get_target_window_rect(self):
+    def _get_target_window_rect(self, *, force_refresh=False):
         title = self.scenario.target_window_title.strip()
         if not title:
             return None
 
         lookup_cache = getattr(self, "_window_rect_lookup_cache", None)
-        if lookup_cache is not None and title in lookup_cache:
+        if not force_refresh and lookup_cache is not None and title in lookup_cache:
             rect = lookup_cache[title]
             return None if rect is _WINDOW_UNAVAILABLE else rect
 
@@ -419,6 +451,16 @@ class MacroEngine(RallyMatchingMixin):
             return None
 
         return getattr(self, "_target_window_rect", None)
+
+    def _get_fresh_target_window_rect(self):
+        """Bypass the per-cycle geometry cache at the final input boundary."""
+
+        lookup = self._get_target_window_rect
+        if getattr(lookup, "__func__", None) is MacroEngine._get_target_window_rect:
+            return lookup(force_refresh=True)
+        # Tests and embedders may replace the lookup with a zero-argument
+        # provider. Calling it again still provides the required live check.
+        return lookup()
 
     def _capture_for_condition(self, cond: ImageCondition, frame_cache=None):
         region = self._resolve_capture_region(cond)
@@ -1044,7 +1086,12 @@ class MacroEngine(RallyMatchingMixin):
         low_variance = _spatial_deviation(scaled_template) < float(
             getattr(self, "low_variance_threshold", 1.0)
         )
-        return _best_variant_match(frame, scaled_template, low_variance)
+        return _best_variant_match(
+            frame,
+            scaled_template,
+            low_variance,
+            stop_check=self._raise_if_stopped,
+        )
 
     def _find_best_template_match_coarse(self, frame, template, confidence):
         return self._find_template_matches_in_frame(
@@ -1815,11 +1862,24 @@ class MacroEngine(RallyMatchingMixin):
             scenario.target_window_title.strip() if scenario is not None else ""
         )
         if target_title:
-            target_rect = self._get_target_window_rect()
-            if target_rect is None:
+            detected_rect = self._get_target_window_rect()
+            if detected_rect is None:
                 self.log(
                     f"  [safety] click ({x}, {y}) skipped because the target "
                     "window is unavailable"
+                )
+                return False
+            target_rect = self._get_fresh_target_window_rect()
+            if target_rect is None:
+                self.log(
+                    f"  [safety] click ({x}, {y}) skipped because the target "
+                    "window disappeared before input"
+                )
+                return False
+            if target_rect != detected_rect:
+                self.log(
+                    f"  [safety] click ({x}, {y}) skipped because the target "
+                    "window moved or resized after detection"
                 )
                 return False
             left, top, width, height = target_rect
@@ -1844,6 +1904,14 @@ class MacroEngine(RallyMatchingMixin):
             # the final input boundary instead of trusting the earlier check.
             if target_title and not self._target_is_foreground_for_click(target_title):
                 return False
+            if target_title:
+                final_rect = self._get_fresh_target_window_rect()
+                if final_rect != target_rect:
+                    self.log(
+                        f"  [safety] click ({x}, {y}) skipped because the target "
+                        "window moved or resized during pointer movement"
+                    )
+                    return False
             pyautogui.click(button=button)
         else:
             if self._stop_requested():
@@ -2001,7 +2069,7 @@ class MacroEngine(RallyMatchingMixin):
                     continue
 
                 self.log(f"[fire] {step.name}")
-                fired_any = True
+                step_performed_action = False
                 retry_step = False
                 detection_context_stale = False
                 self._abort_current_step = False
@@ -2051,6 +2119,7 @@ class MacroEngine(RallyMatchingMixin):
                     finally:
                         self._matching_row_reuse_context = None
                     if invalidates_frame:
+                        step_performed_action = True
                         frame_cache.clear()
                         self._window_rect_lookup_cache = {}
                         detection_context_stale = True
@@ -2066,6 +2135,12 @@ class MacroEngine(RallyMatchingMixin):
                                     self._run_action(
                                         step, cleanup_action, points, matches
                                     )
+                                    # Cleanup set_step actions mutate scenario
+                                    # state even though _run_action returns False
+                                    # because no screen frame was invalidated.
+                                    # Record that committed work before a Stop
+                                    # can interrupt the remaining cleanup.
+                                    fired_any = True
                             finally:
                                 self._cleanup_after_abort = False
                         break
@@ -2076,6 +2151,7 @@ class MacroEngine(RallyMatchingMixin):
                         return fired_any
 
                 if not retry_step:
+                    fired_any = True
                     if any(
                         action.type == "select_rally_team" for action in step.actions
                     ):
@@ -2088,6 +2164,10 @@ class MacroEngine(RallyMatchingMixin):
                     self._last_fired[step.name] = now
                     if not step.repeatable:
                         step.enabled = False
+                elif step_performed_action:
+                    # Some input was already committed before a later action
+                    # asked to retry, so retain the short post-input poll.
+                    fired_any = True
             cycle_elapsed = time.perf_counter() - cycle_start
             if cycle_elapsed >= getattr(
                 self, "slow_cycle_threshold", 0.35

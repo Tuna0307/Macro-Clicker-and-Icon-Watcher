@@ -8,6 +8,7 @@ from macro_clicker.hotkeys import (
     canonical_hotkey,
     find_hotkey_conflicts,
     hotkeys_conflict,
+    permissive_single_key_conflict,
 )
 from macro_clicker.models import (
     Action,
@@ -44,6 +45,44 @@ class HotkeySafetyTests(unittest.TestCase):
         self.assertTrue(hotkeys_conflict("f8", "f8, f9"))
         self.assertTrue(hotkeys_conflict("control+f8, f9", "ctrl+f8"))
         self.assertFalse(hotkeys_conflict("f8, f9", "f8, f10"))
+
+    def test_duplicate_key_inside_chord_is_rejected_but_sequence_is_valid(self):
+        with self.assertRaisesRegex(ValueError, "cannot repeat"):
+            canonical_hotkey("f12+f12")
+
+        self.assertEqual(len(canonical_hotkey("f12, f12")), 2)
+
+    def test_distinct_sided_modifiers_survive_duplicate_parser_expansion(self):
+        canonical = canonical_hotkey("left ctrl+right ctrl")
+
+        self.assertEqual(len(canonical), 1)
+        self.assertTrue(canonical[0])
+        self.assertTrue(all(len(combination) == 2 for combination in canonical[0]))
+
+    def test_permissive_single_key_stop_overlaps_modified_binding(self):
+        self.assertTrue(permissive_single_key_conflict("f12", "ctrl+f12"))
+        self.assertTrue(permissive_single_key_conflict("f12", "f8, shift+f12"))
+        self.assertFalse(permissive_single_key_conflict("f12", "ctrl+f8"))
+
+    def test_scenario_rejects_impossible_duplicate_kill_switch(self):
+        with self.assertRaisesRegex(ValueError, "cannot repeat"):
+            validate_scenario(
+                Scenario(
+                    name="Impossible stop",
+                    start_hotkey="f8",
+                    kill_switch="f12+f12",
+                )
+            )
+
+    def test_single_key_stop_conflicts_with_modified_start(self):
+        with self.assertRaisesRegex(ValueError, "overlapping physical key sequences"):
+            validate_scenario(
+                Scenario(
+                    name="Permissive stop",
+                    start_hotkey="ctrl+f12",
+                    kill_switch="f12",
+                )
+            )
 
     def test_scenario_rejects_physical_start_stop_collision(self):
         for start, stop in (
@@ -175,6 +214,10 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
 
         self.assertIsNotNone(conflict)
         self.assertIn("Macro start and Icon Alerts start/stop", conflict)
+
+    def test_settings_validation_uses_permissive_single_key_stop(self):
+        self.assertTrue(app_module._start_stop_hotkeys_conflict("ctrl+f12", "f12"))
+        self.assertFalse(app_module._start_stop_hotkeys_conflict("ctrl+f8", "f12"))
 
     def test_start_registration_check_can_ignore_stop_only_collision(self):
         ui = self._app_with_alert_hotkeys(toggle="control+f12")
@@ -361,6 +404,96 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
         ui._poll_log_queue()
 
         ui._start_engine.assert_called_once_with()
+
+    def test_failed_start_attempt_still_coalesces_queued_hotkeys(self):
+        ui = object.__new__(app_module.App)
+        ui.control_queue = queue.Queue()
+        ui.log_queue = queue.Queue()
+        ui.root = SimpleNamespace(
+            after=lambda *_args: None,
+            grab_current=lambda: None,
+        )
+        ui.engine = None
+        ui._engine_ui_active = False
+        current_token = object()
+        ui._start_hotkey_registration_token = current_token
+        ui._registered_start_hotkey = "f8"
+        ui._start_engine = Mock()
+
+        ui._request_start_from_hotkey(current_token)
+        ui._request_start_from_hotkey(current_token)
+        ui._poll_log_queue()
+
+        ui._start_engine.assert_called_once_with()
+
+    def test_hotkey_callback_during_failed_start_does_not_chain_retries(self):
+        ui = object.__new__(app_module.App)
+        ui.control_queue = queue.Queue()
+        ui.log_queue = queue.Queue()
+        ui.root = SimpleNamespace(
+            after=lambda *_args: None,
+            grab_current=lambda: None,
+        )
+        ui.engine = None
+        ui._engine_ui_active = False
+        current_token = object()
+        ui._start_hotkey_registration_token = current_token
+        ui._registered_start_hotkey = "f8"
+        attempts = []
+
+        def fail_while_key_repeats():
+            attempts.append(True)
+            ui._request_start_from_hotkey(current_token)
+
+        ui._start_engine = Mock(side_effect=fail_while_key_repeats)
+        ui._request_start_from_hotkey(current_token)
+
+        ui._poll_log_queue()
+
+        self.assertEqual(attempts, [True])
+        self.assertTrue(ui.control_queue.empty())
+        self.assertFalse(ui._start_request_in_progress)
+
+    def test_hotkey_callback_during_manual_start_does_not_queue_retry(self):
+        ui = object.__new__(app_module.App)
+        ui.control_queue = queue.Queue()
+        current_token = object()
+        ui._start_hotkey_registration_token = current_token
+        ui._start_request_generation = 0
+        ui._pending_start_request = None
+        ui._start_request_in_progress = False
+
+        def attempt_while_key_repeats():
+            ui._request_start_from_hotkey(current_token)
+
+        ui._start_engine_attempt = Mock(side_effect=attempt_while_key_repeats)
+
+        ui._start_engine()
+
+        ui._start_engine_attempt.assert_called_once_with()
+        self.assertTrue(ui.control_queue.empty())
+        self.assertFalse(ui._start_request_in_progress)
+
+    def test_manual_run_stop_invalidates_older_queued_start(self):
+        ui = object.__new__(app_module.App)
+        ui.control_queue = queue.Queue()
+        ui.log_queue = queue.Queue()
+        ui.root = SimpleNamespace(after=lambda *_args: None)
+        ui.engine = None
+        ui._engine_ui_active = False
+        current_token = object()
+        ui._start_hotkey_registration_token = current_token
+        ui._registered_start_hotkey = "f8"
+        ui._start_engine_from_hotkey = Mock()
+
+        ui._request_start_from_hotkey(current_token)
+        # Both a manual Run attempt and the following Stop invalidate work
+        # queued for the older stopped generation.
+        ui._invalidate_queued_start_requests()
+        ui._invalidate_queued_start_requests()
+        ui._poll_log_queue()
+
+        ui._start_engine_from_hotkey.assert_not_called()
 
 
 if __name__ == "__main__":

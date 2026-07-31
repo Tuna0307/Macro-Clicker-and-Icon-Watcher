@@ -211,6 +211,14 @@ def load_settings(path=SETTINGS_PATH):
             "scan_region",
             "relative regions need both ratio and reference size",
         )
+    if values["scan_region"] is None and (
+        raw_ratio is not None or raw_window_size is not None
+    ):
+        _field_error(
+            errors,
+            "scan_region",
+            "relative resize metadata requires a scan region",
+        )
     if (
         values["scan_region"] is None
         or values["scan_region_mode"] == "screen"
@@ -221,6 +229,8 @@ def load_settings(path=SETTINGS_PATH):
         values["scan_region_window_size"] = None
 
     try:
+        if isinstance(values["cooldown_sec"], bool):
+            raise TypeError
         cooldown = float(values["cooldown_sec"])
         if not math.isfinite(cooldown):
             raise ValueError
@@ -229,6 +239,8 @@ def load_settings(path=SETTINGS_PATH):
         values["cooldown_sec"] = defaults.cooldown_sec
         _field_error(errors, "cooldown_sec", "must be a finite number")
     try:
+        if isinstance(values["alert_volume"], bool):
+            raise TypeError
         volume = float(values["alert_volume"])
         if not math.isfinite(volume):
             raise ValueError
@@ -250,6 +262,21 @@ def load_settings(path=SETTINGS_PATH):
         if not isinstance(values[key], str):
             values[key] = getattr(defaults, key)
             _field_error(errors, key, "must be text")
+    if (
+        values["scan_region_mode"] == "window"
+        and not values["target_window_title"].strip()
+    ):
+        if values["scan_region"] is None:
+            # Older UI versions could leave this stale mode behind after the
+            # target was cleared. With no relative box, full-screen scanning is
+            # the unambiguous behavior already shown by the UI.
+            values["scan_region_mode"] = "screen"
+        else:
+            _field_error(
+                errors,
+                "target_window_title",
+                "is required for a window-relative scan region",
+            )
     if not values["monitor_choice"].strip():
         values["monitor_choice"] = defaults.monitor_choice
         _field_error(errors, "monitor_choice", "cannot be blank")

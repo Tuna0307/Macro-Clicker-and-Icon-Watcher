@@ -21,7 +21,7 @@ from typing import List, Optional
 import keyboard
 
 from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
-from .hotkeys import canonical_hotkey, hotkeys_conflict
+from .hotkeys import canonical_hotkey, permissive_single_key_conflict
 from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
 
@@ -898,10 +898,14 @@ def validate_scenario(scenario: Scenario, require_files=False):
             canonical_hotkey(hotkey)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{label} is invalid: {exc}") from exc
-    if hotkeys_conflict(scenario.start_hotkey, scenario.kill_switch):
+    if permissive_single_key_conflict(
+        scenario.kill_switch,
+        scenario.start_hotkey,
+    ):
         raise ValueError(
-            "start_hotkey and kill_switch must not use overlapping physical "
-            "key sequences; aliases and reordered modifiers count as the same keys"
+            "start_hotkey and kill_switch must not use overlapping physical key "
+            "sequences; an unmodified single-key stop also fires while modifiers "
+            "are held"
         )
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")

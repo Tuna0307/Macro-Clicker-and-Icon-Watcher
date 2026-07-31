@@ -26,12 +26,19 @@ def canonical_hotkey(value: str) -> CanonicalHotkey:
 
     canonical_steps = []
     for step in parsed_steps:
-        combinations = {
-            tuple(sorted(int(scan_code) for scan_code in combination))
-            for combination in step
-        }
+        combinations = set()
+        for combination in step:
+            scan_codes = tuple(int(scan_code) for scan_code in combination)
+            if len(scan_codes) != len(set(scan_codes)):
+                # Generic/sided modifier parsing can include both valid
+                # two-key alternatives and an impossible duplicate expansion.
+                # Keep the usable alternatives and reject the chord only when
+                # every expansion repeats one physical key (for example
+                # ``f12+f12``).
+                continue
+            combinations.add(tuple(sorted(scan_codes)))
         if not combinations:
-            raise ValueError("hotkey contains an empty key combination")
+            raise ValueError("a hotkey chord cannot repeat the same physical key")
         canonical_steps.append(tuple(sorted(combinations)))
     if not canonical_steps:
         raise ValueError("hotkey must contain at least one key")
@@ -44,6 +51,35 @@ def hotkeys_conflict(first: str, second: str) -> bool:
     return _canonical_hotkeys_conflict(
         canonical_hotkey(first),
         canonical_hotkey(second),
+    )
+
+
+def is_single_key_hotkey(value: str) -> bool:
+    """Return whether ``value`` is one non-sequential physical key."""
+
+    canonical = canonical_hotkey(value)
+    return len(canonical) == 1 and all(
+        len(combination) == 1 for combination in canonical[0]
+    )
+
+
+def permissive_single_key_conflict(single_key: str, other: str) -> bool:
+    """
+    Compare a permissive single-key hook with another keyboard binding.
+
+    A kill switch registered as a key hook fires even while modifiers are held.
+    Therefore ``f12`` overlaps not only another plain ``f12`` binding, but also
+    bindings such as ``ctrl+f12`` and sequences containing F12.
+    """
+
+    single = canonical_hotkey(single_key)
+    if len(single) != 1 or any(len(combination) != 1 for combination in single[0]):
+        return _canonical_hotkeys_conflict(single, canonical_hotkey(other))
+    scan_codes = {combination[0] for combination in single[0]}
+    return any(
+        any(scan_code in scan_codes for scan_code in combination)
+        for step in canonical_hotkey(other)
+        for combination in step
     )
 
 

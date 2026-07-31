@@ -136,6 +136,26 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertFalse(result)
         click.assert_not_called()
 
+    def test_click_point_uses_live_window_geometry_not_cycle_cache(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._window_rect_lookup_cache = {"Game": (0, 0, 1000, 800)}
+        engine._target_window_missing_logged = False
+        engine._window_rect_provider = Mock(return_value=(1500, 0, 400, 800))
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = lambda _title: True
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        engine._window_rect_provider.assert_called_once_with("Game")
+        click.assert_not_called()
+
     def test_click_point_is_skipped_when_target_window_is_not_foreground(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(
@@ -423,10 +443,11 @@ class EngineSafetyTests(unittest.TestCase):
         engine._click_point = lambda x, y, button: clicks.append((x, y, button))
         engine.log = logs.append
 
-        engine._cycle()
+        fired = engine._cycle()
 
         self.assertEqual(clicks, [])
         self.assertEqual(engine._last_fired[step.name], 0.0)
+        self.assertFalse(fired)
         self.assertTrue(any("[safety]" in message for message in logs))
 
     def test_detection_point_is_refreshed_after_wait_before_click(self):
@@ -668,7 +689,7 @@ class EngineSafetyTests(unittest.TestCase):
             patch.object(engine_module.mss, "MSS", return_value=FakeCapture()),
             patch.object(
                 engine_module.keyboard,
-                "add_hotkey",
+                "on_press_key",
                 side_effect=OSError("hook unavailable"),
             ),
         ):
@@ -678,6 +699,57 @@ class EngineSafetyTests(unittest.TestCase):
 
         self.assertFalse(runtime.is_running)
         self.assertTrue(runtime._sct_closed)
+
+    def test_single_key_kill_switch_uses_permissive_key_hook(self):
+        class FakeCapture:
+            def close(self):
+                pass
+
+        with (
+            patch.object(engine_module.mss, "MSS", return_value=FakeCapture()),
+            patch.object(
+                engine_module.keyboard,
+                "on_press_key",
+                return_value="f12-hook",
+            ) as on_press_key,
+            patch.object(engine_module.keyboard, "add_hotkey") as add_hotkey,
+            patch.object(engine_module.keyboard, "unhook") as unhook,
+        ):
+            runtime = MacroEngine(Scenario(name="safe"))
+            runtime._run_loop = lambda: runtime._stop_event.wait(1.0)
+            runtime.start()
+            callback = on_press_key.call_args.args[1]
+            callback(object())
+
+        add_hotkey.assert_not_called()
+        unhook.assert_called_once_with("f12-hook")
+        self.assertFalse(runtime.is_running)
+
+    def test_stop_timeout_does_not_claim_worker_has_stopped(self):
+        class SlowThread:
+            alive = True
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout=None):
+                self.timeout = timeout
+
+        engine = self._bare_engine()
+        engine._thread = SlowThread()
+        engine._hotkey_handle = None
+        engine._ever_started = True
+        engine._stop_logged = False
+        engine._stop_pending_logged = False
+        engine.sct = type("Capture", (), {"close": lambda _self: None})()
+        logs = []
+        engine.log = logs.append
+
+        engine.stop()
+
+        self.assertTrue(engine._thread.is_alive())
+        self.assertNotIn("Scenario stopped.", logs)
+        self.assertTrue(any("still finishing" in line for line in logs))
 
     def test_runtime_and_preview_compare_rival_only_near_each_target(self):
         engine = self._bare_engine()

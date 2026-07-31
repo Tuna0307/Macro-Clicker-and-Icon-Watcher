@@ -58,6 +58,8 @@ DEFAULT_LOW_VARIANCE_THRESHOLD = 1.0
 DEFAULT_MAX_VARIANT_PIXELS = 24_000_000
 FULL_SCORE_TIE_EPSILON = 2e-6
 MAX_PARALLEL_VARIANT_WORKERS = 6
+MAX_PIXEL_TIE_CANDIDATES = 64
+MAX_TEXT_SHAPE_CANDIDATES = 128
 MATCH_MODE_TEXT = "colored_text"
 MATCH_MODE_STATIC = "static_picture"
 MATCH_MODE_ANIMATED = "animated_picture"
@@ -617,26 +619,43 @@ def _best_variant_match(
     text_shape=False,
     *,
     return_pixel_error=False,
+    cancel_event=None,
+    stop_check=None,
 ):
-    if template.shape[0] > screen.shape[0] or template.shape[1] > screen.shape[1]:
+    def cancelled_result():
         if return_pixel_error:
             return -1.0, None, math.inf
         return -1.0, None
+
+    if _cancelled(cancel_event, stop_check):
+        return cancelled_result()
+    if template.shape[0] > screen.shape[0] or template.shape[1] > screen.shape[1]:
+        return cancelled_result()
     scores = _score_map(screen, template, low_variance)
+    if _cancelled(cancel_event, stop_check):
+        return cancelled_result()
     _, max_score, _, max_location = cv2.minMaxLoc(scores)
     if text_shape and scores.size:
-        count = min(8, scores.size)
-        flat = scores.reshape(-1)
-        indices = np.argpartition(flat, -count)[-count:]
+        height, width = template.shape[:2]
+        proposals = _bounded_local_peaks(
+            scores,
+            min(float(max_score), 0.35),
+            width,
+            height,
+            min(MAX_TEXT_SHAPE_CANDIDATES, scores.size),
+        )
+        if not proposals:
+            proposals = [(max_location[0], max_location[1], float(max_score))]
         best_score = -1.0
         best_location = max_location
         best_correlation = -1.0
         best_pixel_error = math.inf
-        for index in indices:
-            y, x = np.unravel_index(int(index), scores.shape)
+        for proposal_index, (x, y, correlation) in enumerate(proposals):
+            if proposal_index % 8 == 0 and _cancelled(cancel_event, stop_check):
+                return cancelled_result()
             location = (int(x), int(y))
             shape_score = _text_shape_score(screen, template, location)
-            correlation = float(scores[y, x])
+            correlation = float(correlation)
             pixel_error = _pixel_mean_squared_error(screen, template, location)
             if pixel_error == 0.0:
                 shape_score = 1.0
@@ -674,14 +693,33 @@ def _best_variant_match(
     elif best_score >= 1.0 - FULL_SCORE_TIE_EPSILON:
         # TM_CCOEFF_NORMED uses float32 score maps. A one-value mutation can
         # round to 1.0 while an exact patch rounds just below it. Inspect every
-        # numerically tied peak using the original integer pixels so the exact
-        # patch wins deterministically.
-        tied_indices = np.flatnonzero(
-            scores.reshape(-1) >= best_score - FULL_SCORE_TIE_EPSILON
-        )
-        result_width = scores.shape[1]
+        # numerically tied peak with a vectorized squared-difference pass, then
+        # verify only a bounded shortlist using the original integer pixels.
+        # This keeps exact matches deterministic without a million-iteration
+        # Python loop on repetitive screens.
+        if _cancelled(cancel_event, stop_check):
+            return cancelled_result()
+        squared_differences = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF)
+        if _cancelled(cancel_event, stop_check):
+            return cancelled_result()
         flat_scores = scores.reshape(-1)
-        for index in tied_indices:
+        tied_indices = np.flatnonzero(
+            flat_scores >= best_score - FULL_SCORE_TIE_EPSILON
+        )
+        flat_differences = squared_differences.reshape(-1)
+        if tied_indices.size > MAX_PIXEL_TIE_CANDIDATES:
+            selected = np.argpartition(
+                flat_differences[tied_indices],
+                MAX_PIXEL_TIE_CANDIDATES - 1,
+            )[:MAX_PIXEL_TIE_CANDIDATES]
+            tied_indices = tied_indices[selected]
+        tied_indices = tied_indices[
+            np.argsort(flat_differences[tied_indices], kind="stable")
+        ]
+        result_width = scores.shape[1]
+        for candidate_index, index in enumerate(tied_indices):
+            if candidate_index % 8 == 0 and _cancelled(cancel_event, stop_check):
+                return cancelled_result()
             location = (
                 int(index) % result_width,
                 int(index) // result_width,
@@ -870,6 +908,8 @@ def _parallel_full_resolution_multiscale_match(
             bool(variant["low_variance"]),
             text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
             return_pixel_error=True,
+            cancel_event=cancel_event,
+            stop_check=stop_check,
         )
         if cancel_event is not None and cancel_event.is_set():
             return order, variant, -1.0, None, math.inf
@@ -1046,6 +1086,8 @@ def match_template_multiscale(
             bool(variant["low_variance"]),
             text_shape=variant.get("match_mode") == MATCH_MODE_TEXT,
             return_pixel_error=True,
+            cancel_event=cancel_event,
+            stop_check=stop_check,
         )
         if location is None:
             continue
