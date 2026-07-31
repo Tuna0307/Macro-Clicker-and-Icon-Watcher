@@ -200,7 +200,18 @@ class MacroEngine(RallyMatchingMixin):
         self._thread = threading.Thread(target=thread_target, daemon=True)
         if not uses_level_ocr:
             self._ready_event.set()
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception:
+            # Thread.start() can fail after the global kill switch and capture
+            # handle have already been acquired. Roll those resources back so
+            # direct MacroEngine callers are as safe as the GUI wrapper.
+            self._ready_event.clear()
+            self._stop_event.set()
+            self._thread = None
+            self._cleanup_runtime()
+            self._ever_started = False
+            raise
         if not uses_level_ocr:
             self.log(
                 f"Scenario '{self.scenario.name}' started. Kill switch: {self.scenario.kill_switch.upper()}"
@@ -348,6 +359,7 @@ class MacroEngine(RallyMatchingMixin):
         ready = self._warm_up_level_ocr()
         if self._stop_event.is_set():
             self._cleanup_runtime()
+            self._log_stopped()
             return
         if not ready:
             self.log("[ocr] unavailable; rows that require a level will be skipped")
@@ -1895,6 +1907,14 @@ class MacroEngine(RallyMatchingMixin):
             return False
         if target_title and not self._target_is_foreground_for_click(target_title):
             return False
+        if target_title:
+            final_rect = self._get_fresh_target_window_rect()
+            if final_rect != target_rect:
+                self.log(
+                    f"  [safety] click ({x}, {y}) skipped because the target "
+                    "window moved or resized during foreground validation"
+                )
+                return False
         move_duration = getattr(self, "click_move_duration", 0.0)
         if move_duration:
             pyautogui.moveTo(x, y, duration=move_duration)
@@ -2066,6 +2086,30 @@ class MacroEngine(RallyMatchingMixin):
                     return fired_any
 
                 if not self._prepare_rally_team_availability_for_entry(step):
+                    continue
+                scenario = getattr(self, "scenario", None)
+                if (
+                    scenario is not None
+                    and scenario.target_window_title.strip()
+                    and any(
+                        action.type
+                        in {"click", "click_matching_row", "select_rally_team", "key"}
+                        for action in step.actions
+                    )
+                    and self._get_target_window_rect() is None
+                ):
+                    # Avoid reporting a conditionless step as fired on every
+                    # normal poll when its required target window is absent.
+                    # Both this safety message and the lower-level missing
+                    # window warning are rate-limited.
+                    if self._should_log_perf(
+                        ("missing-target-step", step.name),
+                        now,
+                    ):
+                        self.log(
+                            f"  [safety] '{step.name}' skipped because the "
+                            "target window is unavailable"
+                        )
                     continue
 
                 self.log(f"[fire] {step.name}")

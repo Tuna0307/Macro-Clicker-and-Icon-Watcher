@@ -217,6 +217,22 @@ class ReviewFixTests(unittest.TestCase):
         )
         showerror.assert_called_once()
 
+    def test_macro_start_is_blocked_while_step_preview_is_running(self):
+        app_instance = object.__new__(app.App)
+        app_instance._step_test_running = True
+        app_instance.engine = None
+        app_instance.root = Mock()
+        app_instance._invalidate_queued_start_requests = Mock()
+
+        with (
+            patch.object(app.messagebox, "showwarning") as warning,
+            patch.object(app, "MacroEngine") as macro_engine,
+        ):
+            app_instance._start_engine_attempt()
+
+        warning.assert_called_once()
+        macro_engine.assert_not_called()
+
     def test_engine_stop_closes_capture_without_spurious_log_when_never_started(self):
         logs = []
         closed = []

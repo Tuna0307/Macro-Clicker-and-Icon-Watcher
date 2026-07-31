@@ -70,7 +70,7 @@ def test_alert_popup_follows_physical_monitor_after_reordering():
     assert rect == (0, 0, 100, 100)
 
 
-def test_alert_popup_uses_detection_rect_when_monitor_identity_disappears():
+def test_alert_popup_falls_back_on_screen_when_monitor_is_unplugged():
     class Capture:
         monitors = [
             {"left": 0, "top": 0, "width": 300, "height": 100},
@@ -79,6 +79,44 @@ def test_alert_popup_uses_detection_rect_when_monitor_identity_disappears():
                 "top": 0,
                 "width": 100,
                 "height": 100,
+                "unique_id": "DISPLAY-A",
+            },
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    popup = object.__new__(alert_ui.AlertPopup)
+
+    with patch.object(alert_ui.mss, "MSS", return_value=Capture()):
+        rect = popup._alert_monitor_rect(
+            2,
+            monitor_unique_id="DISPLAY-B",
+            detected_monitor_rect=(-1920, 0, 1920, 1080),
+        )
+
+    assert rect == (0, 0, 100, 100)
+
+
+def test_alert_popup_uses_detection_rect_when_geometry_is_still_connected():
+    class Capture:
+        monitors = [
+            {"left": -1920, "top": 0, "width": 3840, "height": 1080},
+            {
+                "left": -1920,
+                "top": 0,
+                "width": 1920,
+                "height": 1080,
+                "unique_id": None,
+            },
+            {
+                "left": 0,
+                "top": 0,
+                "width": 1920,
+                "height": 1080,
                 "unique_id": "DISPLAY-A",
             },
         ]

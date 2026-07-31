@@ -895,6 +895,58 @@ class SharedMatcherTests(unittest.TestCase):
             core.MAX_PIXEL_TIE_CANDIDATES + 1,
         )
 
+    def test_exact_target_survives_more_than_sixty_four_float_ranked_decoys(self):
+        rng = np.random.default_rng(149)
+        template = rng.integers(0, 120, (4, 4), dtype=np.uint8)
+        candidate_count = 80
+        stride = template.shape[1] + 1
+        screen = np.full(
+            (template.shape[0], candidate_count * stride),
+            255,
+            dtype=np.uint8,
+        )
+        scores = np.full(
+            (
+                1,
+                screen.shape[1] - template.shape[1] + 1,
+            ),
+            -1.0,
+            dtype=np.float32,
+        )
+        squared_differences = np.full(scores.shape, 10_000.0, dtype=np.float32)
+        for index in range(candidate_count - 1):
+            x = index * stride
+            decoy = template.copy()
+            decoy[index % 4, (index // 4) % 4] += 1
+            screen[:, x : x + template.shape[1]] = decoy
+            scores[0, x] = 1.0
+            squared_differences[0, x] = float(index)
+        exact_x = (candidate_count - 1) * stride
+        screen[:, exact_x : exact_x + template.shape[1]] = template
+        scores[0, exact_x] = 1.0
+        # Simulate OpenCV's float32 SQDIFF ordering the exact patch behind all
+        # corrupt patches, so a 64-item approximate shortlist cannot contain it.
+        squared_differences[0, exact_x] = 20_000.0
+
+        with (
+            patch.object(core, "_score_map", return_value=scores),
+            patch.object(
+                core.cv2,
+                "matchTemplate",
+                return_value=squared_differences,
+            ),
+        ):
+            score, location, pixel_error = core._best_variant_match(
+                screen,
+                template,
+                low_variance=False,
+                return_pixel_error=True,
+            )
+
+        self.assertEqual(score, 1.0)
+        self.assertEqual(location, (exact_x, 0))
+        self.assertEqual(pixel_error, 0.0)
+
     def test_best_variant_match_observes_cancellation_after_score_map(self):
         cancel_event = threading.Event()
         screen = np.zeros((40, 40), dtype=np.uint8)

@@ -843,6 +843,10 @@ class TemplateManager:
                     entry_errors.append(
                         "screen regions cannot contain relative resize metadata"
                     )
+                if region is None and (
+                    raw_ratio is not None or raw_region_size is not None
+                ):
+                    entry_errors.append("relative resize metadata requires a region")
                 if region_mode in {"window", "monitor"} and region is not None:
                     if (region_ratio is None) != (region_window_size is None):
                         entry_errors.append(
@@ -2736,7 +2740,7 @@ class AlertWatcherFrame(ttk.Frame):
     def _setup_hotkeys(self):
         if not HAVE_KEYBOARD:
             return
-        from .hotkeys import find_hotkey_conflicts
+        from .hotkeys import canonical_hotkey, find_hotkey_conflicts
 
         bindings = (
             (
@@ -2750,22 +2754,30 @@ class AlertWatcherFrame(ttk.Frame):
                 self._test_alert_from_hotkey,
             ),
         )
-        blocked_labels = set()
-        try:
-            conflicts = find_hotkey_conflicts(
-                (label, hotkey) for label, hotkey, _callback in bindings
-            )
-        except ValueError as exc:
-            self._append_log(f"Could not validate alert hotkeys: {exc}")
-        else:
-            for first, second in conflicts:
-                blocked_labels.add(second)
-                self._append_log(
-                    f"Hotkey conflict: {second} duplicates {first}; "
-                    f"{second} was not registered."
-                )
-
+        valid_bindings = []
         for label, hotkey, callback in bindings:
+            try:
+                canonical_hotkey(hotkey)
+            except (TypeError, ValueError) as exc:
+                self._append_log(
+                    f"Could not validate {label} hotkey {hotkey!r}: {exc}; "
+                    "it was not registered."
+                )
+                continue
+            valid_bindings.append((label, hotkey, callback))
+
+        blocked_labels = set()
+        conflicts = find_hotkey_conflicts(
+            (label, hotkey) for label, hotkey, _callback in valid_bindings
+        )
+        for first, second in conflicts:
+            blocked_labels.add(second)
+            self._append_log(
+                f"Hotkey conflict: {second} duplicates {first}; "
+                f"{second} was not registered."
+            )
+
+        for label, hotkey, callback in valid_bindings:
             if label in blocked_labels:
                 continue
             try:
@@ -3540,15 +3552,29 @@ class AlertWatcherFrame(ttk.Frame):
                 "[performance] An animated icon has no bounded region; "
                 "full-screen negative scans can take several seconds."
             )
-        if (
-            self.scan_region_mode == "window"
-            and self.scan_region is not None
-            and not self.target_window_var.get().strip()
-        ):
+        target_window_title = self.target_window_var.get().strip()
+        enabled_window_regions = [
+            item.get("name") or f"icon {item.get('id', '?')}"
+            for item in items
+            if item.get("enabled", True)
+            and item.get("region") is not None
+            and item.get("region_mode") == "window"
+        ]
+        global_window_region = (
+            self.scan_region_mode == "window" and self.scan_region is not None
+        )
+        if not target_window_title and (global_window_region or enabled_window_regions):
+            affected = ""
+            if enabled_window_regions:
+                names = ", ".join(str(name) for name in enabled_window_regions[:4])
+                if len(enabled_window_regions) > 4:
+                    names += f", and {len(enabled_window_regions) - 4} more"
+                affected = f"\n\nWindow-relative watched icons: {names}"
             messagebox.showerror(
                 "Target window required",
-                "Choose a target window or clear the window-relative scan region "
-                "before starting monitoring.",
+                "Choose a target window before starting monitoring. Your "
+                "window-relative regions were preserved and will work again "
+                f"after a target is selected.{affected}",
                 parent=self,
             )
             return
@@ -3565,7 +3591,7 @@ class AlertWatcherFrame(ttk.Frame):
             scan_region_mode=self.scan_region_mode,
             scan_region_ratio=self.scan_region_ratio,
             scan_region_window_size=self.scan_region_window_size,
-            target_window_title=self.target_window_var.get().strip(),
+            target_window_title=target_window_title,
             use_grayscale=self.grayscale_var.get(),
             debug=self.debug_var.get(),
             cooldown_sec=self._cooldown_seconds(),

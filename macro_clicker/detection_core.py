@@ -612,6 +612,66 @@ def _pixel_mean_squared_error(screen, template, location):
     return float(np.mean(difference * difference))
 
 
+def _find_exact_pixel_candidate(
+    screen,
+    template,
+    flat_candidate_indices,
+    result_width,
+    *,
+    cancel_event=None,
+    stop_check=None,
+):
+    """
+    Find an exact candidate without relying on float32 match scores.
+
+    OpenCV's correlation and squared-difference maps can both reorder
+    near-perfect patches after float32 rounding. Compare tied candidates
+    directly in bounded-memory NumPy chunks so an exact target cannot fall out
+    of the approximate shortlist.
+    """
+
+    indices = np.asarray(flat_candidate_indices, dtype=np.intp)
+    if indices.size == 0:
+        return None, False
+    height, width = template.shape[:2]
+    channels = template.shape[2] if template.ndim == 3 else 1
+    bytes_per_candidate_row = max(
+        1,
+        width * channels * int(screen.dtype.itemsize),
+    )
+    chunk_size = max(
+        1,
+        min(indices.size, (16 * 1024 * 1024) // bytes_per_candidate_row),
+    )
+    x_offsets = np.arange(width, dtype=np.intp)
+    for chunk_start in range(0, indices.size, chunk_size):
+        if _cancelled(cancel_event, stop_check):
+            return None, True
+        chunk = indices[chunk_start : chunk_start + chunk_size]
+        ys = chunk // result_width
+        xs = chunk % result_width
+        exact = np.ones(chunk.size, dtype=bool)
+        for row in range(height):
+            if row % 8 == 0 and _cancelled(cancel_event, stop_check):
+                return None, True
+            candidate_row = screen[
+                (ys + row)[:, None],
+                xs[:, None] + x_offsets,
+            ]
+            equality_axes = tuple(range(1, candidate_row.ndim))
+            exact &= np.all(candidate_row == template[row], axis=equality_axes)
+            if not np.any(exact):
+                break
+        exact_offsets = np.flatnonzero(exact)
+        if exact_offsets.size:
+            exact_index = int(chunk[int(exact_offsets[0])])
+            return (
+                exact_index % result_width,
+                exact_index // result_width,
+            ), False
+    return None, False
+
+
 def _best_variant_match(
     screen,
     template,
@@ -703,10 +763,11 @@ def _best_variant_match(
         if _cancelled(cancel_event, stop_check):
             return cancelled_result()
         flat_scores = scores.reshape(-1)
-        tied_indices = np.flatnonzero(
+        all_tied_indices = np.flatnonzero(
             flat_scores >= best_score - FULL_SCORE_TIE_EPSILON
         )
         flat_differences = squared_differences.reshape(-1)
+        tied_indices = all_tied_indices
         if tied_indices.size > MAX_PIXEL_TIE_CANDIDATES:
             selected = np.argpartition(
                 flat_differences[tied_indices],
@@ -732,6 +793,21 @@ def _best_variant_match(
                 if pixel_error == 0.0:
                     best_score = 1.0
                     break
+        if best_pixel_error != 0.0 and all_tied_indices.size > tied_indices.size:
+            exact_location, cancelled = _find_exact_pixel_candidate(
+                screen,
+                template,
+                all_tied_indices,
+                result_width,
+                cancel_event=cancel_event,
+                stop_check=stop_check,
+            )
+            if cancelled:
+                return cancelled_result()
+            if exact_location is not None:
+                best_location = exact_location
+                best_pixel_error = 0.0
+                best_score = 1.0
 
     if return_pixel_error:
         return best_score, best_location, best_pixel_error

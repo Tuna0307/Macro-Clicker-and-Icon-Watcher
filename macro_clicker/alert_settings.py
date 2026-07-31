@@ -271,12 +271,10 @@ def load_settings(path=SETTINGS_PATH):
             # target was cleared. With no relative box, full-screen scanning is
             # the unambiguous behavior already shown by the UI.
             values["scan_region_mode"] = "screen"
-        else:
-            _field_error(
-                errors,
-                "target_window_title",
-                "is required for a window-relative scan region",
-            )
+        # A non-empty window-relative region without a target is an incomplete
+        # but repairable UI state, not malformed data. Preserve the calibrated
+        # region so the user can choose a target again. The watcher refuses to
+        # start until that target is restored.
     if not values["monitor_choice"].strip():
         values["monitor_choice"] = defaults.monitor_choice
         _field_error(errors, "monitor_choice", "cannot be blank")

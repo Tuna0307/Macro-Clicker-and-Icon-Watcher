@@ -111,6 +111,8 @@ class App:
         self.log_queue = queue.Queue()
         self.control_queue = queue.Queue()
         self._start_hotkey_handle = None
+        self._start_hotkey_release_handle = None
+        self._start_hotkey_down = False
         self._start_hotkey_registration_token = None
         self._start_request_generation = 0
         self._pending_start_request = None
@@ -1224,6 +1226,8 @@ class App:
         step = scenario.steps[index]
         self._step_test_running = True
         self.test_step_btn.configure(state="disabled", text="Testing...")
+        if hasattr(self, "run_btn"):
+            self.run_btn.config(state="disabled")
         worker = threading.Thread(
             target=self._run_step_preview_worker,
             args=(scenario, step),
@@ -1235,6 +1239,8 @@ class App:
         except Exception as exc:
             self._step_test_running = False
             self.test_step_btn.configure(state="normal", text="Test")
+            if hasattr(self, "run_btn"):
+                self.run_btn.config(state="normal")
             messagebox.showerror(
                 "Test failed",
                 f"Could not start the preview worker:\n{exc}",
@@ -1262,6 +1268,8 @@ class App:
     def _finish_step_preview(self, step, preview, error):
         self._step_test_running = False
         self.test_step_btn.configure(state="normal", text="Test")
+        if hasattr(self, "run_btn") and not self._engine_is_active_or_stopping():
+            self.run_btn.config(state="normal")
         if error is not None:
             messagebox.showerror("Test failed", error, parent=self.root)
             return
@@ -1482,7 +1490,9 @@ class App:
         self._engine_ui_active = False
         if self.status_pulse is not None:
             self.status_pulse.stop("Stopped.Status.TLabel")
-        self.run_btn.config(state="normal")
+        self.run_btn.config(
+            state="disabled" if getattr(self, "_step_test_running", False) else "normal"
+        )
         self.stop_btn.config(state="disabled")
         self._set_macro_editor_locked(False)
         self.status_label.config(text="● Stopped", style="Stopped.Status.TLabel")
@@ -1508,6 +1518,13 @@ class App:
 
     def _start_engine_attempt(self):
         self._invalidate_queued_start_requests()
+        if getattr(self, "_step_test_running", False):
+            messagebox.showwarning(
+                "Step test running",
+                "Wait for the step test to finish before running the macro.",
+                parent=self.root,
+            )
+            return
         if self.engine and self.engine.is_running:
             return
         if not self.scenario.steps:
@@ -1574,12 +1591,17 @@ class App:
     def _register_start_hotkey(self):
         self._invalidate_queued_start_requests()
         old_handle = getattr(self, "_start_hotkey_handle", None)
+        old_release_handle = getattr(self, "_start_hotkey_release_handle", None)
         self._start_hotkey_handle = None
+        self._start_hotkey_release_handle = None
+        self._start_hotkey_down = False
         self._registered_start_hotkey = None
         self._start_hotkey_registration_token = None
-        if old_handle is not None:
+        for handle in (old_handle, old_release_handle):
+            if handle is None:
+                continue
             try:
-                keyboard.remove_hotkey(old_handle)
+                keyboard.remove_hotkey(handle)
             except Exception:
                 pass
         scenario = getattr(self, "scenario", None)
@@ -1603,21 +1625,52 @@ class App:
             return False
         registration_token = object()
         try:
+            release_handle = keyboard.add_hotkey(
+                hotkey,
+                lambda token=registration_token: self._release_start_hotkey(token),
+                trigger_on_release=True,
+            )
             new_handle = keyboard.add_hotkey(
                 hotkey,
-                lambda token=registration_token: self._request_start_from_hotkey(token),
+                lambda token=registration_token: self._press_start_hotkey(token),
             )
         except Exception as exc:
+            if "release_handle" in locals():
+                try:
+                    keyboard.remove_hotkey(release_handle)
+                except Exception:
+                    pass
             self._queue_log(
                 f"[warn] could not register start hotkey {hotkey.upper()}: {exc}"
             )
             return False
         self._start_hotkey_handle = new_handle
+        self._start_hotkey_release_handle = release_handle
         self._registered_start_hotkey = hotkey
         self._start_hotkey_registration_token = registration_token
         if hasattr(self, "run_tooltip"):
             self.run_tooltip.text = f"Start the selected scenario ({hotkey.upper()})"
         return True
+
+    def _press_start_hotkey(self, registration_token):
+        if registration_token is not getattr(
+            self,
+            "_start_hotkey_registration_token",
+            None,
+        ):
+            return
+        if getattr(self, "_start_hotkey_down", False):
+            return
+        self._start_hotkey_down = True
+        self._request_start_from_hotkey(registration_token)
+
+    def _release_start_hotkey(self, registration_token):
+        if registration_token is getattr(
+            self,
+            "_start_hotkey_registration_token",
+            None,
+        ):
+            self._start_hotkey_down = False
 
     def _macro_alert_hotkey_conflict(
         self,
@@ -1689,7 +1742,8 @@ class App:
     def _engine_is_active_or_stopping(self):
         engine = getattr(self, "engine", None)
         return bool(
-            getattr(self, "_engine_ui_active", False)
+            getattr(self, "_step_test_running", False)
+            or getattr(self, "_engine_ui_active", False)
             or (engine is not None and engine.is_running)
         )
 
@@ -1718,14 +1772,20 @@ class App:
         self._invalidate_queued_start_requests()
         self._start_hotkey_registration_token = None
         self._registered_start_hotkey = None
-        handle = getattr(self, "_start_hotkey_handle", None)
-        if handle is None:
-            return
-        try:
-            keyboard.remove_hotkey(handle)
-        except Exception:
-            pass
+        self._start_hotkey_down = False
+        handles = (
+            getattr(self, "_start_hotkey_handle", None),
+            getattr(self, "_start_hotkey_release_handle", None),
+        )
+        for handle in handles:
+            if handle is None:
+                continue
+            try:
+                keyboard.remove_hotkey(handle)
+            except Exception:
+                pass
         self._start_hotkey_handle = None
+        self._start_hotkey_release_handle = None
 
     # ---- logging ----
     def _queue_log(self, msg):

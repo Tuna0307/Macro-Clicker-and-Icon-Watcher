@@ -333,7 +333,25 @@ class AlertPopup(tk.Toplevel):
                                 int(candidate["height"]),
                             )
                     if detected_monitor_rect is not None:
-                        return tuple(int(value) for value in detected_monitor_rect)
+                        detected_rect = tuple(
+                            int(value) for value in detected_monitor_rect
+                        )
+                        current_rects = {
+                            (
+                                int(candidate["left"]),
+                                int(candidate["top"]),
+                                int(candidate["width"]),
+                                int(candidate["height"]),
+                            )
+                            for candidate in monitors[1:]
+                        }
+                        # A stable monitor identity may be temporarily
+                        # unavailable, but only reuse its detection rectangle
+                        # while that geometry still belongs to a connected
+                        # physical monitor. Otherwise an unplugged display
+                        # would leave the popup entirely off-screen.
+                        if detected_rect in current_rects:
+                            return detected_rect
                 index = (
                     requested_index
                     if 1 <= requested_index < len(monitors)
@@ -347,11 +365,6 @@ class AlertPopup(tk.Toplevel):
                 int(monitor["height"]),
             )
         except Exception:
-            if detected_monitor_rect is not None:
-                try:
-                    return tuple(int(value) for value in detected_monitor_rect)
-                except (TypeError, ValueError):
-                    pass
             return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
 
     @staticmethod

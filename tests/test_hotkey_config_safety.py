@@ -309,6 +309,38 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
         ui._request_start_from_hotkey(old_token)
         self.assertTrue(ui.control_queue.empty())
 
+    def test_held_start_hotkey_cannot_restart_after_stop_until_released(self):
+        ui = object.__new__(app_module.App)
+        ui.scenario = Scenario(name="Held", start_hotkey="f8")
+        ui.control_queue = queue.Queue()
+        ui._start_hotkey_handle = None
+        ui._start_hotkey_release_handle = None
+        ui._start_hotkey_down = False
+        ui._queue_log = Mock()
+
+        with patch.object(
+            app_module.keyboard,
+            "add_hotkey",
+            side_effect=["release-handle", "press-handle"],
+        ) as add_hotkey:
+            self.assertTrue(ui._register_start_hotkey())
+
+        release_callback = add_hotkey.call_args_list[0].args[1]
+        press_callback = add_hotkey.call_args_list[1].args[1]
+        ui.engine = SimpleNamespace(is_running=True)
+        ui._engine_ui_active = True
+
+        press_callback()
+        press_callback()  # keyboard autorepeat while F8 remains held
+        ui.engine.is_running = False
+        ui._engine_ui_active = False  # F12 Stop completed
+        press_callback()  # another repeat must not queue a fresh generation
+
+        self.assertTrue(ui.control_queue.empty())
+        release_callback()
+        press_callback()
+        self.assertEqual(ui.control_queue.get_nowait()[0], "start")
+
     def test_start_queued_before_hotkey_replacement_is_ignored_on_ui_thread(self):
         ui = object.__new__(app_module.App)
         ui.control_queue = queue.Queue()

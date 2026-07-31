@@ -156,6 +156,28 @@ class EngineSafetyTests(unittest.TestCase):
         engine._window_rect_provider.assert_called_once_with("Game")
         click.assert_not_called()
 
+    def test_click_point_rechecks_geometry_after_foreground_validation(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        original_rect = (0, 0, 1000, 800)
+        moved_rect = (1500, 0, 400, 800)
+        engine._get_target_window_rect = Mock(return_value=original_rect)
+        engine._get_fresh_target_window_rect = Mock(
+            side_effect=[original_rect, moved_rect]
+        )
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = lambda _title: True
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+
     def test_click_point_is_skipped_when_target_window_is_not_foreground(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(
@@ -852,6 +874,42 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertFalse(engine._should_log_perf(("step", "slow"), now=105.0))
         self.assertTrue(engine._should_log_perf(("step", "slow"), now=110.0))
         self.assertTrue(engine._should_log_perf(("step", "other"), now=105.0))
+
+    def test_start_rolls_back_resources_when_worker_thread_cannot_start(self):
+        closed = []
+
+        class Capture:
+            monitors = [{"left": 0, "top": 0, "width": 100, "height": 100}]
+
+            def close(self):
+                closed.append(True)
+
+        class FailedThread:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("thread unavailable")
+
+        with (
+            patch.object(engine_module.mss, "MSS", return_value=Capture()),
+            patch.object(
+                engine_module.keyboard,
+                "on_press_key",
+                return_value="kill-hook",
+            ),
+            patch.object(engine_module.keyboard, "unhook") as unhook,
+            patch.object(engine_module.threading, "Thread", FailedThread),
+        ):
+            engine = MacroEngine(Scenario(name="rollback"), log=lambda _message: None)
+            with self.assertRaisesRegex(RuntimeError, "thread unavailable"):
+                engine.start()
+
+        self.assertEqual(closed, [True])
+        unhook.assert_called_once_with("kill-hook")
+        self.assertIsNone(engine._thread)
+        self.assertFalse(engine._ever_started)
+        self.assertTrue(engine._stop_event.is_set())
 
     def test_stop_between_conditions_short_circuits_remaining_work(self):
         engine = self._bare_engine()

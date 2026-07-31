@@ -239,6 +239,55 @@ class TemplateManagerTests(unittest.TestCase):
 
         self.assertIn(malformed, saved["items"])
 
+    def test_orphan_region_metadata_is_disabled_and_preserved_on_save(self):
+        self._manager_in_temp_dir()
+        templates_dir = os.path.dirname(watcher.MANIFEST_PATH)
+        cv2.imwrite(
+            os.path.join(templates_dir, "valid.png"),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+        )
+        cv2.imwrite(
+            os.path.join(templates_dir, "orphan.png"),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+        )
+        orphan = {
+            "id": 2,
+            "name": "orphan metadata",
+            "file": "orphan.png",
+            "region": None,
+            "region_mode": "window",
+            "region_ratio": [0.1, 0.2, 0.3, 0.4],
+            "region_window_size": [1920, 1080],
+        }
+        with open(watcher.MANIFEST_PATH, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "valid",
+                            "file": "valid.png",
+                        },
+                        orphan,
+                    ]
+                },
+                handle,
+            )
+
+        tm = watcher.TemplateManager()
+        self.assertEqual([item["id"] for item in tm.snapshot()], [1])
+        self.assertTrue(
+            any(
+                "relative resize metadata requires a region" in warning
+                for warning in tm.load_warnings
+            )
+        )
+        tm.set_enabled(1, False)
+        with open(watcher.MANIFEST_PATH, encoding="utf-8") as handle:
+            saved = json.load(handle)
+
+        self.assertIn(orphan, saved["items"])
+
     def test_unknown_manifest_root_blocks_rewrite_and_runtime_matching(self):
         self._manager_in_temp_dir()
         original = {"items": [], "itmes": []}
@@ -1785,6 +1834,34 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         )
         showerror.assert_called_once()
 
+    def test_window_relative_icon_requires_target_before_watching(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame._shutting_down = False
+        frame._settings_load_errors = ()
+        frame._refresh_monitor_choices = Mock()
+        frame.tm = Mock()
+        frame.tm.snapshot.return_value = [
+            {
+                "id": 1,
+                "name": "window icon",
+                "enabled": True,
+                "match_mode": watcher.MATCH_MODE_STATIC,
+                "region": (1, 2, 30, 40),
+                "region_mode": "window",
+            }
+        ]
+        frame.watcher = None
+        frame.scan_region = None
+        frame.scan_region_mode = "screen"
+        frame.target_window_var = Mock()
+        frame.target_window_var.get.return_value = ""
+
+        with patch.object(watcher.messagebox, "showerror") as showerror:
+            frame._start_watching()
+
+        self.assertIn("Choose a target window", showerror.call_args.args[1])
+        self.assertIn("window icon", showerror.call_args.args[1])
+
     def test_shutdown_guards_start_and_test_callbacks(self):
         frame = object.__new__(watcher.AlertWatcherFrame)
         frame._shutting_down = True
@@ -1913,6 +1990,39 @@ class WatcherFrameLifecycleTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "Hotkey conflict" in call.args[0]
+                for call in frame._append_log.call_args_list
+            )
+        )
+
+    def test_invalid_alert_hotkey_is_not_registered(self):
+        frame = object.__new__(watcher.AlertWatcherFrame)
+        frame.settings = Mock(
+            start_stop_hotkey="f12+f12",
+            test_alert_hotkey="ctrl+shift+f9",
+        )
+        frame.hotkey_handles = []
+        frame._toggle_watching_from_hotkey = Mock()
+        frame._test_alert_from_hotkey = Mock()
+        frame._append_log = Mock()
+
+        with (
+            patch.object(watcher, "HAVE_KEYBOARD", True),
+            patch.object(
+                watcher.keyboard,
+                "add_hotkey",
+                return_value=sentinel.test_handle,
+            ) as add_hotkey,
+        ):
+            frame._setup_hotkeys()
+
+        add_hotkey.assert_called_once_with(
+            "ctrl+shift+f9",
+            frame._test_alert_from_hotkey,
+        )
+        self.assertEqual(frame.hotkey_handles, [sentinel.test_handle])
+        self.assertTrue(
+            any(
+                "f12+f12" in call.args[0] and "not registered" in call.args[0]
                 for call in frame._append_log.call_args_list
             )
         )
@@ -2649,6 +2759,32 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(loaded.scan_region_mode, "screen")
         self.assertFalse(watcher.settings_load_errors(loaded))
+
+    def test_empty_window_target_preserves_region_for_ui_repair(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.json")
+            source = {
+                "scan_region": [10, 20, 300, 100],
+                "scan_region_mode": "window",
+                "scan_region_ratio": [0.1, 0.2, 0.3, 0.4],
+                "scan_region_window_size": [1920, 1080],
+                "target_window_title": "",
+            }
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(source, handle)
+
+            loaded = watcher.load_settings(path)
+            self.assertFalse(watcher.settings_load_errors(loaded))
+            self.assertEqual(loaded.scan_region, (10, 20, 300, 100))
+            self.assertEqual(loaded.scan_region_mode, "window")
+            self.assertEqual(loaded.scan_region_ratio, (0.1, 0.2, 0.3, 0.4))
+            loaded.target_window_title = "Game"
+            watcher.save_settings(path, loaded)
+            repaired = watcher.load_settings(path)
+
+        self.assertFalse(watcher.settings_load_errors(repaired))
+        self.assertEqual(repaired.target_window_title, "Game")
+        self.assertEqual(repaired.scan_region, (10, 20, 300, 100))
 
 
 class SoundTests(unittest.TestCase):

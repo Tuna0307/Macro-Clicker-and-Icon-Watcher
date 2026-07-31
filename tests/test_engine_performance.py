@@ -1,4 +1,6 @@
+import threading
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 
@@ -393,6 +395,26 @@ class EnginePerformanceTests(unittest.TestCase):
 
         self.assertEqual(calls, ["warm", "run"])
         self.assertTrue(any("Scenario 'levels' started" in message for message in logs))
+
+    def test_stop_during_ocr_warm_up_logs_completion(self):
+        engine = object.__new__(MacroEngine)
+        logs = []
+        engine.scenario = Scenario(name="levels", kill_switch="f12")
+        engine.log = logs.append
+        engine._stop_event = threading.Event()
+        engine._stop_logged = False
+        engine._ever_started = True
+        engine._cleanup_runtime = Mock()
+
+        def stop_during_warm_up():
+            engine._stop_event.set()
+            return False
+
+        engine._warm_up_level_ocr = stop_during_warm_up
+        engine._run_after_ocr_warmup()
+
+        engine._cleanup_runtime.assert_called_once_with()
+        self.assertEqual(logs, ["Scenario stopped."])
 
     def test_evaluate_step_short_circuits_failed_and_condition(self):
         engine = object.__new__(MacroEngine)
