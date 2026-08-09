@@ -222,7 +222,6 @@ class ReviewFixTests(unittest.TestCase):
         app_instance._step_test_running = True
         app_instance.engine = None
         app_instance.root = Mock()
-        app_instance._invalidate_queued_start_requests = Mock()
 
         with (
             patch.object(app.messagebox, "showwarning") as warning,
@@ -259,6 +258,29 @@ class ReviewFixTests(unittest.TestCase):
         engine._run_action(Step(name="Wait"), Action(type="wait", seconds=0.25), {}, {})
 
         self.assertLess(time.perf_counter() - start, 0.05)
+
+    def test_wait_action_selects_a_new_tenth_second_value_each_run(self):
+        waits = []
+        logs = []
+        engine = object.__new__(MacroEngine)
+        engine.log = logs.append
+        engine._stop_event = threading.Event()
+        engine._sleep_until_stop = lambda seconds: waits.append(seconds) or False
+        action = Action(type="wait", seconds=2.0, seconds_max=3.5)
+
+        with patch.object(
+            engine_module.random,
+            "randint",
+            side_effect=[0, 7, 15],
+        ) as randint:
+            engine._run_action(Step(name="Wait"), action, {}, {})
+            engine._run_action(Step(name="Wait"), action, {}, {})
+            engine._run_action(Step(name="Wait"), action, {}, {})
+
+        self.assertEqual(waits, [2.0, 2.7, 3.5])
+        self.assertEqual(randint.call_count, 3)
+        self.assertIn("random 2-3.5s", logs[0])
+        self.assertIn("random 2-3.5s", logs[2])
 
     def test_save_as_refuses_to_overwrite_existing_scenario(self):
         ui = object.__new__(app.App)

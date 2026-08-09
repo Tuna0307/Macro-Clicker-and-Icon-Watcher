@@ -726,7 +726,10 @@ def action_display_summary(action, conditions):
     if action.type == "key":
         return f"Press {action.key or 'key'}"
     if action.type == "wait":
-        return f"Wait {action.seconds:g}s"
+        maximum = action.seconds if action.seconds_max is None else action.seconds_max
+        if maximum == action.seconds:
+            return f"Wait {action.seconds:g}s"
+        return f"Wait random {action.seconds:g}-{maximum:g}s (0.1s steps)"
     if action.type == "set_step":
         verb = "Enable" if action.set_enabled else "Disable"
         return f"{verb} {action.step_name or 'step'}"

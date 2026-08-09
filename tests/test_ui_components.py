@@ -127,6 +127,14 @@ class UiComponentTests(unittest.TestCase):
             "Stop scenario",
         )
 
+    def test_random_wait_range_has_a_clear_display_summary(self):
+        action = Action(type="wait", seconds=2.0, seconds_max=3.5)
+
+        self.assertEqual(
+            action_display_summary(action, self.conditions),
+            "Wait random 2-3.5s (0.1s steps)",
+        )
+
     def test_collapsed_advanced_options_preserve_unset_level_roi(self):
         defaults = (-90, -45, 220, 100)
 

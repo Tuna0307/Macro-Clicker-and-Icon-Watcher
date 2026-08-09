@@ -741,10 +741,14 @@ class EngineSafetyTests(unittest.TestCase):
             runtime._run_loop = lambda: runtime._stop_event.wait(1.0)
             runtime.start()
             callback = on_press_key.call_args.args[1]
+            original_request_stop = runtime.request_stop
+            runtime.request_stop = Mock(side_effect=original_request_stop)
             callback(object())
 
         add_hotkey.assert_not_called()
+        runtime.request_stop.assert_called_once_with()
         unhook.assert_called_once_with("f12-hook")
+        runtime._thread.join(1.0)
         self.assertFalse(runtime.is_running)
 
     def test_stop_timeout_does_not_claim_worker_has_stopped(self):

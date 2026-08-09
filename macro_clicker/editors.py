@@ -1188,12 +1188,37 @@ def action_dialog(
 
     # --- wait fields ---
     seconds_var = tk.DoubleVar(value=a.seconds)
-    ttk.Label(wait_frame, text="Seconds", style="Surface.TLabel").grid(
+    seconds_max_var = tk.DoubleVar(
+        value=a.seconds if a.seconds_max is None else a.seconds_max
+    )
+    ttk.Label(wait_frame, text="Minimum seconds", style="Surface.TLabel").grid(
         row=0, column=0, sticky="w", padx=4, pady=2
     )
-    ttk.Entry(wait_frame, textvariable=seconds_var, width=8).grid(
-        row=0, column=1, sticky="w"
+    ttk.Spinbox(
+        wait_frame,
+        textvariable=seconds_var,
+        from_=0.0,
+        to=86400.0,
+        increment=0.1,
+        width=8,
+    ).grid(row=0, column=1, sticky="w")
+    ttk.Label(wait_frame, text="Maximum seconds", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", padx=4, pady=2
     )
+    ttk.Spinbox(
+        wait_frame,
+        textvariable=seconds_max_var,
+        from_=0.0,
+        to=86400.0,
+        increment=0.1,
+        width=8,
+    ).grid(row=1, column=1, sticky="w")
+    ttk.Label(
+        wait_frame,
+        text="A new value is chosen in 0.1-second steps each time this action runs.",
+        style="Muted.TLabel",
+        wraplength=330,
+    ).grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
 
     # --- set_step fields ---
     step_name_var = tk.StringVar(value=a.step_name)
@@ -1358,6 +1383,10 @@ def action_dialog(
                 new_action.hold = hold_var.get()
             elif t == "wait":
                 new_action.seconds = seconds_var.get()
+                maximum = seconds_max_var.get()
+                new_action.seconds_max = (
+                    None if maximum == new_action.seconds else maximum
+                )
             elif t == "set_step":
                 if not step_name_var.get().strip():
                     messagebox.showerror(

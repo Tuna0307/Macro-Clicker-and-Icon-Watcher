@@ -1,5 +1,6 @@
 import queue
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -196,6 +197,39 @@ class JsonSchemaSafetyTests(unittest.TestCase):
 
 
 class AppStartupAndSettingsSafetyTests(unittest.TestCase):
+    def test_ambiguous_one_time_clock_uses_its_next_am_or_pm_occurrence(self):
+        just_before_midnight_time = datetime(2026, 8, 8, 0, 3, 0)
+        just_before_evening_time = datetime(2026, 8, 8, 22, 50, 0)
+
+        self.assertEqual(
+            app_module._resolve_one_time_auto_start(
+                "12:04",
+                just_before_midnight_time,
+            ),
+            datetime(2026, 8, 8, 0, 4, 0),
+        )
+        self.assertEqual(
+            app_module._resolve_one_time_auto_start(
+                "10:51",
+                just_before_evening_time,
+            ),
+            datetime(2026, 8, 8, 22, 51, 0),
+        )
+        self.assertEqual(
+            app_module._resolve_one_time_auto_start(
+                "12:04 PM",
+                just_before_midnight_time,
+            ),
+            datetime(2026, 8, 8, 12, 4, 0),
+        )
+        self.assertEqual(
+            app_module._resolve_one_time_auto_start(
+                "22:51",
+                just_before_evening_time,
+            ),
+            datetime(2026, 8, 8, 22, 51, 0),
+        )
+
     @staticmethod
     def _app_with_alert_hotkeys(toggle="ctrl+shift+f8", test="ctrl+shift+f9"):
         ui = object.__new__(app_module.App)
@@ -309,37 +343,32 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
         ui._request_start_from_hotkey(old_token)
         self.assertTrue(ui.control_queue.empty())
 
-    def test_held_start_hotkey_cannot_restart_after_stop_until_released(self):
+    def test_start_hotkey_can_start_again_after_f12_stop(self):
         ui = object.__new__(app_module.App)
-        ui.scenario = Scenario(name="Held", start_hotkey="f8")
+        ui.scenario = Scenario(name="Restart", start_hotkey="f8")
         ui.control_queue = queue.Queue()
         ui._start_hotkey_handle = None
-        ui._start_hotkey_release_handle = None
-        ui._start_hotkey_down = False
         ui._queue_log = Mock()
 
         with patch.object(
             app_module.keyboard,
             "add_hotkey",
-            side_effect=["release-handle", "press-handle"],
+            return_value="f8-handle",
         ) as add_hotkey:
             self.assertTrue(ui._register_start_hotkey())
 
-        release_callback = add_hotkey.call_args_list[0].args[1]
-        press_callback = add_hotkey.call_args_list[1].args[1]
-        ui.engine = SimpleNamespace(is_running=True)
-        ui._engine_ui_active = True
+        callback = add_hotkey.call_args.args[1]
+        self.assertNotIn("trigger_on_release", add_hotkey.call_args.kwargs)
 
-        press_callback()
-        press_callback()  # keyboard autorepeat while F8 remains held
-        ui.engine.is_running = False
-        ui._engine_ui_active = False  # F12 Stop completed
-        press_callback()  # another repeat must not queue a fresh generation
+        ui.engine = SimpleNamespace(is_running=False)
+        ui._engine_ui_active = False
+        callback()  # F8 key-down starts the first run
+        first = ui.control_queue.get_nowait()
+        self.assertEqual(first, ("start", ui._start_hotkey_registration_token))
 
-        self.assertTrue(ui.control_queue.empty())
-        release_callback()
-        press_callback()
-        self.assertEqual(ui.control_queue.get_nowait()[0], "start")
+        callback()  # F8 key-down starts again after F12 stopped the engine
+        second = ui.control_queue.get_nowait()
+        self.assertEqual(second, ("start", ui._start_hotkey_registration_token))
 
     def test_start_queued_before_hotkey_replacement_is_ignored_on_ui_thread(self):
         ui = object.__new__(app_module.App)
@@ -399,17 +428,57 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
 
         ui._start_engine_from_hotkey.assert_not_called()
 
-    def test_start_pressed_during_stopping_transition_is_ignored(self):
+    def test_start_pressed_while_worker_is_still_stopping_is_ignored(self):
         ui = object.__new__(app_module.App)
         ui.control_queue = queue.Queue()
-        ui.engine = SimpleNamespace(is_running=False)
+        ui.log_queue = queue.Queue()
+        ui.root = SimpleNamespace(
+            after=lambda *_args: None,
+            grab_current=lambda: None,
+        )
+        ui.engine = SimpleNamespace(
+            is_running=True,
+            is_ready=False,
+            stop=Mock(),
+        )
         ui._engine_ui_active = True
         current_token = object()
         ui._start_hotkey_registration_token = current_token
-
+        ui._registered_start_hotkey = "f8"
         ui._request_start_from_hotkey(current_token)
 
         self.assertTrue(ui.control_queue.empty())
+
+    def test_f8_reconciles_stale_ui_state_after_f12_stop(self):
+        ui = object.__new__(app_module.App)
+        ui.control_queue = queue.Queue()
+        ui.log_queue = queue.Queue()
+        ui.root = SimpleNamespace(
+            after=lambda *_args: None,
+            grab_current=lambda: None,
+        )
+        ui.engine = SimpleNamespace(
+            is_running=False,
+            is_ready=False,
+            stop=Mock(),
+        )
+        ui._engine_ui_active = True
+        current_token = object()
+        ui._start_hotkey_registration_token = current_token
+        ui._registered_start_hotkey = "f8"
+        ui._start_engine = Mock()
+
+        def mark_stopped():
+            ui._engine_ui_active = False
+
+        ui._set_engine_stopped_ui = Mock(side_effect=mark_stopped)
+
+        ui._request_start_from_hotkey(current_token)
+        ui._poll_log_queue()
+
+        ui.engine.stop.assert_called()
+        ui._set_engine_stopped_ui.assert_called()
+        ui._start_engine.assert_called_once_with()
 
     def test_duplicate_queued_start_commands_only_start_once(self):
         ui = object.__new__(app_module.App)
@@ -437,94 +506,89 @@ class AppStartupAndSettingsSafetyTests(unittest.TestCase):
 
         ui._start_engine.assert_called_once_with()
 
-    def test_failed_start_attempt_still_coalesces_queued_hotkeys(self):
+    def test_one_time_auto_start_runs_once_at_computer_time(self):
         ui = object.__new__(app_module.App)
-        ui.control_queue = queue.Queue()
-        ui.log_queue = queue.Queue()
-        ui.root = SimpleNamespace(
-            after=lambda *_args: None,
-            grab_current=lambda: None,
+        ui.scenario = Scenario(
+            name="Scheduled",
+            auto_start_enabled=True,
+            auto_start_time="06:00",
         )
+        ui.root = SimpleNamespace(grab_current=lambda: None)
         ui.engine = None
-        ui._engine_ui_active = False
-        current_token = object()
-        ui._start_hotkey_registration_token = current_token
-        ui._registered_start_hotkey = "f8"
-        ui._start_engine = Mock()
+        ui._step_test_running = False
+        ui._queue_log = Mock()
+        ui._start_engine_from_hotkey = Mock(return_value=True)
 
-        ui._request_start_from_hotkey(current_token)
-        ui._request_start_from_hotkey(current_token)
-        ui._poll_log_queue()
+        ui._reset_auto_start_schedule(datetime(2026, 8, 7, 5, 59, 0))
 
-        ui._start_engine.assert_called_once_with()
+        self.assertFalse(ui._check_auto_start(datetime(2026, 8, 7, 5, 59, 59)))
+        self.assertTrue(ui._check_auto_start(datetime(2026, 8, 7, 6, 0, 0)))
+        self.assertFalse(ui._check_auto_start(datetime(2026, 8, 7, 6, 0, 30)))
+        ui._start_engine_from_hotkey.assert_called_once_with()
+        self.assertFalse(ui.scenario.auto_start_enabled)
+        self.assertEqual(ui.scenario.auto_start_date, "")
+        self.assertIsNone(ui._auto_start_due)
 
-    def test_hotkey_callback_during_failed_start_does_not_chain_retries(self):
+    def test_one_time_auto_start_is_consumed_if_macro_is_already_running(self):
         ui = object.__new__(app_module.App)
-        ui.control_queue = queue.Queue()
-        ui.log_queue = queue.Queue()
-        ui.root = SimpleNamespace(
-            after=lambda *_args: None,
-            grab_current=lambda: None,
+        ui.scenario = Scenario(
+            name="Scheduled",
+            auto_start_enabled=True,
+            auto_start_time="06:00",
         )
-        ui.engine = None
-        ui._engine_ui_active = False
-        current_token = object()
-        ui._start_hotkey_registration_token = current_token
-        ui._registered_start_hotkey = "f8"
-        attempts = []
-
-        def fail_while_key_repeats():
-            attempts.append(True)
-            ui._request_start_from_hotkey(current_token)
-
-        ui._start_engine = Mock(side_effect=fail_while_key_repeats)
-        ui._request_start_from_hotkey(current_token)
-
-        ui._poll_log_queue()
-
-        self.assertEqual(attempts, [True])
-        self.assertTrue(ui.control_queue.empty())
-        self.assertFalse(ui._start_request_in_progress)
-
-    def test_hotkey_callback_during_manual_start_does_not_queue_retry(self):
-        ui = object.__new__(app_module.App)
-        ui.control_queue = queue.Queue()
-        current_token = object()
-        ui._start_hotkey_registration_token = current_token
-        ui._start_request_generation = 0
-        ui._pending_start_request = None
-        ui._start_request_in_progress = False
-
-        def attempt_while_key_repeats():
-            ui._request_start_from_hotkey(current_token)
-
-        ui._start_engine_attempt = Mock(side_effect=attempt_while_key_repeats)
-
-        ui._start_engine()
-
-        ui._start_engine_attempt.assert_called_once_with()
-        self.assertTrue(ui.control_queue.empty())
-        self.assertFalse(ui._start_request_in_progress)
-
-    def test_manual_run_stop_invalidates_older_queued_start(self):
-        ui = object.__new__(app_module.App)
-        ui.control_queue = queue.Queue()
-        ui.log_queue = queue.Queue()
-        ui.root = SimpleNamespace(after=lambda *_args: None)
-        ui.engine = None
-        ui._engine_ui_active = False
-        current_token = object()
-        ui._start_hotkey_registration_token = current_token
-        ui._registered_start_hotkey = "f8"
+        ui.root = SimpleNamespace(grab_current=lambda: None)
+        ui.engine = SimpleNamespace(is_running=True)
+        ui._step_test_running = False
+        ui._queue_log = Mock()
         ui._start_engine_from_hotkey = Mock()
 
-        ui._request_start_from_hotkey(current_token)
-        # Both a manual Run attempt and the following Stop invalidate work
-        # queued for the older stopped generation.
-        ui._invalidate_queued_start_requests()
-        ui._invalidate_queued_start_requests()
-        ui._poll_log_queue()
+        ui._reset_auto_start_schedule(datetime(2026, 8, 7, 5, 0, 0))
 
+        self.assertFalse(ui._check_auto_start(datetime(2026, 8, 7, 6, 0, 0)))
+        ui._start_engine_from_hotkey.assert_not_called()
+        self.assertFalse(ui.scenario.auto_start_enabled)
+        self.assertIsNone(ui._auto_start_due)
+        self.assertIn("already running", ui._queue_log.call_args.args[0])
+
+    def test_one_time_auto_start_waits_for_an_open_dialog(self):
+        dialog = object()
+        ui = object.__new__(app_module.App)
+        ui.scenario = Scenario(
+            name="Scheduled",
+            auto_start_enabled=True,
+            auto_start_time="06:00",
+        )
+        ui.root = SimpleNamespace(grab_current=lambda: dialog)
+        ui.engine = None
+        ui._step_test_running = False
+        ui._queue_log = Mock()
+        ui._start_engine_from_hotkey = Mock()
+
+        ui._reset_auto_start_schedule(datetime(2026, 8, 7, 5, 0, 0))
+
+        self.assertFalse(ui._check_auto_start(datetime(2026, 8, 7, 6, 0, 0)))
+        self.assertEqual(ui._auto_start_due, datetime(2026, 8, 7, 6, 0, 0))
+        ui._start_engine_from_hotkey.assert_not_called()
+
+    def test_expired_one_time_auto_start_is_not_moved_to_the_next_day(self):
+        ui = object.__new__(app_module.App)
+        ui.scenario = Scenario(
+            name="Scheduled",
+            auto_start_enabled=True,
+            auto_start_time="06:00",
+            auto_start_date="2026-08-07",
+        )
+        ui.root = SimpleNamespace(grab_current=lambda: None)
+        ui.engine = None
+        ui._step_test_running = False
+        ui._queue_log = Mock()
+        ui._start_engine_from_hotkey = Mock()
+
+        ui._reset_auto_start_schedule(datetime(2026, 8, 8, 5, 0, 0))
+
+        self.assertFalse(ui._check_auto_start(datetime(2026, 8, 8, 5, 0, 0)))
+        self.assertFalse(ui.scenario.auto_start_enabled)
+        self.assertIsNone(ui._auto_start_due)
         ui._start_engine_from_hotkey.assert_not_called()
 
 

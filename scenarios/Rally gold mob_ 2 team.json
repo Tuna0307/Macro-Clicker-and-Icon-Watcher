@@ -791,7 +791,8 @@
           "button": "left",
           "key": "",
           "hold": 0.0,
-          "seconds": 1.1,
+          "seconds": 1.8,
+          "seconds_max": 2.5,
           "step_name": "",
           "set_enabled": true
         }
@@ -902,7 +903,7 @@
             63,
             168
           ],
-          "team3_max_level": 50,
+          "team3_max_level": 55,
           "team_status_region": null,
           "team_status_reference_size": null,
           "team1_busy_template_path": "",
@@ -1995,6 +1996,9 @@
   "monitor_index": 1,
   "start_hotkey": "f8",
   "kill_switch": "f12",
+  "auto_start_enabled": false,
+  "auto_start_time": "00:20",
+  "auto_start_date": "",
   "target_window_title": "Last War-Survival Game",
   "diagnostics_enabled": true
 }

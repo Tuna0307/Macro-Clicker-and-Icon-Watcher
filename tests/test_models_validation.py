@@ -99,6 +99,80 @@ class ModelValidationTests(unittest.TestCase):
         self.assertEqual(restored.start_hotkey, "ctrl+f8")
         self.assertEqual(legacy.start_hotkey, "f8")
 
+    def test_scenario_one_time_auto_start_round_trips_and_normalizes_time(self):
+        scenario = Scenario(
+            name="Scheduled",
+            auto_start_enabled=True,
+            auto_start_time="06:00",
+            auto_start_date="2026-08-07",
+        )
+
+        restored = Scenario.from_dict(scenario.to_dict())
+        legacy = Scenario.from_dict({"name": "Legacy", "steps": []})
+        normalized = Scenario.from_dict(
+            {
+                "name": "Normalized",
+                "steps": [],
+                "auto_start_enabled": True,
+                "auto_start_time": "10:51 PM",
+                "auto_start_date": "2026-08-08",
+            }
+        )
+        compact = Scenario.from_dict(
+            {
+                "name": "Compact time",
+                "steps": [],
+                "auto_start_time": "2251",
+            }
+        )
+
+        self.assertTrue(restored.auto_start_enabled)
+        self.assertEqual(restored.auto_start_time, "06:00")
+        self.assertEqual(restored.auto_start_date, "2026-08-07")
+        self.assertFalse(legacy.auto_start_enabled)
+        self.assertEqual(legacy.auto_start_time, "06:00")
+        self.assertEqual(normalized.auto_start_time, "22:51")
+        self.assertEqual(compact.auto_start_time, "22:51")
+        self.assertEqual(
+            Scenario.from_dict(
+                {"name": "AM time", "steps": [], "auto_start_time": "6am"}
+            ).auto_start_time,
+            "06:00",
+        )
+
+    def test_scenario_one_time_auto_start_rejects_invalid_times(self):
+        for value in ("", "13 PM", "24:00", "06:60", "06:00:00", 600):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "automatic start time",
+                ),
+            ):
+                Scenario.from_dict(
+                    {
+                        "name": "Invalid schedule",
+                        "steps": [],
+                        "auto_start_time": value,
+                    }
+                )
+
+        for value in ("2026-02-30", "08/07/2026", 20260807):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "automatic start date",
+                ),
+            ):
+                Scenario.from_dict(
+                    {
+                        "name": "Invalid schedule date",
+                        "steps": [],
+                        "auto_start_date": value,
+                    }
+                )
+
     def test_scenario_start_and_stop_hotkeys_must_be_different(self):
         with self.assertRaisesRegex(ValueError, "overlapping physical key sequences"):
             validate_scenario(
@@ -165,6 +239,39 @@ class ModelValidationTests(unittest.TestCase):
         self.assertEqual(action.type, "stop")
         self.assertEqual(Action.from_dict(action.to_dict()), action)
         self.assertEqual(action.summary(), "Stop scenario")
+
+    def test_random_wait_range_round_trips_and_validates_bounds(self):
+        action = Action(type="wait", seconds=2.0, seconds_max=3.5)
+
+        serialized = action.to_dict()
+        self.assertEqual(serialized["seconds_max"], 3.5)
+        self.assertEqual(Action.from_dict(serialized), action)
+        self.assertNotIn("seconds_max", Action(type="wait", seconds=2.0).to_dict())
+        self.assertEqual(action.summary(), "Wait random 2-3.5s (0.1s steps)")
+        self.assertEqual(
+            Action.from_dict({"type": "wait", "seconds": 2.0}).seconds_max,
+            None,
+        )
+
+        for maximum in (1.9, -1.0, float("nan"), float("inf"), True):
+            with self.subTest(maximum=maximum), self.assertRaises(ValueError):
+                Action.from_dict(
+                    {"type": "wait", "seconds": 2.0, "seconds_max": maximum}
+                )
+
+    def test_scenario_validation_rejects_invalid_direct_wait_range(self):
+        scenario = Scenario(
+            name="Invalid wait",
+            steps=[
+                Step(
+                    name="Wait",
+                    actions=[Action(type="wait", seconds=3.0, seconds_max=2.0)],
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "maximum wait"):
+            validate_scenario(scenario)
 
     def test_matching_row_pre_click_delay_round_trips_and_rejects_invalid_values(self):
         action = Action(type="click_matching_row", pre_click_delay=1.5)

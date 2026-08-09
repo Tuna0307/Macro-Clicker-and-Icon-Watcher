@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tempfile
+from datetime import date
 from dataclasses import asdict, dataclass, field, fields
 from difflib import get_close_matches
 from typing import List, Optional
@@ -44,6 +45,55 @@ WINDOWS_RESERVED_SCENARIO_NAMES = frozenset(
     | {f"COM{i}" for i in range(1, 10)}
     | {f"LPT{i}" for i in range(1, 10)}
 )
+
+
+def normalize_auto_start_time(value) -> str:
+    """Return a local clock value in HH:MM form, accepting 12/24-hour input."""
+
+    if not isinstance(value, str):
+        raise ValueError("automatic start time must be text")
+    text = value.strip().upper()
+    period = ""
+    for suffix in ("AM", "PM"):
+        if text.endswith(suffix):
+            period = suffix
+            text = text[: -len(suffix)].strip()
+            break
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) != 2 or not all(part.strip().isdigit() for part in parts):
+            raise ValueError("automatic start time must look like 22:51 or 10:51 PM")
+        hour, minute = (int(part.strip()) for part in parts)
+    elif text.isdigit():
+        if period and len(text) <= 2:
+            hour, minute = int(text), 0
+        elif 3 <= len(text) <= 4:
+            hour, minute = int(text[:-2]), int(text[-2:])
+        else:
+            raise ValueError("automatic start time must look like 22:51 or 10:51 PM")
+    else:
+        raise ValueError("automatic start time must look like 22:51 or 10:51 PM")
+    if period:
+        if not 1 <= hour <= 12 or not 0 <= minute <= 59:
+            raise ValueError("automatic start time must look like 22:51 or 10:51 PM")
+        hour = hour % 12 + (12 if period == "PM" else 0)
+    elif not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError("automatic start time must look like 22:51 or 10:51 PM")
+    return f"{hour:02d}:{minute:02d}"
+
+
+def normalize_auto_start_date(value) -> str:
+    """Validate an optional ISO date used to persist a one-time schedule."""
+
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("automatic start date must be YYYY-MM-DD text")
+    try:
+        parsed = date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise ValueError("automatic start date must use YYYY-MM-DD format") from exc
+    return parsed.isoformat()
 
 
 def project_path(path):
@@ -443,6 +493,7 @@ class Action:
 
     # wait
     seconds: float = 0.5
+    seconds_max: Optional[float] = None
 
     # set_step (enable/disable another step -- this is what creates sequencing)
     step_name: str = ""
@@ -450,6 +501,9 @@ class Action:
 
     def to_dict(self):
         data = asdict(self)
+        if self.seconds_max is None:
+            # Keep existing fixed-wait scenario files compact and backward compatible.
+            data.pop("seconds_max", None)
         data["team_idle_template_path"] = portable_project_path(
             self.team_idle_template_path
         )
@@ -602,6 +656,19 @@ class Action:
         a.seconds = _float_value(d.get("seconds"), a.seconds)
         if a.seconds < 0.0:
             raise ValueError("wait duration cannot be negative")
+        raw_seconds_max = d.get("seconds_max")
+        a.seconds_max = (
+            None
+            if raw_seconds_max is None or raw_seconds_max == ""
+            else _float_value(raw_seconds_max, a.seconds)
+        )
+        if a.seconds_max is not None:
+            if a.seconds_max < 0.0:
+                raise ValueError("maximum wait duration cannot be negative")
+            if a.seconds_max < a.seconds:
+                raise ValueError(
+                    "maximum wait duration cannot be less than minimum wait duration"
+                )
         a.step_name = str(d.get("step_name", a.step_name) or "")
         a.set_enabled = _bool_value(d.get("set_enabled"), a.set_enabled)
         if a.type == "key" and not a.key.strip():
@@ -662,7 +729,10 @@ class Action:
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
         if self.type == "wait":
-            return f"Wait {self.seconds}s"
+            maximum = self.seconds if self.seconds_max is None else self.seconds_max
+            if maximum == self.seconds:
+                return f"Wait {self.seconds:g}s"
+            return f"Wait random {self.seconds:g}-{maximum:g}s (0.1s steps)"
         if self.type == "set_step":
             verb = "Enable" if self.set_enabled else "Disable"
             return f"{verb} step '{self.step_name}'"
@@ -740,6 +810,9 @@ class Scenario:
     monitor_index: int = 1
     start_hotkey: str = "f8"
     kill_switch: str = "f12"
+    auto_start_enabled: bool = False
+    auto_start_time: str = "06:00"
+    auto_start_date: str = ""
     target_window_title: str = ""
     diagnostics_enabled: bool = True
 
@@ -751,6 +824,9 @@ class Scenario:
             "monitor_index": self.monitor_index,
             "start_hotkey": self.start_hotkey,
             "kill_switch": self.kill_switch,
+            "auto_start_enabled": self.auto_start_enabled,
+            "auto_start_time": normalize_auto_start_time(self.auto_start_time),
+            "auto_start_date": normalize_auto_start_date(self.auto_start_date),
             "target_window_title": self.target_window_title,
             "diagnostics_enabled": self.diagnostics_enabled,
         }
@@ -770,6 +846,9 @@ class Scenario:
         name = d.get("name")
         start_hotkey = d.get("start_hotkey", "f8")
         kill_switch = d.get("kill_switch", "f12")
+        auto_start_enabled = _bool_value(d.get("auto_start_enabled"), False)
+        auto_start_time = normalize_auto_start_time(d.get("auto_start_time", "06:00"))
+        auto_start_date = normalize_auto_start_date(d.get("auto_start_date", ""))
         target_window_title = d.get("target_window_title", "")
         diagnostics_enabled = _bool_value(d.get("diagnostics_enabled"), True)
         if not isinstance(name, str) or not name.strip():
@@ -787,6 +866,9 @@ class Scenario:
             monitor_index=monitor_index,
             start_hotkey=start_hotkey,
             kill_switch=kill_switch,
+            auto_start_enabled=auto_start_enabled,
+            auto_start_time=auto_start_time,
+            auto_start_date=auto_start_date,
             target_window_title=target_window_title,
             diagnostics_enabled=diagnostics_enabled,
         )
@@ -890,6 +972,10 @@ def validate_scenario(scenario: Scenario, require_files=False):
         raise ValueError("start_hotkey cannot be blank")
     if not isinstance(scenario.kill_switch, str) or not scenario.kill_switch.strip():
         raise ValueError("kill_switch cannot be blank")
+    if not isinstance(scenario.auto_start_enabled, bool):
+        raise ValueError("auto_start_enabled must be a boolean")
+    normalize_auto_start_time(scenario.auto_start_time)
+    normalize_auto_start_date(scenario.auto_start_date)
     for label, hotkey in (
         ("start_hotkey", scenario.start_hotkey),
         ("kill_switch", scenario.kill_switch),
@@ -1123,6 +1209,16 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 or action.seconds < 0.0
             ):
                 raise ValueError(f"{prefix} wait must be a non-negative finite number")
+            if action.seconds_max is not None and (
+                isinstance(action.seconds_max, bool)
+                or not isinstance(action.seconds_max, (int, float))
+                or not math.isfinite(float(action.seconds_max))
+                or action.seconds_max < action.seconds
+            ):
+                raise ValueError(
+                    f"{prefix} maximum wait must be a finite number greater than "
+                    "or equal to its minimum"
+                )
             if action.min_level is not None and (
                 isinstance(action.min_level, bool)
                 or not isinstance(action.min_level, int)

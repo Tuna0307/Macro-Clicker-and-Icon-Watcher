@@ -8,6 +8,7 @@ callback instead of print) so it plays nicely with a GUI.
 import inspect
 import math
 import os
+import random
 import threading
 import time
 from typing import Callable, Optional
@@ -179,13 +180,13 @@ class MacroEngine(RallyMatchingMixin):
             if is_single_key_hotkey(self.scenario.kill_switch):
                 self._hotkey_handle = keyboard.on_press_key(
                     self.scenario.kill_switch,
-                    lambda _event: self.stop(),
+                    lambda _event: self.request_stop(),
                 )
                 self._hotkey_is_key_hook = True
             else:
                 self._hotkey_handle = keyboard.add_hotkey(
                     self.scenario.kill_switch,
-                    self.stop,
+                    self.request_stop,
                 )
                 self._hotkey_is_key_hook = False
         except Exception as e:
@@ -1548,11 +1549,20 @@ class MacroEngine(RallyMatchingMixin):
             return True
 
         elif action.type == "wait":
-            stopped = self._sleep_until_stop(action.seconds)
+            minimum = float(action.seconds)
+            maximum = (
+                minimum if action.seconds_max is None else float(action.seconds_max)
+            )
+            tenth_steps = max(0, int(math.floor((maximum - minimum) * 10 + 1e-9)))
+            wait_seconds = round(minimum + random.randint(0, tenth_steps) / 10, 10)
+            stopped = self._sleep_until_stop(wait_seconds)
             if stopped:
                 return False
-            self.log(f"  wait {action.seconds}s")
-            return float(action.seconds) > 0.0
+            if maximum == minimum:
+                self.log(f"  wait {wait_seconds:g}s")
+            else:
+                self.log(f"  wait {wait_seconds:g}s (random {minimum:g}-{maximum:g}s)")
+            return wait_seconds > 0.0
 
         elif action.type == "set_step":
             if self._stop_requested():

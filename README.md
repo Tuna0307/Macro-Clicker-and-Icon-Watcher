@@ -37,11 +37,13 @@ For development checks:
 ## Interface preferences
 
 The application uses a bright CustomTkinter/ttk hybrid interface.
-Open **Scenario settings** to configure the scenario Start/Stop keys and the
-global interface sound and animation preferences. Interface preferences are
-stored in the per-user data folder and apply to both Macro Builder and Icon
-Alerts. In Icon Alerts, select an item and toggle **Detect this icon** (or press
-Space) to choose exactly which saved icons are scanned.
+Open **Scenario settings** to configure the scenario Start/Stop keys, an
+optional one-time automatic start based on the computer's local clock, and
+the global interface sound and animation preferences. The application must be
+open for a scheduled start to run. Interface preferences are stored in the
+per-user data folder and apply to both Macro Builder and Icon Alerts. In Icon
+Alerts, select an item and toggle **Detect this icon** (or press Space) to
+choose exactly which saved icons are scanned.
 
 ## Project layout
 
@@ -235,6 +237,11 @@ detection type retain the previous animated/rotating behavior.
   under **Scenario settings**. Their physical key sequences must not overlap;
   aliases, reordered modifiers, and one sequence being a prefix of another
   count as conflicts.
+- A scenario can optionally start once at the next occurrence of a configured
+  computer-local time such as `22:51` or `10:51 PM`. The schedule disables
+  itself after it runs. An entry from 1 through 12 without AM/PM uses its next
+  matching AM or PM occurrence. The selected scenario and application must
+  remain open; an already-running macro is not restarted.
 - The kill-switch key (default F12) is required before a scenario starts and
   is checked between captures, matches, and every action, even while the game
   has focus.

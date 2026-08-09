@@ -14,7 +14,7 @@ import queue
 import threading
 import tkinter as tk
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any, Optional, cast
 
@@ -60,6 +60,7 @@ from .models import (
     delete_scenario,
     list_scenarios,
     load_scenario,
+    normalize_auto_start_time,
     save_scenario,
     validate_scenario,
     validate_scenario_name,
@@ -88,6 +89,45 @@ def _start_stop_hotkeys_conflict(start_key, stop_key):
     return permissive_single_key_conflict(stop_key, start_key)
 
 
+def _resolve_one_time_auto_start(value, now=None):
+    """Resolve an entered clock time to its next local occurrence."""
+
+    now = now or datetime.now()
+    normalized = normalize_auto_start_time(value)
+    normalized_hour, minute = (int(part) for part in normalized.split(":"))
+    entered = str(value).strip().upper()
+    explicit_period = entered.endswith(("AM", "PM"))
+    entered_without_period = entered
+    if explicit_period:
+        entered_without_period = entered[:-2].strip()
+    if ":" in entered_without_period:
+        entered_hour_text = entered_without_period.split(":", 1)[0].strip()
+    elif entered_without_period.isdigit() and len(entered_without_period) >= 3:
+        entered_hour_text = entered_without_period[:-2]
+    else:
+        entered_hour_text = entered_without_period
+    entered_hour = (
+        int(entered_hour_text) if entered_hour_text.isdigit() else normalized_hour
+    )
+
+    candidate_hours: tuple[int, ...]
+    if not explicit_period and 1 <= entered_hour <= 12:
+        morning_hour = entered_hour % 12
+        candidate_hours = (morning_hour, morning_hour + 12)
+    else:
+        candidate_hours = (normalized_hour,)
+    candidates = [
+        now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        for hour in candidate_hours
+    ]
+    eligible = [
+        candidate for candidate in candidates if now < candidate + timedelta(minutes=1)
+    ]
+    if eligible:
+        return min(eligible)
+    return min(candidate + timedelta(days=1) for candidate in candidates)
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -111,12 +151,10 @@ class App:
         self.log_queue = queue.Queue()
         self.control_queue = queue.Queue()
         self._start_hotkey_handle = None
-        self._start_hotkey_release_handle = None
-        self._start_hotkey_down = False
         self._start_hotkey_registration_token = None
-        self._start_request_generation = 0
-        self._pending_start_request = None
-        self._start_request_in_progress = False
+        self._auto_start_after_id = None
+        self._auto_start_due = None
+        self._closing = False
         self.log_dir = LOG_DIR
         self.log_file_path = os.path.join(self.log_dir, "pc_macro_builder.log")
         self.log_max_bytes = DEFAULT_MAX_LOG_BYTES
@@ -143,6 +181,8 @@ class App:
         self._mark_scenario_clean()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._register_start_hotkey()
+        self._reset_auto_start_schedule()
+        self._auto_start_after_id = self.root.after(1000, self._poll_auto_start)
         self.root.after(150, self._poll_log_queue)
         self._write_log_file("---- app started ----")
 
@@ -273,6 +313,10 @@ class App:
         self.monitor_var = tk.IntVar(value=self.scenario.monitor_index)
         self.start_var = tk.StringVar(value=self.scenario.start_hotkey)
         self.kill_var = tk.StringVar(value=self.scenario.kill_switch)
+        self.auto_start_enabled_var = tk.BooleanVar(
+            value=self.scenario.auto_start_enabled
+        )
+        self.auto_start_time_var = tk.StringVar(value=self.scenario.auto_start_time)
         self.diagnostics_var = tk.BooleanVar(value=self.scenario.diagnostics_enabled)
         self._refresh_window_list()
 
@@ -533,6 +577,10 @@ class App:
         if hasattr(self, "start_var"):
             self.start_var.set(scenario.start_hotkey)
         self.kill_var.set(scenario.kill_switch)
+        if hasattr(self, "auto_start_enabled_var"):
+            self.auto_start_enabled_var.set(scenario.auto_start_enabled)
+        if hasattr(self, "auto_start_time_var"):
+            self.auto_start_time_var.set(scenario.auto_start_time)
         self.target_window_var.set(scenario.target_window_title)
         if hasattr(self, "diagnostics_var"):
             self.diagnostics_var.set(scenario.diagnostics_enabled)
@@ -540,6 +588,8 @@ class App:
         self._refresh_steps()
         if hasattr(self, "_start_hotkey_handle"):
             self._register_start_hotkey()
+        if hasattr(self, "_auto_start_due"):
+            self._reset_auto_start_schedule()
         if clean:
             self._mark_scenario_clean(loaded_name=loaded_name)
         else:
@@ -607,6 +657,14 @@ class App:
             else self.scenario.start_hotkey
         ) or START_MACRO_HOTKEY
         self.scenario.kill_switch = self.kill_var.get().strip() or "f12"
+        auto_start_enabled_var = getattr(self, "auto_start_enabled_var", None)
+        if auto_start_enabled_var is not None:
+            self.scenario.auto_start_enabled = bool(auto_start_enabled_var.get())
+        auto_start_time_var = getattr(self, "auto_start_time_var", None)
+        if auto_start_time_var is not None:
+            self.scenario.auto_start_time = normalize_auto_start_time(
+                auto_start_time_var.get()
+            )
         self.scenario.target_window_title = self.target_window_var.get().strip()
         diagnostics_var = getattr(self, "diagnostics_var", None)
         if diagnostics_var is not None:
@@ -629,6 +687,8 @@ class App:
         monitor_var = tk.IntVar(value=self.monitor_var.get())
         start_var = tk.StringVar(value=self.start_var.get())
         kill_var = tk.StringVar(value=self.kill_var.get())
+        auto_start_enabled_var = tk.BooleanVar(value=self.auto_start_enabled_var.get())
+        auto_start_time_var = tk.StringVar(value=self.auto_start_time_var.get())
         diagnostics_var = tk.BooleanVar(value=self.diagnostics_var.get())
         sounds_var = tk.BooleanVar(value=self.ui_preferences.sounds_enabled)
         animations_var = tk.BooleanVar(value=self.ui_preferences.animations_enabled)
@@ -662,29 +722,49 @@ class App:
         )
         ttk.Checkbutton(
             body,
+            text="Enable one-time automatic start",
+            variable=auto_start_enabled_var,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 4))
+        ttk.Label(body, text="Computer time", style="Surface.TLabel").grid(
+            row=6, column=0, sticky="w", padx=(0, 24), pady=6
+        )
+        ttk.Entry(body, textvariable=auto_start_time_var, width=14).grid(
+            row=6, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(
+            body,
+            text=(
+                "Examples: 22:51 or 10:51 PM. Without AM/PM, the next matching "
+                "time is used. Runs once; the app must remain open."
+            ),
+            style="Muted.TLabel",
+            wraplength=330,
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Checkbutton(
+            body,
             text="Collect bounded diagnostic screenshots",
             variable=diagnostics_var,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
         ttk.Separator(body).grid(
-            row=6, column=0, columnspan=2, sticky="ew", pady=(14, 12)
+            row=9, column=0, columnspan=2, sticky="ew", pady=(14, 12)
         )
         ttk.Label(body, text="Interface", style="Section.TLabel").grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=(0, 5)
+            row=10, column=0, columnspan=2, sticky="w", pady=(0, 5)
         )
         ttk.Checkbutton(
             body,
             text="Play gentle interface sounds",
             variable=sounds_var,
-        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=2)
         ttk.Checkbutton(
             body,
             text="Use subtle interface animations",
             variable=animations_var,
-        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=12, column=0, columnspan=2, sticky="w", pady=2)
 
         buttons = ttk.Frame(body, style="Surface.TFrame")
-        buttons.grid(row=10, column=0, columnspan=2, sticky="e", pady=(20, 0))
+        buttons.grid(row=13, column=0, columnspan=2, sticky="e", pady=(20, 0))
 
         def save_settings():
             # Recheck in case a non-UI caller started the engine while this
@@ -725,6 +805,11 @@ class App:
                     parent=win,
                 )
                 return
+            try:
+                automatic_time = normalize_auto_start_time(auto_start_time_var.get())
+            except (ValueError, TypeError) as exc:
+                messagebox.showerror("Invalid settings", str(exc), parent=win)
+                return
             if _start_stop_hotkeys_conflict(start_key, stop_key):
                 messagebox.showerror(
                     "Invalid settings",
@@ -746,6 +831,8 @@ class App:
             self.monitor_var.set(monitor)
             self.start_var.set(start_key)
             self.kill_var.set(stop_key)
+            self.auto_start_enabled_var.set(bool(auto_start_enabled_var.get()))
+            self.auto_start_time_var.set(automatic_time)
             self.diagnostics_var.set(bool(diagnostics_var.get()))
             self.ui_preferences = UiPreferences(
                 sounds_enabled=bool(sounds_var.get()),
@@ -779,6 +866,25 @@ class App:
                 and self.status_pulse is not None
             ):
                 self.status_pulse.start()
+            self._sync_scenario_settings()
+            if self.scenario.auto_start_enabled:
+                now = datetime.now()
+                scheduled = _resolve_one_time_auto_start(
+                    auto_start_time_var.get(),
+                    now,
+                )
+                automatic_time = scheduled.strftime("%H:%M")
+                self.auto_start_time_var.set(automatic_time)
+                self.scenario.auto_start_time = automatic_time
+                self.scenario.auto_start_date = scheduled.date().isoformat()
+                self._queue_log(
+                    "[schedule] one-time auto-start armed for "
+                    f"{scheduled.strftime('%Y-%m-%d %I:%M %p')} computer time"
+                )
+            else:
+                self.scenario.auto_start_date = ""
+                self._queue_log("[schedule] one-time auto-start disabled")
+            self._reset_auto_start_schedule()
             self._register_start_hotkey()
             self.ui_feedback.play("success")
             win.destroy()
@@ -1509,15 +1615,9 @@ class App:
         self.ui_feedback.play("start")
 
     def _start_engine(self):
-        previous_start_state = getattr(self, "_start_request_in_progress", False)
-        self._start_request_in_progress = True
-        try:
-            return self._start_engine_attempt()
-        finally:
-            self._start_request_in_progress = previous_start_state
+        return self._start_engine_attempt()
 
     def _start_engine_attempt(self):
-        self._invalidate_queued_start_requests()
         if getattr(self, "_step_test_running", False):
             messagebox.showwarning(
                 "Step test running",
@@ -1567,7 +1667,6 @@ class App:
             )
 
     def _stop_engine(self):
-        self._invalidate_queued_start_requests()
         if self.engine:
             try:
                 self.engine.request_stop()
@@ -1589,19 +1688,13 @@ class App:
         return True
 
     def _register_start_hotkey(self):
-        self._invalidate_queued_start_requests()
         old_handle = getattr(self, "_start_hotkey_handle", None)
-        old_release_handle = getattr(self, "_start_hotkey_release_handle", None)
         self._start_hotkey_handle = None
-        self._start_hotkey_release_handle = None
-        self._start_hotkey_down = False
         self._registered_start_hotkey = None
         self._start_hotkey_registration_token = None
-        for handle in (old_handle, old_release_handle):
-            if handle is None:
-                continue
+        if old_handle is not None:
             try:
-                keyboard.remove_hotkey(handle)
+                keyboard.remove_hotkey(old_handle)
             except Exception:
                 pass
         scenario = getattr(self, "scenario", None)
@@ -1625,52 +1718,21 @@ class App:
             return False
         registration_token = object()
         try:
-            release_handle = keyboard.add_hotkey(
-                hotkey,
-                lambda token=registration_token: self._release_start_hotkey(token),
-                trigger_on_release=True,
-            )
             new_handle = keyboard.add_hotkey(
                 hotkey,
-                lambda token=registration_token: self._press_start_hotkey(token),
+                lambda token=registration_token: self._request_start_from_hotkey(token),
             )
         except Exception as exc:
-            if "release_handle" in locals():
-                try:
-                    keyboard.remove_hotkey(release_handle)
-                except Exception:
-                    pass
             self._queue_log(
                 f"[warn] could not register start hotkey {hotkey.upper()}: {exc}"
             )
             return False
         self._start_hotkey_handle = new_handle
-        self._start_hotkey_release_handle = release_handle
         self._registered_start_hotkey = hotkey
         self._start_hotkey_registration_token = registration_token
         if hasattr(self, "run_tooltip"):
             self.run_tooltip.text = f"Start the selected scenario ({hotkey.upper()})"
         return True
-
-    def _press_start_hotkey(self, registration_token):
-        if registration_token is not getattr(
-            self,
-            "_start_hotkey_registration_token",
-            None,
-        ):
-            return
-        if getattr(self, "_start_hotkey_down", False):
-            return
-        self._start_hotkey_down = True
-        self._request_start_from_hotkey(registration_token)
-
-    def _release_start_hotkey(self, registration_token):
-        if registration_token is getattr(
-            self,
-            "_start_hotkey_registration_token",
-            None,
-        ):
-            self._start_hotkey_down = False
 
     def _macro_alert_hotkey_conflict(
         self,
@@ -1718,26 +1780,15 @@ class App:
             registration_token = current_token
         if registration_token is None or registration_token is not current_token:
             return
-        if getattr(self, "_start_request_in_progress", False):
+        if getattr(self, "_step_test_running", False):
             return
-        if self._engine_is_active_or_stopping():
+        engine = getattr(self, "engine", None)
+        if engine is not None and engine.is_running:
             return
-        generation = getattr(self, "_start_request_generation", 0)
-        request_identity = (registration_token, generation)
-        if getattr(self, "_pending_start_request", None) == request_identity:
-            return
-        self._pending_start_request = request_identity
         # Carry the registration identity through the Tk queue. A callback can
         # be valid when it runs on the keyboard thread, then become stale
-        # before the UI thread consumes this command after a scenario switch
-        # or a newer Run/Stop generation.
-        self.control_queue.put(("start", registration_token, generation))
-
-    def _invalidate_queued_start_requests(self):
-        self._start_request_generation = (
-            getattr(self, "_start_request_generation", 0) + 1
-        )
-        self._pending_start_request = None
+        # before the UI thread consumes this command after a scenario switch.
+        self.control_queue.put(("start", registration_token))
 
     def _engine_is_active_or_stopping(self):
         engine = getattr(self, "engine", None)
@@ -1750,8 +1801,16 @@ class App:
     def _start_engine_from_hotkey(self):
         # Recheck on the Tk thread. Multiple callbacks may already be queued,
         # and a queued callback must not restart a run that is still stopping.
-        if self._engine_is_active_or_stopping():
-            return
+        engine = getattr(self, "engine", None)
+        if engine is not None and engine.is_running:
+            return False
+        if getattr(self, "_engine_ui_active", False):
+            # The worker has finished, but the 150 ms UI poll has not yet
+            # reconciled its stale running state. Complete that cleanup now so
+            # F8 does not get lost in this small transition window.
+            if engine is not None:
+                engine.stop()
+            self._set_engine_stopped_ui()
         root = getattr(self, "root", None)
         try:
             if root is not None and root.grab_current() is not None:
@@ -1763,29 +1822,102 @@ class App:
                     f"[safety] {registered_hotkey.upper()} "
                     "ignored while a dialog is open"
                 )
-                return
+                return False
         except tk.TclError:
-            return
+            return False
         self._start_engine()
+        return True
 
     def _remove_start_hotkey(self):
-        self._invalidate_queued_start_requests()
         self._start_hotkey_registration_token = None
         self._registered_start_hotkey = None
-        self._start_hotkey_down = False
-        handles = (
-            getattr(self, "_start_hotkey_handle", None),
-            getattr(self, "_start_hotkey_release_handle", None),
-        )
-        for handle in handles:
-            if handle is None:
-                continue
+        handle = getattr(self, "_start_hotkey_handle", None)
+        if handle is not None:
             try:
                 keyboard.remove_hotkey(handle)
             except Exception:
                 pass
         self._start_hotkey_handle = None
-        self._start_hotkey_release_handle = None
+
+    # ---- scheduled start ----
+    def _next_auto_start_due(self, now=None):
+        if not getattr(self.scenario, "auto_start_enabled", False):
+            return None
+        now = now or datetime.now()
+        clock_time = normalize_auto_start_time(self.scenario.auto_start_time)
+        scheduled_date = getattr(self.scenario, "auto_start_date", "")
+        if scheduled_date:
+            due = datetime.fromisoformat(f"{scheduled_date}T{clock_time}")
+            return due
+        hour, minute = (int(part) for part in clock_time.split(":"))
+        due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= due + timedelta(minutes=1):
+            due += timedelta(days=1)
+        self.scenario.auto_start_date = due.date().isoformat()
+        return due
+
+    def _reset_auto_start_schedule(self, now=None):
+        self._auto_start_due = self._next_auto_start_due(now)
+
+    def _consume_auto_start_schedule(self):
+        self.scenario.auto_start_enabled = False
+        self.scenario.auto_start_date = ""
+        self._auto_start_due = None
+        enabled_var = getattr(self, "auto_start_enabled_var", None)
+        if enabled_var is not None:
+            enabled_var.set(False)
+
+    def _check_auto_start(self, now=None):
+        now = now or datetime.now()
+        if not getattr(self.scenario, "auto_start_enabled", False):
+            self._auto_start_due = None
+            return False
+        due = getattr(self, "_auto_start_due", None)
+        if due is None:
+            self._reset_auto_start_schedule(now)
+            due = self._auto_start_due
+        if due is None or now < due:
+            return False
+        if now >= due + timedelta(minutes=1):
+            self._consume_auto_start_schedule()
+            self._queue_log(
+                f"[schedule] one-time auto-start for {due.strftime('%Y-%m-%d %H:%M')} "
+                "expired before it could run"
+            )
+            return False
+        if getattr(self, "_step_test_running", False):
+            return False
+        try:
+            if self.root.grab_current() is not None:
+                return False
+        except tk.TclError:
+            return False
+
+        clock_time = normalize_auto_start_time(self.scenario.auto_start_time)
+        self._consume_auto_start_schedule()
+        engine = getattr(self, "engine", None)
+        if engine is not None and engine.is_running:
+            self._queue_log(
+                f"[schedule] {clock_time} auto-start skipped because the macro "
+                "is already running"
+            )
+            return False
+        self._queue_log(
+            f"[schedule] starting scenario '{self.scenario.name}' at "
+            f"{now.strftime('%H:%M:%S')} computer time"
+        )
+        return bool(self._start_engine_from_hotkey())
+
+    def _poll_auto_start(self):
+        self._auto_start_after_id = None
+        try:
+            self._check_auto_start()
+        except Exception as exc:
+            self._queue_log(
+                f"[error] automatic start check failed: {type(exc).__name__}: {exc}"
+            )
+        if not getattr(self, "_closing", False):
+            self._auto_start_after_id = self.root.after(1000, self._poll_auto_start)
 
     # ---- logging ----
     def _queue_log(self, msg):
@@ -1797,26 +1929,18 @@ class App:
                 command = self.control_queue.get_nowait()
                 if (
                     isinstance(command, tuple)
-                    and len(command) == 3
+                    and len(command) == 2
                     and command[0] == "start"
                 ):
                     registration_token = command[1]
-                    generation = command[2]
                     current_token = getattr(
                         self, "_start_hotkey_registration_token", None
                     )
-                    current_generation = getattr(self, "_start_request_generation", 0)
                     if (
                         registration_token is not None
                         and registration_token is current_token
-                        and generation == current_generation
                     ):
-                        self._start_request_in_progress = True
-                        self._pending_start_request = None
-                        try:
-                            self._start_engine_from_hotkey()
-                        finally:
-                            self._start_request_in_progress = False
+                        self._start_engine_from_hotkey()
                 elif (
                     isinstance(command, tuple)
                     and len(command) == 4
@@ -1904,6 +2028,14 @@ class App:
     def _on_close(self):
         if not self._confirm_save_before("closing"):
             return
+        self._closing = True
+        auto_start_after_id = getattr(self, "_auto_start_after_id", None)
+        if auto_start_after_id is not None:
+            try:
+                self.root.after_cancel(auto_start_after_id)
+            except tk.TclError:
+                pass
+            self._auto_start_after_id = None
         self._remove_start_hotkey()
         if self.status_pulse is not None:
             self.status_pulse.stop()
