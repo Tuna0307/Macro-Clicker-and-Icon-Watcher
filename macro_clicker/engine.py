@@ -71,6 +71,25 @@ class _StopRequested(Exception):
 class MacroEngine(RallyMatchingMixin):
     TEMPLATE_SCALE_FACTORS = MACRO_DEFAULT_SCALES
 
+    # After a valid rally row is clicked, Join.png can disappear before the
+    # Attack screen finishes opening. During that short transition, the normal
+    # rally-page recovery steps must not interpret the missing Join button as
+    # "no slot" / "wrong mob" and immediately press Back.
+    RALLY_JOIN_TRANSITION_GUARD_SECONDS = 2.5
+    RALLY_JOIN_TRANSITION_BLOCKED_STEPS = frozenset(
+        {"Joining", "Back if wrong mob", "Back if no slot"}
+    )
+    RALLY_JOIN_TRANSITION_RECOVERY_STEPS = frozenset(
+        {"Back if wrong mob", "Back if no slot"}
+    )
+
+    # Diagnostic logging for the time-critical rally join path.  This is
+    # intentionally rate-limited so an 8-10 minute run stays readable while
+    # still showing which condition blocked Joining, how long each condition
+    # took, and which rally rows were paired with the last-slot + button.
+    RALLY_JOIN_DIAGNOSTIC_INTERVAL = 0.75
+    RALLY_DIAGNOSTIC_BUILD = "JOIN-DIAGNOSTIC-v3"
+
     def __init__(self, scenario: Scenario, log: Optional[Callable[[str], None]] = None):
         self.scenario = Scenario.from_dict(scenario.to_dict())
         self.log = log or (lambda msg: None)
@@ -91,6 +110,9 @@ class MacroEngine(RallyMatchingMixin):
         )
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
+        self._rally_join_guard_until = 0.0
+        self._last_join_diagnostic_log: dict[object, float] = {}
+        self._last_join_condition_trace = None
         self._abort_current_step = False
         self._cleanup_after_abort = False
         self._level_ocr_reader: Optional[LevelOcrReader] = None
@@ -153,6 +175,8 @@ class MacroEngine(RallyMatchingMixin):
         if self.is_running:
             return
         validate_scenario(self.scenario, require_files=True)
+        # Visible version marker so the GUI log proves which engine.py is running.
+        self.log(f"[build] {self.RALLY_DIAGNOSTIC_BUILD} loaded")
         if getattr(self, "_sct_closed", False):
             self.sct = mss.MSS()
             self._sct_closed = False
@@ -165,6 +189,9 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_busy_state = None
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
+        self._rally_join_guard_until = 0.0
+        self._last_join_diagnostic_log.clear()
+        self._last_join_condition_trace = None
         self._abort_current_step = False
         self._cleanup_after_abort = False
         self._last_perf_log.clear()
@@ -329,6 +356,142 @@ class MacroEngine(RallyMatchingMixin):
             return False
         last_logs[key] = now
         return True
+
+    @staticmethod
+    def _join_condition_label(cond: ImageCondition):
+        name = os.path.basename(getattr(cond, "template_path", "") or "template")
+        stem = os.path.splitext(name)[0]
+        labels = {
+            "GoldMob": "GoldMob",
+            "Join": "LastSlot+",
+            "BackButton": "BackButton",
+        }
+        return labels.get(stem, stem or "template")
+
+    @staticmethod
+    def _join_match_y_values(condition_matches):
+        values = []
+        for match in condition_matches or []:
+            try:
+                values.append(int(match["center"][1]))
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        return values
+
+    def _should_log_join_diagnostic(self, signature, now=None):
+        if now is None:
+            now = time.monotonic()
+        interval = max(
+            0.0,
+            float(getattr(self, "RALLY_JOIN_DIAGNOSTIC_INTERVAL", 0.75)),
+        )
+        last_logs = getattr(self, "_last_join_diagnostic_log", None)
+        if last_logs is None:
+            last_logs = {}
+            self._last_join_diagnostic_log = last_logs
+        last = last_logs.get(signature)
+        if last is not None and now >= last and now - last < interval:
+            return False
+        last_logs[signature] = now
+        return True
+
+    def _log_join_condition_trace(
+        self,
+        step: Step,
+        records,
+        total_elapsed: float,
+        *,
+        failed_index=None,
+    ):
+        """Log why Joining is ready/blocked without doing extra image searches."""
+        if step.name != "Joining":
+            return
+
+        record_by_index = {record["index"]: record for record in records}
+        parts = []
+        signature_parts = []
+        for index, cond in enumerate(step.conditions):
+            label = self._join_condition_label(cond)
+            record = record_by_index.get(index)
+            if record is None:
+                parts.append(f"{label}=SKIP")
+                signature_parts.append((index, "skip"))
+                continue
+
+            state = "YES" if record["ok"] else "NO"
+            count = int(record["count"])
+            ys = list(record["ys"])
+            y_text = f" y={ys}" if ys else ""
+            negated = " (negated)" if getattr(cond, "negate", False) else ""
+            parts.append(
+                f"{label}={state}{negated} n={count}{y_text} "
+                f"{record['elapsed']:.3f}s"
+            )
+            signature_parts.append((index, state, count, tuple(ys)))
+
+        if failed_index is None:
+            status = "READY"
+            # A READY evaluation immediately proceeds into OCR/click, so keep
+            # every one of these events in the log.
+            should_log = True
+        else:
+            failed_label = self._join_condition_label(step.conditions[failed_index])
+            status = f"BLOCKED at {failed_label}"
+            signature = (failed_index, tuple(signature_parts))
+            should_log = self._should_log_join_diagnostic(signature)
+
+        self._last_join_condition_trace = {
+            "status": status,
+            "failed_index": failed_index,
+            "total_elapsed": total_elapsed,
+            "records": records,
+        }
+        if should_log:
+            logger = getattr(self, "log", None)
+            if logger is not None:
+                logger(
+                    f"[join-check] {status} | "
+                    + " | ".join(parts)
+                    + f" | total={total_elapsed:.3f}s"
+                )
+
+    def _log_join_row_layout(self, step: Step, action: Action, matches: dict):
+        """Show desired-mob rows, last-slot + rows, and their row pairing."""
+        if step.name != "Joining":
+            return
+        reference_index = action.match_condition_index
+        target_index = action.on_condition_index
+        if reference_index is None or target_index is None:
+            return
+
+        references = sorted(
+            list(matches.get(reference_index, [])),
+            key=lambda match: match.get("center", (0, 0))[1],
+        )
+        targets = sorted(
+            list(matches.get(target_index, [])),
+            key=lambda match: match.get("center", (0, 0))[1],
+        )
+        assignments = self._targets_by_closest_reference(references, targets, action)
+
+        mob_ys = [int(match["center"][1]) for match in references]
+        plus_ys = [int(match["center"][1]) for match in targets]
+        pair_text = []
+        for reference in references:
+            ref_y = int(reference["center"][1])
+            row_targets = assignments.get(id(reference), [])
+            target_ys = [int(match["center"][1]) for match in row_targets]
+            if target_ys:
+                pair_text.append(f"mob_y={ref_y}->plus_y={target_ys}")
+            else:
+                pair_text.append(f"mob_y={ref_y}->NO_PLUS")
+
+        logger = getattr(self, "log", None)
+        if logger is not None:
+            logger(
+                f"  [join-rows] GoldMob y={mob_ys}; LastSlot+ y={plus_ys}; "
+                + ", ".join(pair_text)
+            )
 
     # ---- internals ----
     def _run_loop(self):
@@ -1157,11 +1320,13 @@ class MacroEngine(RallyMatchingMixin):
         return None
 
     def _evaluate_step(self, step: Step, frame_cache=None):
+        step_started = time.perf_counter()
         if self._stop_requested():
             return False, {}, {}
         if not step.conditions:
             return True, {}, {}
         results, points, matches = [], {}, {}
+        condition_records = []
         if frame_cache is None:
             frame_cache = {}
         matching_row_snapshot = self._prime_matching_row_frame_cache(step, frame_cache)
@@ -1182,11 +1347,34 @@ class MacroEngine(RallyMatchingMixin):
         for i, cond in enumerate(step.conditions):
             if self._stop_requested():
                 return False, points, matches
-            ok, condition_matches = self._evaluate_condition(
+
+            condition_started = time.perf_counter()
+            optimized = self._evaluate_matching_row_target_locally(
+                step,
                 i,
                 cond,
+                matches,
                 frame_cache,
                 collect_all=i in all_match_indices,
+            )
+            if optimized is None:
+                ok, condition_matches = self._evaluate_condition(
+                    i,
+                    cond,
+                    frame_cache,
+                    collect_all=i in all_match_indices,
+                )
+            else:
+                ok, condition_matches = optimized
+            condition_elapsed = time.perf_counter() - condition_started
+            condition_records.append(
+                {
+                    "index": i,
+                    "ok": bool(ok),
+                    "count": len(condition_matches),
+                    "ys": self._join_match_y_values(condition_matches),
+                    "elapsed": condition_elapsed,
+                }
             )
             results.append(ok)
             matches[i] = condition_matches
@@ -1199,9 +1387,129 @@ class MacroEngine(RallyMatchingMixin):
                     matches,
                     frame_cache,
                 )
+                self._log_join_condition_trace(
+                    step,
+                    condition_records,
+                    time.perf_counter() - step_started,
+                    failed_index=i,
+                )
                 return False, points, matches
         met = any(results) if step.condition_operator == "OR" else all(results)
+        self._log_join_condition_trace(
+            step,
+            condition_records,
+            time.perf_counter() - step_started,
+            failed_index=None if met else -1,
+        )
         return met, points, matches
+
+
+    def _evaluate_matching_row_target_locally(
+        self,
+        step: Step,
+        index: int,
+        cond: ImageCondition,
+        matches: dict,
+        frame_cache,
+        *,
+        collect_all: bool,
+    ):
+        """Search a row target only near already-found row anchors.
+
+        ``click_matching_row`` can otherwise spend most of its reaction time
+        scanning a tall target region for every Join/+ icon.  Targets outside
+        ``row_tolerance`` can never be selected anyway, so once the reference
+        mob rows are known we restrict the target template search to small
+        horizontal bands around those rows.  The returned coordinates stay in
+        screen space, so the normal row pairing/OCR/click path is unchanged.
+
+        This optimization is intentionally skipped for negated or competing
+        template conditions because those modes need broader context.
+        """
+        if not collect_all or cond.negate or cond.comparison_template_path:
+            return None
+
+        action = next(
+            (
+                candidate
+                for candidate in step.actions
+                if candidate.type == "click_matching_row"
+                and candidate.on_condition_index == index
+                and candidate.match_condition_index is not None
+            ),
+            None,
+        )
+        if action is None:
+            return None
+
+        reference_index = action.match_condition_index
+        if reference_index is None or reference_index >= index:
+            return None
+        references = list(matches.get(reference_index, []))
+        if not references:
+            return None
+
+        region, frame, off_x, off_y = self._capture_for_condition(cond, frame_cache)
+        if region is _WINDOW_UNAVAILABLE:
+            return False, []
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return False, []
+
+        frame_height = int(frame.shape[0])
+
+        # Build absolute-y search bands. A small padding preserves matches
+        # whose center is within row_tolerance but whose template box extends
+        # slightly outside the strict tolerance band. Rally Join.png is small,
+        # and scaling this fixed safety margin keeps the hot path cheap without
+        # requiring another template load here.
+        bands = []
+        for reference in references:
+            _scale_x, scale_y = self._match_geometry_scale(reference)
+            tolerance = max(0, round(action.row_tolerance * scale_y))
+            pad = max(12, round(32 * max(1.0, scale_y)))
+            center_y = int(reference["center"][1])
+            top = max(int(off_y), center_y - tolerance - pad)
+            bottom = min(int(off_y) + frame_height, center_y + tolerance + pad + 1)
+            if bottom > top:
+                bands.append((top, bottom))
+
+        if not bands:
+            return False, []
+
+        bands.sort()
+        merged = []
+        for top, bottom in bands:
+            if merged and top <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], bottom))
+            else:
+                merged.append((top, bottom))
+
+        found_matches = []
+        seen = set()
+        for top, bottom in merged:
+            if self._stop_requested():
+                return False, []
+            local_top = top - int(off_y)
+            local_bottom = bottom - int(off_y)
+            crop = frame[local_top:local_bottom]
+            ok, local_matches = self._evaluate_template_condition(
+                index,
+                cond,
+                crop,
+                int(off_x),
+                top,
+                True,
+            )
+            if not ok:
+                continue
+            for match in local_matches:
+                key = tuple(match.get("box", ())) or tuple(match.get("center", ()))
+                if key in seen:
+                    continue
+                seen.add(key)
+                found_matches.append(match)
+
+        return bool(found_matches), found_matches
 
     def _maybe_record_matching_row_step_miss(
         self,
@@ -1390,6 +1698,7 @@ class MacroEngine(RallyMatchingMixin):
                     self._retry_current_step = True
                     return False
                 points, matches = refreshed
+            self._log_join_row_layout(step, action, matches)
             selections, had_unreadable_level = self._find_matching_row_selections(
                 action,
                 matches,
@@ -1492,6 +1801,33 @@ class MacroEngine(RallyMatchingMixin):
                 self._pending_rally_level = selection.get("level")
                 self._pending_rally_team_selected = None
                 self.log(f"  click matching row ({x}, {y})")
+
+                # A successful rally + click begins a UI transition. The + can
+                # disappear while RallyPage/BackButton are still visible, which
+                # otherwise makes "Back if no slot" race the Attack screen and
+                # undo the successful join. Arm the guard only for scenarios that
+                # actually contain the rally recovery steps, so generic
+                # click_matching_row actions are unaffected.
+                scenario = getattr(self, "scenario", None)
+                scenario_step_names = (
+                    {candidate.name for candidate in scenario.steps}
+                    if scenario is not None
+                    else set()
+                )
+                recovery_steps = self.RALLY_JOIN_TRANSITION_RECOVERY_STEPS
+                if step.name == "Joining" and scenario_step_names.intersection(
+                    recovery_steps
+                ):
+                    guard_seconds = max(
+                        0.0, float(self.RALLY_JOIN_TRANSITION_GUARD_SECONDS)
+                    )
+                    self._rally_join_guard_until = (
+                        time.monotonic() + guard_seconds
+                    )
+                    self.log(
+                        f"  [rally] suppress rally-page checks for {guard_seconds:g}s "
+                        "while attack screen opens"
+                    )
             if clicked and pre_click_delay <= 0.0:
                 # The evidence uses the already-frozen atomic snapshot, so it
                 # remains accurate after the click while staying off the
@@ -2074,6 +2410,19 @@ class MacroEngine(RallyMatchingMixin):
                     return fired_any
                 if not step.enabled:
                     continue
+
+                # A valid + slot was just clicked. During the short transition
+                # into the Attack screen, Join.png disappears before the old
+                # rally page is fully gone. Do not let the recovery Back steps
+                # fire in that temporary state. Normal no-slot refreshes are not
+                # delayed because this guard exists only after a successful +
+                # click and expires automatically.
+                if (
+                    step.name in self.RALLY_JOIN_TRANSITION_BLOCKED_STEPS
+                    and now < getattr(self, "_rally_join_guard_until", 0.0)
+                ):
+                    continue
+
                 if now - self._last_fired.get(step.name, 0.0) < step.cooldown:
                     continue
 

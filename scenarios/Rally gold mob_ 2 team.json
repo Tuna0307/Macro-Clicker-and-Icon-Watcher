@@ -650,16 +650,16 @@
           "use_grayscale": false,
           "template_reference_size": null,
           "region": [
-            664,
+            900,
             146,
-            384,
+            148,
             794
           ],
           "region_mode": "window",
           "region_ratio": [
-            0.3458333333333333,
+            0.46875,
             0.13518518518518519,
-            0.2,
+            0.07708333333333334,
             0.7351851851851852
           ],
           "region_window_size": [
@@ -1457,16 +1457,16 @@
           "use_grayscale": false,
           "template_reference_size": null,
           "region": [
-            562,
+            754,
             154,
-            323,
+            124,
             663
           ],
           "region_mode": "window",
           "region_ratio": [
-            0.34950248756218905,
+            0.46875,
             0.16382978723404254,
-            0.20087064676616914,
+            0.07708333333333334,
             0.7053191489361702
           ],
           "region_window_size": [
