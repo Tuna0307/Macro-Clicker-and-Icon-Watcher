@@ -1,14 +1,19 @@
 # PC Macro Builder
 
-A desktop tool, similar in spirit to Smart-AutoClicker, for building
-game macros: drag-select icons on screen, define Steps with
-Conditions (image present/absent) and Actions (click, key, wait,
-enable/disable other steps), then run the scenario.
+A Windows desktop utility for **visual automation** and **passive screen monitoring**.
+
+The project has two main runtime functions:
+
+1. **Automation** — watches the screen for configured visual conditions and runs multi-step actions such as clicks, key presses, waits, row-based target selection, OCR-assisted decisions, and workflow transitions.
+2. **Icon Alerts** — continuously monitors selected screen regions for configured images or text and notifies the user with sound and popup alerts without performing macro actions.
+
+Both systems share the same screen-capture and image-recognition foundation, including OpenCV template matching, DPI-aware coordinates, window/monitor-relative regions, resolution scaling, and optional OCR.
+
+> The repository contains tuned workflows, templates, and behavior developed for the bundled screen layouts. It is no longer treated as a blank general-purpose macro framework. Existing workflow-specific timing, recovery, matching, and safety behavior should be preserved when extending the project.
 
 ## Setup
 
-Using a project virtual environment is recommended so OCR and image-processing
-packages do not conflict with packages installed for other programs:
+Using a project virtual environment is recommended so OCR and image-processing packages do not conflict with packages installed for other programs:
 
 ```powershell
 py -m venv .venv
@@ -16,17 +21,258 @@ py -m venv .venv
 .\.venv\Scripts\python -m macro_clicker
 ```
 
-The dependency ranges are bounded to compatible major versions. On Windows,
-`Run PC Macro Builder.bat` starts the GUI without a console and automatically
-uses `.venv` when it exists. Startup failures
-are shown in a dialog and recorded under
-`%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs`. Set
-`MACRO_CLICKER_DATA_DIR` to use a different runtime-log location.
+On Windows, `Run PC Macro Builder.bat` starts the GUI without a console and automatically uses `.venv` when it exists.
 
-For development checks:
+Startup failures are shown in a dialog and recorded under:
+
+```text
+%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs
+```
+
+Set `MACRO_CLICKER_DATA_DIR` to use a different runtime-data location.
+
+If the target application runs elevated, run the macro utility with matching privileges or Windows may block clicks and key events sent by `pyautogui` / `keyboard`.
+
+## Application overview
+
+```text
+                         Shared Detection Layer
+                      macro_clicker/detection_core.py
+                                  │
+                     capture / scale / match / OCR
+                                  │
+                 ┌────────────────┴────────────────┐
+                 │                                 │
+                 ▼                                 ▼
+        Automation / Macro                  Passive Icon Alerts
+        macro_clicker/engine.py             macro_clicker/alert_watcher.py
+                 │                                 │
+        Conditions → Decisions              Detect → Confirm
+                 │                                 │
+        Actions → Verification              Cooldown → Sound / Popup
+                 │
+        Retry / Recovery / State
+```
+
+The two workflows intentionally share visual detection but keep their behavior separate:
+
+- **Automation** converts matches into controlled input and workflow transitions.
+- **Icon Alerts** observes the screen and reports detections without taking macro actions.
+
+## Automation system
+
+Automation is scenario-driven. A scenario contains ordered **Steps**, and each Step contains **Conditions** and **Actions**.
+
+### Scenario
+
+A named set of steps stored under `scenarios/*.json`.
+
+Scenario settings include:
+
+- Start hotkey
+- Kill-switch / stop hotkey
+- Poll interval
+- Optional one-time scheduled start using the computer's local clock
+- Target window selection
+- Monitor selection
+- Diagnostic collection
+
+### Step
+
+A step is evaluated during each polling cycle when it is enabled and outside its cooldown.
+
+If the step's visual conditions are not currently satisfied, the engine skips it for that cycle rather than blocking the entire scenario.
+
+Steps can enable or disable other steps, allowing bundled workflows to behave like small state machines with detection, action, confirmation, retry, and recovery phases.
+
+### Conditions
+
+Conditions currently use visual template matching and support:
+
+- Image present / absent checks
+- AND / OR combinations
+- Per-condition confidence
+- Optional comparison templates
+- Screen, monitor, or target-window-relative regions
+- Resolution-aware template scaling
+- Static, animated/rotating, and colored-text matching modes
+- Grayscale picture matching when configured
+
+Templates can be captured directly from the screen using the built-in capture tools.
+
+### Actions
+
+Supported action types include:
+
+- `click`
+- `click_matching_row`
+- `select_rally_team`
+- `key`
+- `wait`
+- `set_step`
+- `stop`
+
+Some actions are intentionally specialized for the advanced bundled workflows. They should not be simplified into generic clicks unless the existing behavior and tests are preserved.
+
+### Row-based automation
+
+`click_matching_row` is used when a target button must belong to the same visible row as another detected object.
+
+The engine can:
+
+- detect multiple row references and multiple candidate targets;
+- associate each target with the closest valid row;
+- choose the leftmost or rightmost target in that row;
+- process the first valid row or multiple rows;
+- scale row tolerance with the detected geometry;
+- use OCR-based level filtering where configured;
+- revalidate a selected row after a pre-click delay before acting.
+
+For OCR-filtered row decisions, the reference matches, target matches, and OCR crop regions are derived from one atomic screenshot whenever possible. If the level cannot be read reliably or the row changes before the click, the workflow retries instead of guessing.
+
+## Icon Alerts
+
+Icon Alerts are a separate passive-monitoring feature.
+
+The user can save image/text templates, choose which ones are active, and configure where they should be detected. The watcher scans those templates independently from the automation scenario engine.
+
+Typical alert behavior is:
+
+```text
+Capture screen region
+        ↓
+Find configured template
+        ↓
+Confirm detection when required
+        ↓
+Apply per-template cooldown
+        ↓
+Sound / popup notification
+```
+
+Icon Alerts do **not** execute the macro scenario actions and do not collect the automation diagnostic screenshots.
+
+Use **Detect this icon** (or Space when the item is selected) to control which saved alert templates are actively scanned.
+
+## Shared detection foundation
+
+Automation and Icon Alerts both use `macro_clicker/detection_core.py` for the underlying visual-processing pipeline.
+
+Shared capabilities include:
+
+- DPI-aware BGR screen capture
+- Physical-monitor handling
+- Target-window-relative and monitor-relative regions
+- Exact X/Y resolution scaling
+- Multi-scale template preparation
+- Static and rotated template variants
+- Colored-text isolation
+- Grayscale matching
+- Low-variance safety checks
+- Match scoring and duplicate suppression
+- Cancellation-aware matching
+
+When a template has a reference window or monitor size, the matcher inserts the exact current X/Y scale before trying fallback scales. This allows saved regions and detected-target offsets to follow common resolution and aspect-ratio changes without relying only on absolute coordinates.
+
+Automation and alerts deliberately use different fallback ranges because they have different timing requirements, while known resolution changes can still inject exact scale candidates outside those fallback ranges.
+
+## Window targeting and input safety
+
+A scenario or alert configuration can target a window by title substring.
+
+When a target window is configured:
+
+- New regions can be stored relative to the target window.
+- Proportional region metadata lets them follow window resizing.
+- Detection follows the physical monitor containing the target window.
+- Missing target windows fail closed instead of silently clicking elsewhere.
+- Macro clicks are rejected when the resolved point is outside the target window.
+- Click and key actions require the selected target window to be in the foreground.
+- Window geometry is rechecked around input operations so a moved window does not receive stale coordinates.
+- The application does not automatically raise or focus the target window.
+
+When no target window is configured, monitor-relative and legacy absolute-screen behavior remain available.
+
+`pyautogui.FAILSAFE` remains enabled, and the scenario kill switch is checked throughout captures, matching, waits, and action execution.
+
+## Interface preferences and scheduling
+
+Open **Scenario settings** to configure scenario hotkeys, target settings, diagnostics, and the optional one-time automatic start.
+
+A scheduled start:
+
+- uses the computer's local time;
+- requires the application and selected scenario to remain open;
+- runs only once;
+- disables itself after it runs or expires;
+- does not restart a scenario that is already running.
+
+The application also stores shared interface preferences such as sound and animation settings in the per-user data directory.
+
+## Detection types
+
+Automation conditions and Icon Alert templates share the same main detection modes:
+
+- **Text / colored text** — isolates foreground text color so changing backgrounds have less influence on the match.
+- **Static picture** — searches configured scales without rotation.
+- **Animated/rotating picture** — searches configured scales at small positive and negative rotations for icons that visibly tilt or move.
+
+Alert and automation workflows may apply different confirmation or fallback policies even when they use the same underlying detection mode.
+
+## Diagnostics
+
+Automation scenarios can collect bounded diagnostic evidence when diagnostics are enabled.
+
+Runtime evidence is stored under:
+
+```text
+%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs\diagnostics
+```
+
+The collector is selective so long-running automation does not save a full screenshot for every normal poll. Important OCR failures, ambiguous decisions, row changes, near misses, and sampled successful decisions can retain evidence for later review.
+
+Diagnostic events can contain:
+
+- annotated context screenshots;
+- OCR crops;
+- template scores;
+- matched row / target geometry;
+- OCR text and confidence;
+- configured decision limits;
+- the final automation decision.
+
+Decision metadata is also written to a bounded rotating JSONL log. Screenshot retention is limited by count, age, and total storage size.
+
+Icon Alerts use their own alert logging behavior and do not save the automation diagnostic screenshots.
+
+## Project layout
+
+```text
+macro_clicker/   Main application, automation engine, alerts, detection, OCR, diagnostics, and UI
+tools/           Developer validation utilities
+tests/           Automated regression, safety, matching, and workflow tests
+templates/       Automation image assets and OCR references
+scenarios/       Saved automation workflows
+alerts/          Passive Icon Alert settings and templates
+docs/            Architecture and maintenance notes
+launcher.pyw     Windows GUI entry point used by the launch scripts
+```
+
+Important module ownership is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Generated caches, logs, and runtime diagnostic captures do not belong in the repository.
+
+## Development checks
+
+Install the development dependencies:
 
 ```powershell
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
+```
+
+Run the same main checks used by CI:
+
+```powershell
 .\.venv\Scripts\python -m pytest -q
 .\.venv\Scripts\python -m ruff check .
 .\.venv\Scripts\python -m ruff format --check .
@@ -34,251 +280,16 @@ For development checks:
 .\.venv\Scripts\python -m tools.validate_scenarios
 ```
 
-## Interface preferences
+The repository's Windows CI runs the test suite, Ruff lint/format checks, mypy, and scenario/template validation on pushes and pull requests.
 
-The application uses a bright CustomTkinter/ttk hybrid interface.
-Open **Scenario settings** to configure the scenario Start/Stop keys, an
-optional one-time automatic start based on the computer's local clock, and
-the global interface sound and animation preferences. The application must be
-open for a scheduled start to run. Interface preferences are stored in the
-per-user data folder and apply to both Macro Builder and Icon Alerts. In Icon
-Alerts, select an item and toggle **Detect this icon** (or press Space) to
-choose exactly which saved icons are scanned.
+## Development guidance
 
-## Project layout
+This codebase contains mature workflow-specific behavior that has been tuned around real screen transitions and timing. When changing existing automation:
 
-```text
-macro_clicker/   Application, detection, OCR, diagnostics, and UI code
-tools/           Developer validation utilities
-tests/           Automated tests
-templates/       Macro image assets and level digit references
-scenarios/       Saved macro scenarios
-alerts/          Icon Alert settings and templates
-docs/            Architecture and maintenance notes
-launcher.pyw     Windows GUI entry point used by the launch scripts
-```
+- Prefer small, test-backed changes over broad rewrites.
+- Preserve fail-closed behavior when detection, OCR, window state, or input validation is uncertain.
+- Keep reusable capture and matching logic in the shared detection layer.
+- Keep automation policy in the automation runtime and passive-alert policy in the alert watcher.
+- Do not remove delays, recovery paths, revalidation, or specialized actions simply because they look redundant without first checking the tests and the workflow that relies on them.
 
-Generated caches and runtime logs do not belong in the repository. Runtime
-logs and diagnostic captures are written to the per-user data directory shown
-below. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module ownership and
-safe extension points.
-
-On Windows, run your terminal as Administrator if your game runs
-elevated -- otherwise clicks/keys sent by `pyautogui`/`keyboard` won't
-reach it.
-
-## Window targeting
-
-If you move the game window around, fill in **Target window title
-contains** with part of the game window title before creating or editing
-conditions. For example, if the title bar says `My Game - Profile 1`,
-enter `My Game`.
-
-When a target window is set:
-
-- Conditions without a picked region search inside the target window
-  instead of the whole monitor.
-- New picked regions are saved relative to the target window, so they
-  follow the game if you drag it somewhere else.
-- New picked regions also store proportional coordinates, so if the
-  target window is resized, the region is recalculated against the new
-  window size.
-- If the window cannot be found while running, the step is skipped
-  instead of clicking in the wrong place.
-- Clicks are rejected if their resolved point is outside that target window.
-  Clicks and key actions run only while the exact selected target window is in
-  the foreground; the application never raises or focuses it automatically.
-
-Leave the field blank to use the old full-screen / absolute-region
-behavior.
-
-## Shared detection foundation
-
-Macro Builder and Icon Alerts use the same `macro_clicker/detection_core.py` implementation
-for DPI-aware BGR screen captures, monitor selection, window/monitor-relative
-regions, template scaling, colored-text masking, rotations, low-variance
-safety, bounded variant preparation, coarse search, and match scoring.
-Workflow-specific behavior remains separate: Macro Builder turns matches into
-actions, while Icon Alerts applies confirmation, cooldown, sound, and popup
-policies.
-
-When a template has a reference window/monitor size, the matcher inserts the
-exact current width and height scales before its fallback scales. For example,
-moving a full-screen game from 1920x1080 to 2560x1440 adds an exact 1.333333x
-candidate. A change of aspect ratio also gets an exact independent x/y variant
-instead of being forced into one approximate scalar. New screen captures save
-their reference size. Legacy Macro conditions safely try the known historical
-window sizes in the scenario without rewriting its JSON; explicit new template
-metadata takes priority.
-
-The matching implementation is shared, while each workflow keeps its safe
-legacy fallback range: Icon Alerts retains its broad 0.50x-1.50x search and
-Macro Builder retains its faster 0.80x-1.20x fallback. Known monitor/window
-resolution changes are not limited by those ranges because their exact scale
-is inserted automatically.
-
-When a target window is configured, both workflows follow that window to the
-physical monitor it currently occupies. When no target window is used, newly
-picked regions are saved relative to the selected monitor, so changing from a
-1920x1080 monitor to a 2560x1440 monitor moves and scales the region. Existing
-legacy `screen` regions remain absolute to avoid silently changing saved
-behavior.
-
-Macro matches also carry their exact x/y scale into detected-target offsets,
-matching-row tolerance, and level OCR regions.
-Legacy fixed `x`/`y` click actions remain absolute screen coordinates; use a
-detected condition target for portable cross-monitor actions.
-
-## Matching a row
-
-For list-style game screens where the correct click depends on the
-same row, use the **click_matching_row** action.
-
-Example:
-
-```
-Conditions:
-[0] Mob.png
-[1] Join.png
-
-Action:
-click_matching_row
-  Row reference condition #: 0
-  Click condition #: 1
-```
-
-This means: find all `Mob.png` matches, find all `Join.png` matches,
-then click the first join button whose vertical row lines up with one
-of the `Mob.png` matches. The step scans top to bottom, so it will
-prefer the first valid rally row.
-
-For auto rally where each row has multiple open plus slots and you want
-to click the last available slot in every valid row:
-
-```
-Action:
-click_matching_row
-  Row reference condition #: 0
-  Click condition #: 1
-  Rows: all
-  Target choice: rightmost
-```
-
-This clicks the rightmost matching target in each valid row, top to
-bottom.
-
-For level-filtered rows, the mob anchors, join targets, and all six OCR crop
-offsets come from one atomic screenshot. The snapshot is expanded to include
-the level area even when the mob search region itself is tightly cropped. If
-the level is unreadable, or the selected row changes during the configured
-pre-click delay, later actions in that step are aborted and the step retries on
-the next poll without consuming its cooldown.
-
-## Concepts
-
-- **Scenario** -- a named, saved set of Steps (`scenarios/*.json`).
-  Switch between them from the dropdown at the top.
-- **Step** -- one row in the list. Has Conditions and Actions. Checked
-  every poll cycle, top to bottom. If its conditions aren't on screen
-  right now, it's simply skipped that cycle -- no error, no blocking.
-- **Condition** -- a template image to look for (and an optional
-  "Negate" toggle so the condition succeeds when the image is
-  *absent* instead). Multiple conditions on one step are combined
-  with AND or OR. Use "Capture from screen..." to drag-select the
-  icon directly instead of cropping screenshots by hand.
-- **Action** -- `click`, `click_matching_row`, `key`, `wait`, `set_step`
-  (enable/disable another step), or `stop` (finish the running scenario).
-  Actions run top to bottom once a step's conditions are met.
-
-## Included scenarios
-
-The repository includes one-team and two-team rally scenarios. They use
-`set_step` actions to move between rally detection, joining, confirmation, and
-safe back-out states. Their template paths are project-relative, so the folder
-can be moved to another computer without rewriting the scenario JSON.
-
-In the smart two-team scenario, the visible Team 1 and Team 3 maximum-level
-fields are the only upper-level limits. Team 3 is preferred whenever it is
-idle and accepts the detected level; Team 1 remains the immediate fallback.
-The ordinary row maximum remains available only to one-team/non-smart actions.
-
-Scenario JSON files are editable runtime configuration. Personal level limits,
-delays, and similar tuning can remain as uncommitted local changes; commit them
-only when they are intended to become the project defaults.
-
-## Detection types
-
-Alert templates and Macro Builder conditions use the same detection types:
-
-- **Text / colored text** isolates the foreground text color so translucent or
-  changing backgrounds do not become part of the match. Text does not use
-  rotation. Near-exact matches alert immediately; other passing matches are
-  confirmed against a second chat-region capture after 100 ms.
-- **Static picture** searches the configured scales without rotated variants.
-- **Animated/rotating picture** searches the configured scales at 0, ±5, and
-  ±8 degrees for icons that visibly tilt or wobble.
-
-The Icon Alerts **Grayscale pictures** option applies to its picture templates;
-Macro Builder stores the same choice per condition. New templates and old Macro
-conditions default to **Static picture**. Older alert manifests without a
-detection type retain the previous animated/rotating behavior.
-
-## Tips
-
-- Start `confidence` around 0.85; raise it if you get false
-  positives, lower it if a real icon isn't detected.
-- Use "Pick region..." on a condition to restrict matching to a small
-  area (e.g. just your hotbar). If a target window is set first, that
-  region follows the window when it moves and rescales when the window
-  size changes.
-- Use `click_matching_row` when one condition identifies the row and
-  another condition is the button to click in that same row.
-- Each scenario can configure its own start key (default F8) and stop key
-  under **Scenario settings**. Their physical key sequences must not overlap;
-  aliases, reordered modifiers, and one sequence being a prefix of another
-  count as conflicts.
-- A scenario can optionally start once at the next occurrence of a configured
-  computer-local time such as `22:51` or `10:51 PM`. The schedule disables
-  itself after it runs. An entry from 1 through 12 without AM/PM uses its next
-  matching AM or PM occurrence. The selected scenario and application must
-  remain open; an already-running macro is not restarted.
-- The kill-switch key (default F12) is required before a scenario starts and
-  is checked between captures, matches, and every action, even while the game
-  has focus.
-
-## Diagnostic evidence
-
-Macro Builder scenarios collect bounded diagnostic evidence by default. The
-setting can be disabled in **Scenario settings**. Icon Alerts does not collect
-screenshots. Events are stored under:
-
-```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs\diagnostics
-```
-
-The collector uses a selective policy so a long-running macro does not save a
-full screenshot for every normal check:
-
-- Unread OCR, provisional OCR conflicts, accepted OCR below 95%, and row
-  changes keep full evidence in `critical`.
-- Reference/target template near misses are retained in `samples` at most once
-  every five minutes.
-- A repeated `no eligible row` result is retained in `samples` at most once
-  every ten minutes.
-- Strong successful reads (95% or higher) are sampled at most once every 30
-  minutes.
-- Visually similar screenshots are deduplicated for five minutes.
-
-Full events are split into `critical` and `samples` directories. Each contains
-`metadata.json`, a JPEG annotated context screenshot, and lossless PNG OCR
-crops. Rally records include row and target matches, template scores, OCR
-text/confidence, all crop offsets, level limits, and the
-final decision.
-
-Every rally decision is also appended without screenshots to the rotating
-`decisions.jsonl` log. It is limited to 5 MB plus three backups. Screenshot
-retention keeps up to 175 critical events and 25 routine success samples, with
-the existing overall limits of 200 events, seven days, and 500 MB. Automatic
-labels are only diagnostic classifications; determining whether an event is
-truly a false positive or false negative still requires reviewing the evidence.
-
+The current code should be treated as a specialized visual automation and monitoring application built around its existing workflows, not as an empty framework that must remain generic for unrelated uses.
