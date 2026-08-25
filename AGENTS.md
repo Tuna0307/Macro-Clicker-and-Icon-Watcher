@@ -3,6 +3,12 @@
 This file is intended for AI coding assistants and future development sessions.
 Read it before making architectural changes.
 
+Also read these focused guides when relevant:
+
+- `docs/ARCHITECTURE.md` — module ownership and runtime boundaries.
+- `docs/MAINTAINABILITY.md` — what is protected, what is safe cleanup, and when refactoring is justified.
+- `docs/TESTING.md` — automated checks, screenshot fixtures, headless limitations, and live verification.
+
 ## Project direction
 
 This repository originally started as a more general-purpose macro builder, but that is **not the current design goal**.
@@ -258,7 +264,7 @@ Prefer:
 
 ## Validation before finishing a code change
 
-The repository CI currently expects:
+The repository uses the following checks:
 
 ```powershell
 python -m pytest -q
@@ -267,6 +273,13 @@ python -m ruff format --check .
 python -m mypy macro_clicker tools
 python -m tools.validate_scenarios
 ```
+
+Current CI policy:
+
+- **Blocking:** pytest, Ruff lint, scenario/template validation.
+- **Informational:** Ruff formatting, mypy.
+
+Formatting/type-hint feedback should still be reviewed, but it should not be treated as proof that a working runtime path is broken. See `docs/TESTING.md` for the testing layers and when screenshots/live verification are appropriate.
 
 For changes to stored scenarios or models, validate both the Python code and scenario/template integrity.
 
