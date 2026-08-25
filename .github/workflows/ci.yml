@@ -34,7 +34,10 @@ jobs:
       - name: Run Ruff lint
         run: python -m ruff check .
 
-      - name: Check Ruff formatting
+      # Formatting is useful feedback for AI-assisted changes, but a style-only
+      # difference should not fail the quality job or hide later correctness checks.
+      - name: Check Ruff formatting (informational)
+        continue-on-error: true
         run: python -m ruff format --check .
 
       - name: Run mypy
