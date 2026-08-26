@@ -1,4 +1,5 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,3 +74,35 @@ def test_invalid_ui_value_does_not_partially_mutate_live_config():
         runtime._collect_config()
 
     assert runtime.config == original
+
+
+def test_scheduled_start_can_use_saved_config_without_resaving_ui():
+    runtime = _harness()
+    save_calls = []
+    logs = []
+    runtime._save_from_ui = lambda: save_calls.append(True) or True
+    runtime._append_log = logs.append
+    runtime.controller = SimpleNamespace(
+        status=SimpleNamespace(last_message="Running Rally"),
+        start=lambda: True,
+    )
+
+    runtime._start_bot(save_first=False)
+
+    assert save_calls == []
+    assert logs == ["Running Rally"]
+
+
+def test_manual_start_still_saves_current_ui_first():
+    runtime = _harness()
+    save_calls = []
+    runtime._save_from_ui = lambda: save_calls.append(True) or True
+    runtime._append_log = lambda _message: None
+    runtime.controller = SimpleNamespace(
+        status=SimpleNamespace(last_message="Running Rally"),
+        start=lambda: True,
+    )
+
+    runtime._start_bot()
+
+    assert save_calls == [True]
