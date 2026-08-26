@@ -7,8 +7,12 @@ try:
 except ImportError:
     sys.modules["keyboard"] = types.SimpleNamespace(parse_hotkey=lambda _value: ())
 
-from macro_clicker.bot.adapters import apply_gather_config, apply_rally_config
-from macro_clicker.bot.config import GatherConfig, RallyConfig
+from macro_clicker.bot.adapters import (
+    apply_gather_config,
+    apply_position_config,
+    apply_rally_config,
+)
+from macro_clicker.bot.config import GatherConfig, PositionsConfig, RallyConfig
 from macro_clicker.models import Action, Scenario, Step
 
 
@@ -112,3 +116,62 @@ def test_gather_adapter_changes_start_level_count_and_target_marches():
         action for action in controls if action.gather_command == "record_success"
     )
     assert success.gather_target_count == 2
+
+
+def _position_scenario():
+    retry = Step(
+        name="Retry - Apply Unavailable",
+        actions=[
+            Action(type="key", key="esc"),
+            Action(type="wait", seconds=0.1),
+            Action(type="key", key="esc"),
+            Action(
+                type="set_step",
+                step_name="Complete - Apply Available",
+                set_enabled=False,
+            ),
+            Action(
+                type="set_step",
+                step_name="Retry - Apply Unavailable",
+                set_enabled=False,
+            ),
+            Action(type="set_step", step_name="Open #2212", set_enabled=True),
+        ],
+    )
+    return Scenario(
+        name="Apply Development Position",
+        steps=[Step(name="Open #2212"), retry],
+    )
+
+
+def test_position_adapter_preserves_existing_retry_loop_by_default():
+    source = _position_scenario()
+
+    configured = apply_position_config(source, PositionsConfig())
+    retry = next(
+        step for step in configured.steps if step.name == "Retry - Apply Unavailable"
+    )
+
+    assert retry.actions[-1].type == "set_step"
+    assert retry.actions[-1].step_name == "Open #2212"
+    assert source.steps[-1].actions[-1].type == "set_step"
+
+
+def test_position_adapter_can_stop_after_unavailable_cleanup():
+    source = _position_scenario()
+    config = PositionsConfig(retry_automatically=False)
+
+    configured = apply_position_config(source, config)
+    retry = next(
+        step for step in configured.steps if step.name == "Retry - Apply Unavailable"
+    )
+
+    assert [action.type for action in retry.actions[:3]] == ["key", "wait", "key"]
+    assert retry.actions[-1].type == "stop"
+    assert not any(
+        action.type == "set_step"
+        and action.step_name == "Open #2212"
+        and action.set_enabled
+        for action in retry.actions
+    )
+    assert source.steps[-1].actions[-1].type == "set_step"
