@@ -1,6 +1,6 @@
 """Small coordinator for user-facing bot features.
 
-It deliberately does not merge Rally/Gather/Position logic.  It serializes
+It deliberately does not merge Rally/Gather/Position logic. It serializes
 clicking automations and leaves passive alerts free to run alongside them.
 """
 
@@ -16,17 +16,28 @@ FEATURE_GATHER = "gather"
 FEATURE_DEVELOPMENT = "development"
 FEATURE_SCIENCE = "science"
 
+# Finite setup-style jobs run first. Rally is deliberately last because its
+# normal scenario is continuous and would otherwise prevent later jobs from
+# ever receiving control of the input engine.
+BOT_FEATURE_PRIORITY = (
+    FEATURE_DEVELOPMENT,
+    FEATURE_SCIENCE,
+    FEATURE_GATHER,
+    FEATURE_RALLY,
+)
+
 
 @dataclass
 class BotStatus:
     running: bool = False
+    session_active: bool = False
     active_feature: Optional[str] = None
     last_feature: Optional[str] = None
     last_message: str = "Ready"
 
 
 class BotController:
-    """Choose one clicking automation at a time and track dashboard state."""
+    """Run enabled clicking automations sequentially and track dashboard state."""
 
     def __init__(
         self,
@@ -37,41 +48,20 @@ class BotController:
         self._config_provider = config_provider
         self._runner = runner
         self._stopper = stopper
+        self._pending_features: list[str] = []
         self.status = BotStatus()
 
     def enabled_features(self) -> list[str]:
         config = self._config_provider()
-        features: list[str] = []
-        if config.rally.enabled:
-            features.append(FEATURE_RALLY)
-        if config.positions.development_enabled:
-            features.append(FEATURE_DEVELOPMENT)
-        if config.positions.science_enabled:
-            features.append(FEATURE_SCIENCE)
-        if config.gather.enabled:
-            features.append(FEATURE_GATHER)
-        return features
+        enabled = {
+            FEATURE_DEVELOPMENT: config.positions.development_enabled,
+            FEATURE_SCIENCE: config.positions.science_enabled,
+            FEATURE_GATHER: config.gather.enabled,
+            FEATURE_RALLY: config.rally.enabled,
+        }
+        return [feature for feature in BOT_FEATURE_PRIORITY if enabled[feature]]
 
-    def start(self) -> bool:
-        """Start the highest-priority enabled clicking automation.
-
-        The current backend scenarios do not yet expose cooperative yield points,
-        so the controller intentionally does not pretend to time-slice Rally and
-        Gather.  Users can still run any feature directly from its tab.
-        """
-
-        features = self.enabled_features()
-        if not features:
-            self.status.last_message = "No clicking automation is enabled"
-            return False
-        return self.run_feature(features[0])
-
-    def run_feature(self, feature: str) -> bool:
-        if self.status.active_feature is not None:
-            self.status.last_message = (
-                f"{self.status.active_feature.title()} is already running"
-            )
-            return False
+    def _start_feature(self, feature: str) -> bool:
         if not self._runner(feature):
             self.status.last_message = f"Could not start {feature.title()}"
             return False
@@ -81,14 +71,62 @@ class BotController:
         self.status.last_message = f"Running {feature.title()}"
         return True
 
+    def _start_next_session_feature(self) -> bool:
+        while self._pending_features:
+            feature = self._pending_features.pop(0)
+            if self._start_feature(feature):
+                return True
+        self.status.running = False
+        self.status.session_active = False
+        self.status.active_feature = None
+        self.status.last_message = "Bot cycle completed"
+        return False
+
+    def start(self) -> bool:
+        """Start a serialized run of all currently enabled clicking features."""
+
+        if self.status.active_feature is not None:
+            self.status.last_message = (
+                f"{self.status.active_feature.title()} is already running"
+            )
+            return False
+        self._pending_features = self.enabled_features()
+        if not self._pending_features:
+            self.status.last_message = "No clicking automation is enabled"
+            return False
+        self.status.session_active = True
+        return self._start_next_session_feature()
+
+    def run_feature(self, feature: str) -> bool:
+        """Run one feature directly without creating a multi-feature bot cycle."""
+
+        if self.status.active_feature is not None:
+            self.status.last_message = (
+                f"{self.status.active_feature.title()} is already running"
+            )
+            return False
+        self._pending_features.clear()
+        self.status.session_active = False
+        return self._start_feature(feature)
+
     def engine_stopped(self) -> None:
+        """Record a finished scenario and continue an active bot cycle if needed."""
+
         feature = self.status.active_feature
         self.status.running = False
         self.status.active_feature = None
+        if self.status.session_active:
+            if self._start_next_session_feature():
+                return
+            return
         if feature:
             self.status.last_message = f"{feature.title()} stopped"
 
     def stop(self) -> bool:
+        """Stop the current feature and discard any queued bot-cycle work."""
+
+        self._pending_features.clear()
+        self.status.session_active = False
         if self.status.active_feature is None:
             self.status.running = False
             self.status.last_message = "Stopped"
@@ -96,5 +134,6 @@ class BotController:
         stopped = bool(self._stopper())
         self.status.last_message = "Stopping…" if not stopped else "Stopped"
         if stopped:
-            self.engine_stopped()
+            self.status.running = False
+            self.status.active_feature = None
         return stopped
