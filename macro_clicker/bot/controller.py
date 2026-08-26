@@ -1,7 +1,9 @@
 """Small coordinator for user-facing bot features.
 
 It deliberately does not merge Rally/Gather/Position logic. It serializes
-clicking automations and leaves passive alerts free to run alongside them.
+clicking automations and leaves passive observers free to run alongside them.
+Continuous Auto Gather has its own state-driven service and is therefore not a
+finite queue stage here.
 """
 
 from __future__ import annotations
@@ -24,12 +26,12 @@ FEATURE_LABELS = {
 }
 
 # Finite setup-style jobs run first. Rally is deliberately last because its
-# normal scenario is continuous and would otherwise prevent later jobs from
-# ever receiving control of the input engine.
+# normal scenario is continuous. Gather is intentionally absent: the dedicated
+# ContinuousGatherService watches actual Team 1/2/3 state instead of behaving
+# like a one-shot queued macro.
 BOT_FEATURE_PRIORITY = (
     FEATURE_DEVELOPMENT,
     FEATURE_SCIENCE,
-    FEATURE_GATHER,
     FEATURE_RALLY,
 )
 
@@ -44,7 +46,7 @@ class BotStatus:
 
 
 class BotController:
-    """Run enabled clicking automations sequentially and track dashboard state."""
+    """Run enabled finite/continuous clicking scenarios sequentially."""
 
     def __init__(
         self,
@@ -60,8 +62,6 @@ class BotController:
 
     @property
     def pending_features(self) -> tuple[str, ...]:
-        """Read-only queued work for normal-user status displays."""
-
         return tuple(self._pending_features)
 
     def enabled_features(self) -> list[str]:
@@ -69,7 +69,6 @@ class BotController:
         enabled = {
             FEATURE_DEVELOPMENT: config.positions.development_enabled,
             FEATURE_SCIENCE: config.positions.science_enabled,
-            FEATURE_GATHER: config.gather.enabled,
             FEATURE_RALLY: config.rally.enabled,
         }
         return [feature for feature in BOT_FEATURE_PRIORITY if enabled[feature]]
@@ -95,47 +94,32 @@ class BotController:
         if not self._pending_features:
             self._finish_session("Bot cycle completed")
             return False
-
         feature = self._pending_features.pop(0)
         if self._start_feature(feature):
             return True
-
-        # A start failure means the controller cannot establish the expected
-        # state for this stage. Do not silently skip ahead and give a different
-        # workflow ownership of the mouse/keyboard from an uncertain state.
         self._finish_session(f"Bot cycle stopped: could not start {feature.title()}")
         return False
 
     def start(self) -> bool:
-        """Start a serialized run of all currently enabled clicking features."""
-
         if self.status.active_feature is not None:
-            self.status.last_message = (
-                f"{self.status.active_feature.title()} is already running"
-            )
+            self.status.last_message = f"{self.status.active_feature.title()} is already running"
             return False
         self._pending_features = self.enabled_features()
         if not self._pending_features:
-            self.status.last_message = "No clicking automation is enabled"
+            self.status.last_message = "No queued clicking automation is enabled"
             return False
         self.status.session_active = True
         return self._start_next_session_feature()
 
     def run_feature(self, feature: str) -> bool:
-        """Run one feature directly without creating a multi-feature bot cycle."""
-
         if self.status.active_feature is not None:
-            self.status.last_message = (
-                f"{self.status.active_feature.title()} is already running"
-            )
+            self.status.last_message = f"{self.status.active_feature.title()} is already running"
             return False
         self._pending_features.clear()
         self.status.session_active = False
         return self._start_feature(feature)
 
     def engine_stopped(self) -> None:
-        """Record a finished scenario and continue an active bot cycle if needed."""
-
         feature = self.status.active_feature
         self.status.running = False
         self.status.active_feature = None
@@ -146,8 +130,6 @@ class BotController:
             self.status.last_message = f"{feature.title()} stopped"
 
     def stop(self) -> bool:
-        """Stop the current feature and discard any queued bot-cycle work."""
-
         self._pending_features.clear()
         self.status.session_active = False
         if self.status.active_feature is None:
