@@ -1,6 +1,6 @@
 """User-facing configuration for the dedicated bot interface.
 
-The advanced Scenario/Step model remains the automation implementation.  This
+The advanced Scenario/Step model remains the automation implementation. This
 module contains only settings a normal bot user should have to understand.
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 from ..atomic_io import atomic_write_json
 from ..runtime_paths import BOT_CONFIG_PATH
 
-BOT_CONFIG_VERSION = 1
+BOT_CONFIG_VERSION = 2
 
 
 @dataclass
@@ -35,9 +35,14 @@ class GatherConfig:
     scenario_name: str = "Gather Gold"
     resource: str = "Gold"
     start_level: int = 12
+    teams_enabled: list[int] = field(default_factory=lambda: [1, 2, 3])
+    search_until_found: bool = True
+
+    # Legacy compatibility only. The dedicated Bot no longer uses a fixed
+    # replacement order or a one-shot march target; it visually checks which
+    # configured team is idle and dispatches that exact team continuously.
     march_count: int = 3
     replacement_order: list[int] = field(default_factory=lambda: [3, 2, 1])
-    search_until_found: bool = True
 
 
 @dataclass
@@ -157,6 +162,26 @@ def _parse_replacement_order(value: Any) -> list[int]:
     return parsed if len(parsed) == 3 and set(parsed) == {1, 2, 3} else [3, 2, 1]
 
 
+def _parse_team_list(value: Any) -> list[int]:
+    if isinstance(value, str):
+        value = [part.strip() for part in value.replace("→", ",").split(",")]
+    if not isinstance(value, (list, tuple)):
+        return [1, 2, 3]
+    parsed: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            team = int(item)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if team in {1, 2, 3} and team not in parsed:
+            parsed.append(team)
+    # An empty/malformed saved selection should repair to the safe historical
+    # default rather than silently disabling all gathering teams.
+    return sorted(parsed) if parsed else [1, 2, 3]
+
+
 def _parse_days(value: Any) -> list[str]:
     valid = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     if not isinstance(value, (list, tuple)):
@@ -178,116 +203,43 @@ def bot_config_from_dict(data: Any) -> BotConfig:
 
     rally = RallyConfig(
         enabled=_bool(rally_data.get("enabled"), defaults.rally.enabled),
-        scenario_name=_text(
-            rally_data.get("scenario_name"), defaults.rally.scenario_name
-        ),
-        min_level=_int(
-            rally_data.get("min_level"),
-            defaults.rally.min_level,
-            minimum=0,
-            maximum=999,
-        ),
-        max_level=_int(
-            rally_data.get("max_level"),
-            defaults.rally.max_level,
-            minimum=0,
-            maximum=999,
-        ),
-        team1_max_level=_int(
-            rally_data.get("team1_max_level"),
-            defaults.rally.team1_max_level,
-            minimum=0,
-            maximum=999,
-        ),
-        team3_max_level=_int(
-            rally_data.get("team3_max_level"),
-            defaults.rally.team3_max_level,
-            minimum=0,
-            maximum=999,
-        ),
-        join_delay=_float(
-            rally_data.get("join_delay"),
-            defaults.rally.join_delay,
-            minimum=0.0,
-            maximum=30.0,
-        ),
+        scenario_name=_text(rally_data.get("scenario_name"), defaults.rally.scenario_name),
+        min_level=_int(rally_data.get("min_level"), defaults.rally.min_level, minimum=0, maximum=999),
+        max_level=_int(rally_data.get("max_level"), defaults.rally.max_level, minimum=0, maximum=999),
+        team1_max_level=_int(rally_data.get("team1_max_level"), defaults.rally.team1_max_level, minimum=0, maximum=999),
+        team3_max_level=_int(rally_data.get("team3_max_level"), defaults.rally.team3_max_level, minimum=0, maximum=999),
+        join_delay=_float(rally_data.get("join_delay"), defaults.rally.join_delay, minimum=0.0, maximum=30.0),
     )
     if rally.max_level < rally.min_level:
         rally.max_level = rally.min_level
-    rally.team1_max_level = min(
-        rally.max_level,
-        max(rally.min_level, rally.team1_max_level),
-    )
-    rally.team3_max_level = min(
-        rally.max_level,
-        max(rally.min_level, rally.team3_max_level),
-    )
+    rally.team1_max_level = min(rally.max_level, max(rally.min_level, rally.team1_max_level))
+    rally.team3_max_level = min(rally.max_level, max(rally.min_level, rally.team3_max_level))
 
     gather = GatherConfig(
         enabled=_bool(gather_data.get("enabled"), defaults.gather.enabled),
-        scenario_name=_text(
-            gather_data.get("scenario_name"), defaults.gather.scenario_name
-        ),
+        scenario_name=_text(gather_data.get("scenario_name"), defaults.gather.scenario_name),
         resource=_text(gather_data.get("resource"), defaults.gather.resource),
-        start_level=_int(
-            gather_data.get("start_level"),
-            defaults.gather.start_level,
-            minimum=1,
-            maximum=99,
-        ),
-        march_count=_int(
-            gather_data.get("march_count"),
-            defaults.gather.march_count,
-            minimum=1,
-            maximum=3,
-        ),
-        replacement_order=_parse_replacement_order(
-            gather_data.get("replacement_order")
-        ),
-        search_until_found=_bool(
-            gather_data.get("search_until_found"), defaults.gather.search_until_found
-        ),
+        start_level=_int(gather_data.get("start_level"), defaults.gather.start_level, minimum=1, maximum=99),
+        teams_enabled=_parse_team_list(gather_data.get("teams_enabled")),
+        search_until_found=_bool(gather_data.get("search_until_found"), defaults.gather.search_until_found),
+        march_count=_int(gather_data.get("march_count"), defaults.gather.march_count, minimum=1, maximum=3),
+        replacement_order=_parse_replacement_order(gather_data.get("replacement_order")),
     )
 
     positions = PositionsConfig(
-        development_enabled=_bool(
-            positions_data.get("development_enabled"),
-            defaults.positions.development_enabled,
-        ),
-        science_enabled=_bool(
-            positions_data.get("science_enabled"), defaults.positions.science_enabled
-        ),
-        retry_automatically=_bool(
-            positions_data.get("retry_automatically"),
-            defaults.positions.retry_automatically,
-        ),
-        development_scenario=_text(
-            positions_data.get("development_scenario"),
-            defaults.positions.development_scenario,
-        ),
-        science_scenario=_text(
-            positions_data.get("science_scenario"),
-            defaults.positions.science_scenario,
-        ),
+        development_enabled=_bool(positions_data.get("development_enabled"), defaults.positions.development_enabled),
+        science_enabled=_bool(positions_data.get("science_enabled"), defaults.positions.science_enabled),
+        retry_automatically=_bool(positions_data.get("retry_automatically"), defaults.positions.retry_automatically),
+        development_scenario=_text(positions_data.get("development_scenario"), defaults.positions.development_scenario),
+        science_scenario=_text(positions_data.get("science_scenario"), defaults.positions.science_scenario),
     )
 
     alerts = AlertsConfig(
         enabled=_bool(alerts_data.get("enabled"), defaults.alerts.enabled),
-        digs_enabled=_bool(
-            alerts_data.get("digs_enabled"), defaults.alerts.digs_enabled
-        ),
-        secret_task_enabled=_bool(
-            alerts_data.get("secret_task_enabled"), defaults.alerts.secret_task_enabled
-        ),
-        sound_enabled=_bool(
-            alerts_data.get("sound_enabled"), defaults.alerts.sound_enabled
-        ),
-        volume_percent=_int(
-            alerts_data.get("volume_percent"),
-            defaults.alerts.volume_percent,
-            minimum=0,
-            maximum=100,
-        ),
+        digs_enabled=_bool(alerts_data.get("digs_enabled"), defaults.alerts.digs_enabled),
+        secret_task_enabled=_bool(alerts_data.get("secret_task_enabled"), defaults.alerts.secret_task_enabled),
+        sound_enabled=_bool(alerts_data.get("sound_enabled"), defaults.alerts.sound_enabled),
+        volume_percent=_int(alerts_data.get("volume_percent"), defaults.alerts.volume_percent, minimum=0, maximum=100),
     )
 
     schedule = ScheduleConfig(
@@ -299,9 +251,7 @@ def bot_config_from_dict(data: Any) -> BotConfig:
 
     return BotConfig(
         version=BOT_CONFIG_VERSION,
-        target_window_title=_text(
-            root.get("target_window_title"), defaults.target_window_title
-        ),
+        target_window_title=_text(root.get("target_window_title"), defaults.target_window_title),
         rally=rally,
         gather=gather,
         positions=positions,
@@ -321,28 +271,28 @@ def validate_bot_config(config: BotConfig) -> None:
             raise BotConfigError(f"{label} cannot be below the Rally minimum level.")
         if value > config.rally.max_level:
             raise BotConfigError(f"{label} cannot exceed the Rally maximum level.")
+
     if config.gather.resource.casefold() != "gold":
-        raise BotConfigError(
-            "Only Gold gathering is implemented in the current backend."
-        )
-    if len(set(config.gather.replacement_order)) != len(
-        config.gather.replacement_order
-    ):
-        raise BotConfigError("Gather replacement order cannot contain duplicates.")
+        raise BotConfigError("Only Gold gathering is implemented in the current backend.")
+    if not config.gather.teams_enabled:
+        raise BotConfigError("Enable at least one gathering team.")
+    if len(set(config.gather.teams_enabled)) != len(config.gather.teams_enabled):
+        raise BotConfigError("Gather teams cannot contain duplicates.")
+    if any(team not in {1, 2, 3} for team in config.gather.teams_enabled):
+        raise BotConfigError("Gather teams must be Team 1, Team 2, or Team 3.")
+
+    # Keep legacy fields valid so older files and Advanced-mode adapters remain
+    # loadable, even though the dedicated continuous Bot does not use the order.
+    if len(set(config.gather.replacement_order)) != len(config.gather.replacement_order):
+        raise BotConfigError("Legacy Gather replacement order cannot contain duplicates.")
     if set(config.gather.replacement_order) != {1, 2, 3}:
-        raise BotConfigError(
-            "Gather replacement order must contain marches 1, 2, and 3 exactly once."
-        )
-    for label, value in (
-        ("start", config.schedule.start_time),
-        ("stop", config.schedule.stop_time),
-    ):
+        raise BotConfigError("Legacy Gather replacement order must contain 1, 2, and 3 exactly once.")
+
+    for label, value in (("start", config.schedule.start_time), ("stop", config.schedule.stop_time)):
         if _clock(value, "__invalid__") != value:
             raise BotConfigError(f"Schedule {label} time must use 24-hour HH:MM format.")
     valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
-    if not config.schedule.days or any(
-        day not in valid_days for day in config.schedule.days
-    ):
+    if not config.schedule.days or any(day not in valid_days for day in config.schedule.days):
         raise BotConfigError("Schedule must contain at least one valid weekday.")
 
 
