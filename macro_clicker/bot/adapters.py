@@ -5,9 +5,8 @@ from __future__ import annotations
 import copy
 from typing import Iterable
 
-from ..models import Scenario, load_scenario
-from .config import BotConfig, GatherConfig, RallyConfig
-
+from ..models import Action, Scenario, load_scenario
+from .config import BotConfig, GatherConfig, PositionsConfig, RallyConfig
 from .controller import FEATURE_DEVELOPMENT, FEATURE_GATHER, FEATURE_RALLY, FEATURE_SCIENCE
 
 
@@ -119,6 +118,36 @@ def apply_gather_config(scenario: Scenario, config: GatherConfig) -> Scenario:
     return scenario
 
 
+def apply_position_config(scenario: Scenario, config: PositionsConfig) -> Scenario:
+    """Apply the normal-user Position retry policy to a runtime scenario copy.
+
+    The bundled Development/Science scenarios retry by closing the unavailable
+    modal/page and then re-enabling their initial Open step. When automatic retry
+    is disabled, preserve that cleanup but replace only the final loop-back with
+    `stop` so a serialized Bot cycle can safely advance to its next task.
+    """
+
+    scenario = copy.deepcopy(scenario)
+    if config.retry_automatically:
+        return scenario
+
+    retry = _step_named(scenario, "Retry - Apply Unavailable")
+    loop_back_indices = [
+        index
+        for index, action in enumerate(retry.actions)
+        if action.type == "set_step"
+        and action.set_enabled
+        and str(action.step_name).startswith("Open #")
+    ]
+    if len(loop_back_indices) != 1:
+        raise ValueError(
+            f"Position backend expected one retry loop-back action; found "
+            f"{len(loop_back_indices)}."
+        )
+    retry.actions[loop_back_indices[0]] = Action(type="stop")
+    return scenario
+
+
 def configured_scenario(feature: str, config: BotConfig) -> Scenario:
     """Load a bundled backend scenario and apply the user's simple settings."""
 
@@ -134,9 +163,9 @@ def configured_scenario(feature: str, config: BotConfig) -> Scenario:
     if feature == FEATURE_DEVELOPMENT:
         scenario = load_scenario(config.positions.development_scenario)
         scenario.target_window_title = config.target_window_title
-        return scenario
+        return apply_position_config(scenario, config.positions)
     if feature == FEATURE_SCIENCE:
         scenario = load_scenario(config.positions.science_scenario)
         scenario.target_window_title = config.target_window_title
-        return scenario
+        return apply_position_config(scenario, config.positions)
     raise ValueError(f"Unknown bot feature: {feature!r}")
