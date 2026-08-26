@@ -26,14 +26,29 @@ transitions remain owned by `MacroEngine` and the scenario.
 
 - Target: 3 verified gathering dispatches.
 - Resource search starts at level 12 and falls back to 11, then 10.
-- When a free march is available, a successful dispatch does **not** consume
-  the replacement pointer.
+- When a free march is available, the game auto-selects an available march;
+  Auto Gather does not manually click a team before Dispatch on this path.
+- A successful free-march dispatch does **not** consume the replacement pointer.
 - When all marches are occupied, replacement priority is `3 -> 2 -> 1`.
+- The no-free-march branch must select that replacement march **before** the
+  normal Dispatch step is allowed to send it.
 - The pointer advances only after that replacement dispatch is verified as
   successful.
 - If the resource is taken before dispatch completes, click Cancel, retry the
   same logical dispatch, and keep the same replacement pointer.
 - Stop only after three verified successes.
+
+## Dispatch-panel detection
+
+`templates/GatherDispatchButton.jpg` is intentionally a tight crop of the
+static `出征` label on the blue Dispatch button. Keep the crop free of the
+mouse cursor and the changing travel-time text.
+
+A previous template accidentally included the cursor and part of the timer.
+That made matching hover around the configured threshold: the first free march
+could dispatch, while a later free march could stall on the open dispatch
+panel even though the button was visibly present. If this template is ever
+recaptured, use only stable button pixels.
 
 ## `gather_control` actions
 
