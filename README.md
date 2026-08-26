@@ -24,7 +24,7 @@ Low-level automation internals remain available when needed:
 - **Advanced** — Scenario / Step / Condition / Action editor and debugging tools.
 - **Alert Setup** — detailed passive-alert template configuration.
 
-These advanced surfaces are hidden during normal use and can be opened from the Bot interface.
+These advanced surfaces are hidden during normal use and can be opened from the Bot interface. The legacy Scenario-editor start hotkey is registered only while **Advanced** is actually open, so a normal Bot session cannot accidentally start a hidden Advanced scenario.
 
 ## Setup
 
@@ -36,7 +36,13 @@ py -m venv .venv
 .\.venv\Scripts\python -m macro_clicker
 ```
 
-The existing Windows launch scripts continue to work and now launch the bot-style application shell.
+For normal Windows use, double-click:
+
+```text
+Run PC Automation Bot.bat
+```
+
+`Run PC Automation Bot.vbs` provides the same no-console launch directly. The older `Run PC Macro Builder.bat` / `.vbs` names are retained as compatibility launchers so existing shortcuts continue to work.
 
 Startup failures are shown in a dialog and recorded under:
 
@@ -121,7 +127,7 @@ Gold Mob Rally
 
 Disabled features are skipped.
 
-This is intentionally serialized rather than allowing multiple automation scenarios to fight over mouse/keyboard input.
+This is intentionally serialized rather than allowing multiple automation scenarios to fight over mouse/keyboard input. If a queued feature cannot establish its expected starting state, the Bot cycle stops rather than silently skipping ahead to another clicking workflow.
 
 Direct **Run Rally**, **Run Gather**, and Position buttons remain available for one-off runs.
 
