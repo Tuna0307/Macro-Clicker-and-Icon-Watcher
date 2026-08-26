@@ -28,8 +28,8 @@ class BotApp(App):
 
     def _build_ui(self):
         # Build the mature editor and alert UI exactly as before, then place a
-        # new user-facing Bot tab in front of them. This avoids rewriting the
-        # working App layout while the product transitions to bot mode.
+        # new user-facing Bot surface in front of them. The implementation/debug
+        # tools stay alive but hidden until the user explicitly opens them.
         super()._build_ui()
         self.notebook.tab(self.macro_tab, text="Advanced")
         self.notebook.tab(self.alert_tab, text="Alert Setup")
@@ -42,9 +42,33 @@ class BotApp(App):
             self.bot_tab,
             host=self,
             alert_frame=self.alert_tab,
-            show_advanced=lambda: self.notebook.select(self.macro_tab),
+            show_advanced=self._show_advanced_tools,
+            show_alert_setup=self._show_alert_setup,
         )
         self.bot_frame.grid(row=0, column=0, sticky="nsew")
+
+        # A normal user should not need to understand Scenarios, Steps,
+        # Conditions, Actions, template regions, or confidence thresholds.
+        # Keep those existing tools available without presenting them as part
+        # of the everyday navigation.
+        self.notebook.hide(self.macro_tab)
+        self.notebook.hide(self.alert_tab)
+        self.notebook.select(self.bot_tab)
+
+    def _show_tool_tab(self, tab, label):
+        try:
+            if self.notebook.tab(tab, "state") == "hidden":
+                self.notebook.add(tab)
+            self.notebook.tab(tab, text=label)
+            self.notebook.select(tab)
+        except tk.TclError:
+            return
+
+    def _show_advanced_tools(self):
+        self._show_tool_tab(self.macro_tab, "Advanced")
+
+    def _show_alert_setup(self):
+        self._show_tool_tab(self.alert_tab, "Alert Setup")
 
     def _start_bot_feature(self, feature, config):
         """Start a configured feature without changing the Advanced editor state."""
