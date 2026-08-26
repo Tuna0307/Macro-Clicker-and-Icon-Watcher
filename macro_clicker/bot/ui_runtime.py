@@ -8,13 +8,8 @@ from datetime import datetime
 from tkinter import messagebox
 
 from .config import BotConfigError, save_bot_config, validate_bot_config
-
-FEATURE_LABELS = {
-    "rally": "Gold Mob Rally",
-    "gather": "Auto Gather",
-    "development": "Development Position",
-    "science": "Science Position",
-}
+from .controller import FEATURE_LABELS
+from .status import build_dashboard_snapshot
 
 
 class BotRuntimeMixin:
@@ -237,23 +232,24 @@ class BotRuntimeMixin:
             ):
                 self.controller.engine_stopped()
                 engine = getattr(self.host, "engine", None)
-                running = bool(engine is not None and engine.is_running)
-            feature = self.controller.status.active_feature
-            self.active_task_var.set(
-                FEATURE_LABELS.get(feature, "None") if feature else "None"
-            )
-            self.last_action_var.set(self.controller.status.last_message)
+
             watcher = self.alert_frame.watcher
             alerts = bool(watcher is not None and watcher.is_alive())
-            self.alert_status_var.set("Watching" if alerts else "Idle")
-            labels = []
-            if running and feature:
-                labels.append(FEATURE_LABELS.get(feature, feature))
-            if alerts:
-                labels.append("Alerts")
-            self.dashboard_status_var.set(
-                "● Running — " + " + ".join(labels) if labels else "● Stopped"
+            snapshot = build_dashboard_snapshot(
+                config=self.config,
+                controller=self.controller,
+                engine=engine,
+                alerts_running=alerts,
             )
+            self.dashboard_status_var.set(snapshot.overall)
+            self.active_task_var.set(snapshot.current_task)
+            self.next_task_var.set(snapshot.next_task)
+            self.last_action_var.set(snapshot.last_status)
+            self.alert_status_var.set(snapshot.alerts)
+            self.rally_status_var.set(snapshot.rally)
+            self.gather_status_var.set(snapshot.gather)
+            self.positions_status_var.set(snapshot.positions)
+            self.schedule_status_var.set(snapshot.schedule)
         except tk.TclError:
             return
         self.after(500, self._poll_status)
