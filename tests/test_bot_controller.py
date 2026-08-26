@@ -19,10 +19,11 @@ def test_controller_starts_finite_work_before_continuous_rally():
     started = []
     controller = _controller(config, started)
 
+    # Auto Gather is now a persistent TeamStateTracker-driven service. It must
+    # not re-enter the old finite scenario queue between Position and Rally.
     assert controller.enabled_features() == [
         "development",
         "science",
-        "gather",
         "rally",
     ]
     assert controller.start() is True
@@ -31,7 +32,7 @@ def test_controller_starts_finite_work_before_continuous_rally():
     assert controller.status.session_active is True
 
 
-def test_controller_advances_through_enabled_bot_cycle():
+def test_controller_finishes_finite_queue_without_queueing_continuous_gather():
     config = BotConfig()
     config.rally.enabled = False
     config.positions.development_enabled = True
@@ -43,10 +44,7 @@ def test_controller_advances_through_enabled_bot_cycle():
     assert started == ["development"]
 
     controller.engine_stopped()
-    assert started == ["development", "gather"]
-    assert controller.status.active_feature == "gather"
-
-    controller.engine_stopped()
+    assert started == ["development"]
     assert controller.status.active_feature is None
     assert controller.status.session_active is False
     assert controller.status.last_message == "Bot cycle completed"
@@ -56,12 +54,13 @@ def test_bot_cycle_stops_if_a_queued_feature_cannot_start():
     config = BotConfig()
     config.rally.enabled = False
     config.positions.development_enabled = True
+    config.positions.science_enabled = True
     config.gather.enabled = True
     attempted = []
 
     def runner(feature):
         attempted.append(feature)
-        return feature != "gather"
+        return feature != "science"
 
     controller = BotController(lambda: config, runner, lambda: True)
 
@@ -69,15 +68,15 @@ def test_bot_cycle_stops_if_a_queued_feature_cannot_start():
     assert attempted == ["development"]
 
     controller.engine_stopped()
-    assert attempted == ["development", "gather"]
+    assert attempted == ["development", "science"]
     assert controller.status.active_feature is None
     assert controller.status.session_active is False
-    assert controller.status.last_message == "Bot cycle stopped: could not start Gather"
+    assert controller.status.last_message == "Bot cycle stopped: could not start Science"
 
     # A later stop notification must not advance to anything that was queued
     # after the failed stage.
     controller.engine_stopped()
-    assert attempted == ["development", "gather"]
+    assert attempted == ["development", "science"]
 
 
 def test_direct_run_stays_one_off_and_serializes_input():
@@ -99,6 +98,7 @@ def test_stop_discards_remaining_bot_cycle():
     config = BotConfig()
     config.rally.enabled = False
     config.positions.development_enabled = True
+    config.positions.science_enabled = True
     config.gather.enabled = True
     started = []
     stop_calls = []
@@ -115,6 +115,6 @@ def test_stop_discards_remaining_bot_cycle():
     assert controller.status.active_feature is None
     assert controller.status.session_active is False
 
-    # A late engine-stopped notification must not restart the queued Gather job.
+    # A late engine-stopped notification must not restart the queued Science job.
     controller.engine_stopped()
     assert started == ["development"]
