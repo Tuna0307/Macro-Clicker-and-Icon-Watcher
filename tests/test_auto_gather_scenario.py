@@ -6,6 +6,8 @@ from macro_clicker.models import Scenario
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_PATH = ROOT / "scenarios" / "Gather Gold.json"
 
+# Search fallback intentionally has no macro-defined minimum level.
+
 
 def load_scenario():
     return json.loads(SCENARIO_PATH.read_text(encoding="utf-8"))
