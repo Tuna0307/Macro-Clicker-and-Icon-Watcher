@@ -134,8 +134,11 @@ class BotRuntimeMixin:
         )
         return False
 
-    def _start_bot(self):
-        if not self._save_from_ui():
+    def _start_bot(self, save_first=True):
+        # Manual starts use what is currently on screen and save it first.
+        # Scheduled starts deliberately use the last explicit Save so partially
+        # typed edits cannot become live just because a schedule fires.
+        if save_first and not self._save_from_ui():
             return
         alerts = self.config.alerts.enabled and self._start_alerts(save_first=False)
         active = self.controller.start()
@@ -248,7 +251,7 @@ class BotRuntimeMixin:
                     if clock == schedule.start_time and token != self._last_start_token:
                         self._last_start_token = token
                         self._append_log("Scheduled start triggered.")
-                        self._start_bot()
+                        self._start_bot(save_first=False)
                     if clock == schedule.stop_time and token != self._last_stop_token:
                         self._last_stop_token = token
                         self._append_log("Scheduled stop triggered.")
