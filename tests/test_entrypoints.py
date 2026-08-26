@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from macro_clicker import app
+from macro_clicker import bot_app
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +24,7 @@ def _load_launcher_module():
 
 class EntrypointTests(unittest.TestCase):
     def test_python_module_propagates_application_exit_code(self):
-        with patch.object(app, "main", return_value=7):
+        with patch.object(bot_app, "main", return_value=7):
             with self.assertRaises(SystemExit) as raised:
                 runpy.run_module("macro_clicker.__main__", run_name="__main__")
 
@@ -33,20 +33,20 @@ class EntrypointTests(unittest.TestCase):
     def test_windows_launcher_returns_application_exit_code(self):
         launcher = _load_launcher_module()
 
-        with patch.object(app, "main", return_value=6):
+        with patch.object(bot_app, "main", return_value=6):
             self.assertEqual(launcher.main(), 6)
 
     def test_windows_launcher_preserves_integer_system_exit(self):
         launcher = _load_launcher_module()
 
-        with patch.object(app, "main", side_effect=SystemExit(5)):
+        with patch.object(bot_app, "main", side_effect=SystemExit(5)):
             self.assertEqual(launcher.main(), 5)
 
     def test_windows_launcher_reports_unexpected_failure(self):
         launcher = _load_launcher_module()
 
         with (
-            patch.object(app, "main", side_effect=RuntimeError("boom")),
+            patch.object(bot_app, "main", side_effect=RuntimeError("boom")),
             patch.object(launcher, "_report_startup_error") as report,
         ):
             self.assertEqual(launcher.main(), 1)
