@@ -79,7 +79,7 @@ class BotPagesMixin:
             quick,
             text=(
                 "Run one task immediately without changing which tasks are enabled "
-                "for a full Bot cycle."
+                "for a full Bot session."
             ),
             style="Surface.TLabel",
         ).grid(row=0, column=0, columnspan=2, sticky="w")
@@ -87,7 +87,7 @@ class BotPagesMixin:
             quick,
             1,
             ("Run Rally", lambda: self._run_feature_direct(FEATURE_RALLY)),
-            ("Run Gather", lambda: self._run_feature_direct(FEATURE_GATHER)),
+            ("Start Gather", lambda: self._run_feature_direct(FEATURE_GATHER)),
             ("Development", lambda: self._run_feature_direct(FEATURE_DEVELOPMENT)),
             ("Science", lambda: self._run_feature_direct(FEATURE_SCIENCE)),
         )
@@ -123,12 +123,12 @@ class BotPagesMixin:
         )
 
     def _build_gather(self):
-        card = self._card("Gather", "Resource Gathering")
+        card = self._card("Gather", "Continuous Resource Gathering")
         self.gather_enabled_var = tk.BooleanVar()
         self.resource_var = tk.StringVar(value="Gold")
         self.gather_start_level_var = tk.IntVar(value=12)
-        self.gather_marches_var = tk.IntVar(value=3)
-        self.replacement_order_var = tk.StringVar(value="3 → 2 → 1")
+        self.gather_team_vars = {team: tk.BooleanVar(value=True) for team in (1, 2, 3)}
+
         ttk.Checkbutton(
             card,
             text="Enable Auto Gather",
@@ -144,27 +144,77 @@ class BotPagesMixin:
             state="readonly",
             width=12,
         ).grid(row=1, column=1, sticky="w", padx=(16, 0), pady=5)
-        self._spin(card, 2, "Starting level", self.gather_start_level_var, 1, 99)
-        self._spin(card, 3, "Marches to send", self.gather_marches_var, 1, 3)
-        ttk.Label(
+        self._spin(
             card,
-            text="Busy-march replacement order",
-            style="Surface.TLabel",
-        ).grid(row=4, column=0, sticky="w", pady=5)
-        ttk.Entry(card, textvariable=self.replacement_order_var, width=18).grid(
-            row=4, column=1, sticky="w", padx=(16, 0), pady=5
+            2,
+            "Starting / maximum search level",
+            self.gather_start_level_var,
+            1,
+            99,
         )
+
+        ttk.Label(card, text="Teams allowed to gather", style="Surface.TLabel").grid(
+            row=3, column=0, sticky="nw", pady=6
+        )
+        teams = ttk.Frame(card, style="Surface.TFrame")
+        teams.grid(row=3, column=1, sticky="w", padx=(16, 0), pady=6)
+        for team, var in self.gather_team_vars.items():
+            ttk.Checkbutton(teams, text=f"Team {team}", variable=var).pack(
+                side="left", padx=(0, 12)
+            )
+
         ttk.Label(
             card,
-            text="Search behavior: keep lowering and re-searching until found.",
+            text=(
+                "Auto Gather uses whichever selected team is visually idle. "
+                "If every selected team is travelling, gathering, returning, or otherwise busy, "
+                "the Bot waits. It never recalls or replaces a busy team."
+            ),
             style="Muted.TLabel",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            wraplength=760,
+            justify="left",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(
+            card,
+            text=(
+                "Search behavior: start at the configured level, lower the level when unavailable, "
+                "and keep searching until a resource is found."
+            ),
+            style="Muted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self._button_row(
             card,
             6,
             ("Save", self._save_from_ui),
-            ("Run Gather", lambda: self._run_feature_direct(FEATURE_GATHER), "primary"),
+            ("Start Auto Gather", lambda: self._run_feature_direct(FEATURE_GATHER), "primary"),
+            ("Stop Auto Gather", self._stop_continuous_gather, "danger"),
         )
+
+        status = self._card("Gather", "Team Status", 1)
+        self.gather_team_status_vars = {
+            team: tk.StringVar(value="Not monitored") for team in (1, 2, 3)
+        }
+        for row, team in enumerate((1, 2, 3)):
+            ttk.Label(status, text=f"Team {team}", style="Surface.TLabel").grid(
+                row=row, column=0, sticky="w", pady=5
+            )
+            ttk.Label(
+                status,
+                textvariable=self.gather_team_status_vars[team],
+                style="Surface.TLabel",
+            ).grid(row=row, column=1, sticky="w", padx=(16, 0), pady=5)
+        ttk.Label(
+            status,
+            text=(
+                "Countdowns are scheduling hints only. The game screen must visually "
+                "confirm Idle before a new dispatch."
+            ),
+            style="Muted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
     def _build_positions(self):
         card = self._card("Positions", "Position Applications")
