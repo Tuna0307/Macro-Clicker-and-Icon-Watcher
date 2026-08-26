@@ -25,11 +25,20 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
         "Settings",
     )
 
-    def __init__(self, master, *, host, alert_frame, show_advanced):
+    def __init__(
+        self,
+        master,
+        *,
+        host,
+        alert_frame,
+        show_advanced,
+        show_alert_setup,
+    ):
         super().__init__(master)
         self.host = host
         self.alert_frame = alert_frame
         self.show_advanced = show_advanced
+        self.show_alert_setup = show_alert_setup
         self.config = load_bot_config()
         self.controller = BotController(
             lambda: self.config,
