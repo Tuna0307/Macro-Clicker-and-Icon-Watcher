@@ -94,6 +94,13 @@ class BotApp(App):
             return False
         return super()._register_start_hotkey()
 
+    def _check_auto_start(self, now=None):
+        """Keep the legacy Scenario auto-start dormant outside Advanced mode."""
+
+        if not getattr(self, "_advanced_tools_visible", False):
+            return False
+        return super()._check_auto_start(now)
+
     def _show_bot_surface(self):
         try:
             self._advanced_tools_visible = False
@@ -115,8 +122,9 @@ class BotApp(App):
             self.notebook.tab(tab, text=label)
             self.notebook.select(tab)
 
-            # The old F8-style Scenario start binding belongs to the Advanced
-            # editor, not to the normal Bot or Alert Setup surfaces.
+            # The old F8-style Scenario start binding and one-time Scenario
+            # auto-start belong to the Advanced editor, not to the normal Bot or
+            # Alert Setup surfaces.
             self._advanced_tools_visible = tab is self.macro_tab
             self._register_start_hotkey()
         except tk.TclError:
