@@ -140,18 +140,38 @@ class BotRuntimeMixin:
         # typed edits cannot become live just because a schedule fires.
         if save_first and not self._save_from_ui():
             return
+
+        requested_clicking_features = self.controller.enabled_features()
         alerts = self.config.alerts.enabled and self._start_alerts(save_first=False)
-        active = self.controller.start()
+        active = self.controller.start() if requested_clicking_features else False
+
         if active:
             self._append_log(self.controller.status.last_message)
-        elif alerts:
-            self._append_log("Bot started with passive alerts only.")
-        else:
-            messagebox.showinfo(
-                "Nothing enabled",
-                "Enable at least one bot feature first.",
+            return
+
+        if requested_clicking_features:
+            # Do not hide a requested automation failure merely because passive
+            # alerts happened to start successfully in parallel.
+            message = self.controller.status.last_message
+            self._append_log(message)
+            if alerts:
+                self._append_log("Passive alerts are still running.")
+            messagebox.showwarning(
+                "Bot automation did not start",
+                message,
                 parent=self,
             )
+            return
+
+        if alerts:
+            self._append_log("Bot started with passive alerts only.")
+            return
+
+        messagebox.showinfo(
+            "Nothing enabled",
+            "Enable at least one bot feature first.",
+            parent=self,
+        )
 
     def _stop_bot(self):
         self.controller.stop()
