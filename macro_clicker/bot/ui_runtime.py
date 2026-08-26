@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox
@@ -55,7 +56,10 @@ class BotRuntimeMixin:
         return order
 
     def _collect_config(self):
-        c = self.config
+        # Build edits on a copy. A malformed value in one field must never
+        # partially mutate the last known-good in-memory config before validation
+        # finishes, because scheduling and direct-run actions read self.config.
+        c = copy.deepcopy(self.config)
         try:
             c.target_window_title = (
                 self.target_window_var.get().strip() or "Last War-Survival Game"
@@ -94,8 +98,9 @@ class BotRuntimeMixin:
 
     def _save_from_ui(self, quiet=False):
         try:
-            self.config = self._collect_config()
-            save_bot_config(self.config)
+            pending = self._collect_config()
+            save_bot_config(pending)
+            self.config = pending
             self._apply_alert_preferences()
         except (OSError, ValueError) as exc:
             if not quiet:
@@ -232,27 +237,23 @@ class BotRuntimeMixin:
 
     def _poll_schedule(self):
         try:
-            self._collect_config()
-            if self.config.schedule.enabled:
+            # Scheduling uses only the last validated/saved config. Typing into
+            # a field should not silently change a live schedule before Save.
+            schedule = self.config.schedule
+            if schedule.enabled:
                 now = datetime.now()
                 token = now.strftime("%Y-%m-%d %H:%M")
                 clock = now.strftime("%H:%M")
-                if now.strftime("%a") in self.config.schedule.days:
-                    if (
-                        clock == self.config.schedule.start_time
-                        and token != self._last_start_token
-                    ):
+                if now.strftime("%a") in schedule.days:
+                    if clock == schedule.start_time and token != self._last_start_token:
                         self._last_start_token = token
                         self._append_log("Scheduled start triggered.")
                         self._start_bot()
-                    if (
-                        clock == self.config.schedule.stop_time
-                        and token != self._last_stop_token
-                    ):
+                    if clock == schedule.stop_time and token != self._last_stop_token:
                         self._last_stop_token = token
                         self._append_log("Scheduled stop triggered.")
                         self._stop_bot()
-        except (tk.TclError, BotConfigError):
+        except tk.TclError:
             pass
         self.after(1000, self._poll_schedule)
 
