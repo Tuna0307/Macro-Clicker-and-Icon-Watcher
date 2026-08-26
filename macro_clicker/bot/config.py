@@ -14,6 +14,7 @@ from typing import Any
 
 from ..atomic_io import atomic_write_json
 from ..runtime_paths import BOT_CONFIG_PATH
+
 BOT_CONFIG_VERSION = 1
 
 
@@ -152,7 +153,7 @@ def _parse_replacement_order(value: Any) -> list[int]:
             continue
         if march in {1, 2, 3} and march not in parsed:
             parsed.append(march)
-    return parsed if parsed else [3, 2, 1]
+    return parsed if len(parsed) == 3 and set(parsed) == {1, 2, 3} else [3, 2, 1]
 
 
 def _parse_days(value: Any) -> list[str]:
@@ -180,10 +181,16 @@ def bot_config_from_dict(data: Any) -> BotConfig:
             rally_data.get("scenario_name"), defaults.rally.scenario_name
         ),
         min_level=_int(
-            rally_data.get("min_level"), defaults.rally.min_level, minimum=0, maximum=999
+            rally_data.get("min_level"),
+            defaults.rally.min_level,
+            minimum=0,
+            maximum=999,
         ),
         max_level=_int(
-            rally_data.get("max_level"), defaults.rally.max_level, minimum=0, maximum=999
+            rally_data.get("max_level"),
+            defaults.rally.max_level,
+            minimum=0,
+            maximum=999,
         ),
         team1_max_level=_int(
             rally_data.get("team1_max_level"),
@@ -206,8 +213,14 @@ def bot_config_from_dict(data: Any) -> BotConfig:
     )
     if rally.max_level < rally.min_level:
         rally.max_level = rally.min_level
-    rally.team1_max_level = min(rally.team1_max_level, rally.max_level)
-    rally.team3_max_level = min(rally.team3_max_level, rally.max_level)
+    rally.team1_max_level = min(
+        rally.max_level,
+        max(rally.min_level, rally.team1_max_level),
+    )
+    rally.team3_max_level = min(
+        rally.max_level,
+        max(rally.min_level, rally.team3_max_level),
+    )
 
     gather = GatherConfig(
         enabled=_bool(gather_data.get("enabled"), defaults.gather.enabled),
@@ -315,11 +328,16 @@ def validate_bot_config(config: BotConfig) -> None:
         raise BotConfigError(
             "Gather replacement order must contain marches 1, 2, and 3 exactly once."
         )
-    for label, value in (("start", config.schedule.start_time), ("stop", config.schedule.stop_time)):
+    for label, value in (
+        ("start", config.schedule.start_time),
+        ("stop", config.schedule.stop_time),
+    ):
         if _clock(value, "__invalid__") != value:
             raise BotConfigError(f"Schedule {label} time must use 24-hour HH:MM format.")
     valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
-    if not config.schedule.days or any(day not in valid_days for day in config.schedule.days):
+    if not config.schedule.days or any(
+        day not in valid_days for day in config.schedule.days
+    ):
         raise BotConfigError("Schedule must contain at least one valid weekday.")
 
 
