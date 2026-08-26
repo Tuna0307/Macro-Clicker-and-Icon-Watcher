@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from macro_clicker.models import load_scenario
+from macro_clicker.models import Scenario
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,11 +33,11 @@ def test_auto_gather_scenario_is_compact_and_assets_exist():
 
 
 def test_auto_gather_model_loads_new_control_actions():
-    # load_scenario() deliberately accepts a scenario name, not an arbitrary
-    # filesystem path.  Using the stem keeps this test portable on Windows,
-    # where an absolute path contains characters that are invalid in a scenario
-    # name (for example the drive-letter colon and path separators).
-    scenario = load_scenario(SCENARIO_PATH.stem)
+    # Parse the already-loaded scenario data through the model layer. This tests
+    # the gather_control schema without confusing the public name-based
+    # load_scenario() API with a filesystem path.
+    scenario = Scenario.from_dict(load_raw_scenario())
+    assert scenario.name == "Gather Gold"
     commands = [
         action.gather_command
         for step in scenario.steps
@@ -46,7 +46,6 @@ def test_auto_gather_model_loads_new_control_actions():
     ]
     assert commands == [
         "select_replacement",
-        "mark_dispatch",
         "cancel_retry",
         "record_success",
     ]
@@ -64,7 +63,7 @@ def test_auto_gather_forces_gold_and_max_level_before_search():
         if action.get("offset_x") == 182 and action.get("offset_y") == -74
     ]
     # The bundled backend may intentionally overshoot the '+' button because
-    # the game clamps at its maximum.  Normal Bot runs replace this whole
+    # the game clamps at its maximum. Normal Bot runs replace this whole
     # repeated sequence with exactly the configured starting-level count in
     # apply_gather_config(), so the raw scenario only needs enough clicks to
     # guarantee the maximum rather than an exact historical count.
@@ -107,6 +106,7 @@ def test_auto_gather_replacement_is_one_stateful_action():
     assert len(controls) == 1
     assert controls[0]["gather_command"] == "select_replacement"
     assert controls[0]["gather_replacement_order"] == [3, 2, 1]
+    assert controls[0]["on_condition_index"] == 0
 
 
 def test_taken_resource_retries_without_advancing_state():
@@ -115,6 +115,7 @@ def test_taken_resource_retries_without_advancing_state():
     controls = [action for action in actions if action["type"] == "gather_control"]
     assert len(controls) == 1
     assert controls[0]["gather_command"] == "cancel_retry"
+    assert not any(action["type"] == "stop" for action in actions)
     assert any(
         action["type"] == "set_step"
         and action["step_name"] == "Gather - Open Search"
@@ -124,11 +125,20 @@ def test_taken_resource_retries_without_advancing_state():
 
 def test_success_records_three_verified_dispatches_and_loops_until_complete():
     steps = step_map(load_raw_scenario())
-    actions = steps["Gather - Success"]["actions"]
-    controls = [action for action in actions if action["type"] == "gather_control"]
+    success = steps["Gather - Success"]
+    assert success["condition_operator"] == "AND"
+    assert success["conditions"][1]["template_path"].endswith("GatherTakenCancel.jpg")
+    assert success["conditions"][1]["negate"] is True
+
+    controls = [
+        action for action in success["actions"] if action["type"] == "gather_control"
+    ]
     assert len(controls) == 1
     assert controls[0]["gather_command"] == "record_success"
     assert controls[0]["gather_target_count"] == 3
-
-    success = steps["Gather - Success"]
-    assert any(condition.get("negate") for condition in success["conditions"])
+    assert controls[0]["gather_replacement_order"] == [3, 2, 1]
+    assert any(
+        action["type"] == "set_step"
+        and action["step_name"] == "Gather - Open Search"
+        for action in success["actions"]
+    )
