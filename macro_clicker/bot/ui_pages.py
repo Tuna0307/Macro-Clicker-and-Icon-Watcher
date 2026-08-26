@@ -170,6 +170,7 @@ class BotPagesMixin:
         card = self._card("Positions", "Position Applications")
         self.development_enabled_var = tk.BooleanVar()
         self.science_enabled_var = tk.BooleanVar()
+        self.positions_retry_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             card,
             text="Enable Development Position",
@@ -192,7 +193,20 @@ class BotPagesMixin:
             style="Primary.TButton",
             command=lambda: self._run_feature_direct(FEATURE_SCIENCE),
         ).grid(row=1, column=1, sticky="w", padx=(16, 0))
-        self._button_row(card, 2, ("Save", self._save_from_ui))
+        ttk.Checkbutton(
+            card,
+            text="Retry automatically when a position is unavailable",
+            variable=self.positions_retry_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(
+            card,
+            text=(
+                "Turn this off if a full Bot cycle should close the unavailable "
+                "position and continue to its next enabled task."
+            ),
+            style="Muted.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self._button_row(card, 4, ("Save", self._save_from_ui))
 
     def _build_alerts(self):
         card = self._card("Alerts", "Icon Alerts")
