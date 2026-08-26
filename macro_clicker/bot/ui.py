@@ -6,7 +6,10 @@ from tkinter import ttk
 
 from ..ui_components import action_button
 from .config import load_bot_config
+from .continuous_gather import ContinuousGatherService
 from .controller import BotController
+from .team_state import TeamStateTracker
+from .team_status import TeamStatusMonitor
 from .ui_pages import BotPagesMixin
 from .ui_runtime import BotRuntimeMixin
 
@@ -45,22 +48,40 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
             self._run_feature,
             self._stop_feature,
         )
+
+        self.team_tracker = TeamStateTracker()
+        self.team_monitor = TeamStatusMonitor(
+            lambda: self.config.target_window_title,
+            self.team_tracker,
+            configured_teams_provider=lambda: tuple(self.config.gather.teams_enabled),
+            log=self._append_log,
+        )
+        self.continuous_gather = ContinuousGatherService(
+            lambda: self.config,
+            self.team_tracker,
+            self._run_gather_team,
+        )
+        self._continuous_gather_engine = None
+
         self._last_start_token = None
         self._last_stop_token = None
         self._build_ui()
         self._load_vars()
+        self.after(500, self._poll_continuous_gather)
         self.after(500, self._poll_status)
         self.after(1000, self._poll_schedule)
 
+    def destroy(self):
+        try:
+            self.continuous_gather.stop()
+            self.team_monitor.stop()
+        finally:
+            super().destroy()
+
     def _build_ui(self):
-        # A small product-level header makes the normal-user surface visually
-        # distinct from the legacy editor while keeping all controls in ttk/CTk
-        # so the project's existing DPI behavior remains unchanged.
         header = ttk.Frame(self, style="Card.TFrame", padding=(20, 14))
         header.pack(fill="x", padx=12, pady=(12, 0))
-        ttk.Label(header, text="Automation Bot", style="Title.TLabel").pack(
-            anchor="w"
-        )
+        ttk.Label(header, text="Automation Bot", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             header,
             text="Configure everyday tasks here. Advanced scenario and template tools stay hidden unless you open them explicitly.",
@@ -106,12 +127,6 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
 
     @staticmethod
     def _button_row(card, row, *buttons):
-        """Build a button row with optional primary/danger emphasis.
-
-        Entries are ``(text, command)`` for ordinary actions or
-        ``(text, command, kind)`` where kind is ``primary`` or ``danger``.
-        """
-
         holder = ttk.Frame(card, style="Surface.TFrame")
         holder.grid(row=row, column=0, columnspan=4, sticky="w", pady=(16, 0))
         for index, button_spec in enumerate(buttons):
@@ -127,7 +142,4 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
                 )
             else:
                 button = ttk.Button(holder, text=text, command=command)
-            button.pack(
-                side="left",
-                padx=(0 if index == 0 else 8, 0),
-            )
+            button.pack(side="left", padx=(0 if index == 0 else 8, 0))
