@@ -25,7 +25,16 @@ transitions remain owned by `MacroEngine` and the scenario.
 ## Current policy
 
 - Target: 3 verified gathering dispatches.
-- Resource search starts at level 12 and falls back to 11, then 10.
+- Each dispatch starts a fresh Gold search at level 12.
+- If the requested level is unavailable, the single repeatable
+  `Gather - Search unavailable` step presses level-down once and searches
+  again.
+- There is **no hard stop at level 10**. The fallback keeps lowering and
+  searching until the game returns a resource.
+- When the game's level selector reaches its minimum, further level-down
+  clicks simply leave it at that minimum; Auto Gather keeps searching there
+  until a resource is found or the user stops the scenario with the kill
+  switch.
 - When a free march is available, the game auto-selects an available march;
   Auto Gather does not manually click a team before Dispatch on this path.
 - A successful free-march dispatch does **not** consume the replacement pointer.
@@ -37,6 +46,25 @@ transitions remain owned by `MacroEngine` and the scenario.
 - If the resource is taken before dispatch completes, click Cancel, retry the
   same logical dispatch, and keep the same replacement pointer.
 - Stop only after three verified successes.
+
+## Search fallback
+
+Do not recreate separate `Lv12 unavailable`, `Lv11 unavailable`, `Lv10
+unavailable`, etc. steps.
+
+The search panel itself is the failure signal: after Search, if
+`GatherSearchButton.jpg` is still visible, the requested level was not found.
+The repeatable fallback step then:
+
+1. clicks the level-down control once;
+2. waits briefly;
+3. clicks Search again;
+4. waits for either the search panel to remain visible or the resource popup
+   to appear.
+
+This keeps the scenario compact and lets the game UI determine the actual
+minimum resource level instead of hard-coding an arbitrary minimum in the
+macro.
 
 ## Dispatch-panel detection
 
@@ -81,4 +109,5 @@ Relevant tests:
 - `tests/test_auto_gather_scenario.py`
 
 Keep these invariants protected when changing the workflow, especially the
-free-march pointer behavior and taken-resource retry behavior.
+unbounded lower-level search retry, free-march pointer behavior, and
+taken-resource retry behavior.

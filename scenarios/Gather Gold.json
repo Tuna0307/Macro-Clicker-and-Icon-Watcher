@@ -216,6 +216,36 @@
         },
         {
           "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
           "on_condition_index": 0
         },
         {
@@ -228,7 +258,7 @@
         },
         {
           "type": "set_step",
-          "step_name": "Gather - Lv12 unavailable"
+          "step_name": "Gather - Search unavailable"
         },
         {
           "type": "set_step",
@@ -240,7 +270,7 @@
       "cooldown": 0.1
     },
     {
-      "name": "Gather - Lv12 unavailable",
+      "name": "Gather - Search unavailable",
       "conditions": [
         {
           "template_path": "templates/GatherSearchButton.jpg",
@@ -287,120 +317,11 @@
         {
           "type": "wait",
           "seconds": 0.8
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv12 unavailable",
-          "set_enabled": false
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv11 unavailable"
         }
       ],
       "enabled": false,
-      "cooldown": 0.1
-    },
-    {
-      "name": "Gather - Lv11 unavailable",
-      "conditions": [
-        {
-          "template_path": "templates/GatherSearchButton.jpg",
-          "confidence": 0.84,
-          "match_mode": "static_picture",
-          "template_reference_size": [
-            1920,
-            1080
-          ],
-          "region": [
-            780,
-            900,
-            360,
-            170
-          ],
-          "region_mode": "window",
-          "region_ratio": [
-            0.40625,
-            0.8333333333333334,
-            0.1875,
-            0.1574074074074074
-          ],
-          "region_window_size": [
-            1920,
-            1080
-          ]
-        }
-      ],
-      "actions": [
-        {
-          "type": "click",
-          "on_condition_index": 0,
-          "offset_x": -183,
-          "offset_y": -74
-        },
-        {
-          "type": "wait",
-          "seconds": 0.15
-        },
-        {
-          "type": "click",
-          "on_condition_index": 0
-        },
-        {
-          "type": "wait",
-          "seconds": 0.8
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv11 unavailable",
-          "set_enabled": false
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv10 unavailable"
-        }
-      ],
-      "enabled": false,
-      "cooldown": 0.1
-    },
-    {
-      "name": "Gather - Lv10 unavailable",
-      "conditions": [
-        {
-          "template_path": "templates/GatherSearchButton.jpg",
-          "confidence": 0.84,
-          "match_mode": "static_picture",
-          "template_reference_size": [
-            1920,
-            1080
-          ],
-          "region": [
-            780,
-            900,
-            360,
-            170
-          ],
-          "region_mode": "window",
-          "region_ratio": [
-            0.40625,
-            0.8333333333333334,
-            0.1875,
-            0.1574074074074074
-          ],
-          "region_window_size": [
-            1920,
-            1080
-          ]
-        }
-      ],
-      "actions": [
-        {
-          "type": "stop"
-        }
-      ],
-      "enabled": false,
-      "cooldown": 0.2,
-      "repeatable": false
+      "cooldown": 0.1,
+      "repeatable": true
     },
     {
       "name": "Gather - Resource Found",
@@ -443,17 +364,7 @@
         },
         {
           "type": "set_step",
-          "step_name": "Gather - Lv12 unavailable",
-          "set_enabled": false
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv11 unavailable",
-          "set_enabled": false
-        },
-        {
-          "type": "set_step",
-          "step_name": "Gather - Lv10 unavailable",
+          "step_name": "Gather - Search unavailable",
           "set_enabled": false
         },
         {
@@ -492,7 +403,7 @@
           ],
           "region_mode": "window",
           "region_ratio": [
-            0.2916666666666667,
+            0.291666666666667,
             0.24074074074074073,
             0.4166666666666667,
             0.1574074074074074
@@ -701,8 +612,8 @@
           "region_ratio": [
             0.3385416666666667,
             0.5925925925925926,
-            0.2604166666666667,
-            0.16666666666666666
+            0.26041666666666667,
+            0.1666666666666666
           ],
           "region_window_size": [
             1920,

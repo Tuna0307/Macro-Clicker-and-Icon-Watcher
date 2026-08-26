@@ -18,7 +18,7 @@ def step_map(data):
 def test_auto_gather_scenario_is_compact_and_assets_exist():
     data = load_scenario()
     assert data["name"] == "Gather Gold"
-    assert len(data["steps"]) == 10
+    assert len(data["steps"]) == 8
     assert not any(" S1 " in step["name"] or " P3 " in step["name"] for step in data["steps"])
     assert data["target_window_title"] == "Last War-Survival Game"
     assert data["kill_switch"] == "f12"
@@ -60,13 +60,32 @@ def test_auto_gather_forces_gold_and_max_level_before_search():
     assert clicks[-1].get("on_condition_index") == 0
 
 
-def test_auto_gather_falls_back_12_to_11_to_10():
+def test_auto_gather_keeps_lowering_and_searching_until_found():
     steps = step_map(load_scenario())
-    for name in ("Gather - Lv12 unavailable", "Gather - Lv11 unavailable"):
-        clicks = [a for a in steps[name]["actions"] if a["type"] == "click"]
-        assert (clicks[0]["offset_x"], clicks[0]["offset_y"]) == (-183, -74)
-        assert clicks[1].get("on_condition_index") == 0
-    assert steps["Gather - Lv10 unavailable"]["actions"] == [{"type": "stop"}]
+    assert "Gather - Lv12 unavailable" not in steps
+    assert "Gather - Lv11 unavailable" not in steps
+    assert "Gather - Lv10 unavailable" not in steps
+
+    fallback = steps["Gather - Search unavailable"]
+    assert fallback.get("repeatable", True) is True
+    clicks = [action for action in fallback["actions"] if action["type"] == "click"]
+    assert (clicks[0]["offset_x"], clicks[0]["offset_y"]) == (-183, -74)
+    assert clicks[1].get("on_condition_index") == 0
+    assert not any(action["type"] == "stop" for action in fallback["actions"])
+
+    prepare_actions = steps["Gather - Prepare Gold Lv12"]["actions"]
+    assert any(
+        action["type"] == "set_step"
+        and action["step_name"] == "Gather - Search unavailable"
+        for action in prepare_actions
+    )
+    found_actions = steps["Gather - Resource Found"]["actions"]
+    assert any(
+        action["type"] == "set_step"
+        and action["step_name"] == "Gather - Search unavailable"
+        and action.get("set_enabled") is False
+        for action in found_actions
+    )
 
 
 def test_auto_gather_replacement_is_one_stateful_action():
