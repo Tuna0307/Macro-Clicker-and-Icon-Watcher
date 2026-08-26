@@ -1,44 +1,59 @@
 # Auto Gather design notes
 
-This document records the first implementation target for the resource-gathering automation.
+## Current design — continuous team-state Auto Gather
 
-## Confirmed live flow
+The original MVP in this file used a finite "send several marches" model with a fixed busy-march replacement order. That design has been superseded for the normal Bot UI.
 
-The current reference recordings were captured at 1920x1080 fullscreen and show the following behavior:
+Current normal Bot behavior is:
 
-1. Open the gather/search panel from the world map.
+```text
+read Team 1/2/3 visual state
+        ↓
+any configured team visually Idle?
+   ┌────┴────┐
+   No       Yes
+   │          │
+ wait      search Gold
+              ↓
+        re-verify exact team
+              ↓
+        click exact team card
+              ↓
+           Dispatch
+              ↓
+       mark non-idle locally
+              ↓
+       resume visual monitoring
+```
+
+Key rules:
+
+- Team 1/2/3 state is detected from the world-map expedition sidebar.
+- Busy teams are never intentionally replaced by normal Auto Gather.
+- There is no user-facing team priority.
+- Whichever configured team is freshly visually Idle may be dispatched.
+- Existing game state at Bot startup is respected; the Bot does not assume it created the current marches.
+- Team states include Idle, Travelling, Gathering, Returning, Busy, and Unknown.
+- Visible timers are scheduling hints only. A timer reaching zero never changes a team to Idle without fresh visual confirmation.
+- The selected team is re-verified on the dispatch panel and explicitly clicked before Dispatch.
+- If the chosen team is no longer idle, or the game reports no free march, the attempt exits fail-closed rather than letting the game select/reassign another team.
+- The existing Gold search fallback and resource-taken Cancel/retry flow remain underneath as the one-attempt Gather backend.
+
+See `docs/AUTO_GATHER.md` for the authoritative current contract.
+
+## Historical MVP context
+
+The first implementation target, based on the original 1920×1080 recordings, was:
+
+1. Open the gather/search panel.
 2. Select Gold.
-3. Search from a high preferred resource level.
-4. If the search panel remains visible after Search, lower the resource level and try again.
-5. When a resource is found, the search panel closes and the game focuses the matching resource tile.
-6. Open the resource tile and press Gather.
-7. If a free march exists, the game can use it directly.
-8. If all marches are already occupied, the game still allows changing an existing gathering march to the new location.
-9. Replacement priority is **March 3 -> March 2 -> March 1**.
-10. An unexpected UI state can be normalized by opening the Food resource window from the top resource bar and closing it with X, returning to the world map.
+3. Search from a high preferred level.
+4. Lower the level and retry while the search panel remains visible.
+5. Open the found resource and press Gather.
+6. Use a free march when available.
+7. If all marches were occupied, replace one using a fixed `3 -> 2 -> 1` order.
+8. Repeat until a target number of dispatches completed.
 
-A future recording will be added if the rare case where a resource is taken between Search and Gather is observed.
+That model was useful for proving the search, dispatch, no-free-march, and resource-taken paths, but it is **not** the current normal Bot policy because replacing an already-busy team can interfere with work that existed before the Bot started.
 
-## Reliability rules
-
-- Do not modify the mature rally implementation to add gathering.
-- Reuse shared detection, target-window scaling, click safety, stop handling, and scenario infrastructure.
-- Treat unknown states as retry/recovery states rather than guessing.
-- Prefer verification of visible UI state before sending input.
-- Keep any gathering-specific policy outside `rally_matching.py`.
-- The first implementation should be testable from saved screenshots/fixtures and Windows CI before supervised live use.
-
-## First MVP
-
-The first MVP should focus on:
-
-- Gold gathering;
-- configurable preferred and minimum search levels;
-- descending level fallback until a result is found;
-- multiple dispatches per run;
-- free-march path;
-- replacement path using priority 3 -> 2 -> 1;
-- safe world-map recovery using Food -> X;
-- fail-closed handling for unknown screens.
-
-The implementation should remain easy to extend later to Food/Iron and other selection policies without changing rally behavior.
+The old replacement state remains only for backward compatibility with the stored scenario/Advanced behavior.
