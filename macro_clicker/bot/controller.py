@@ -71,15 +71,26 @@ class BotController:
         self.status.last_message = f"Running {feature.title()}"
         return True
 
-    def _start_next_session_feature(self) -> bool:
-        while self._pending_features:
-            feature = self._pending_features.pop(0)
-            if self._start_feature(feature):
-                return True
+    def _finish_session(self, message: str) -> None:
+        self._pending_features.clear()
         self.status.running = False
         self.status.session_active = False
         self.status.active_feature = None
-        self.status.last_message = "Bot cycle completed"
+        self.status.last_message = message
+
+    def _start_next_session_feature(self) -> bool:
+        if not self._pending_features:
+            self._finish_session("Bot cycle completed")
+            return False
+
+        feature = self._pending_features.pop(0)
+        if self._start_feature(feature):
+            return True
+
+        # A start failure means the controller cannot establish the expected
+        # state for this stage. Do not silently skip ahead and give a different
+        # workflow ownership of the mouse/keyboard from an uncertain state.
+        self._finish_session(f"Bot cycle stopped: could not start {feature.title()}")
         return False
 
     def start(self) -> bool:
@@ -116,8 +127,7 @@ class BotController:
         self.status.running = False
         self.status.active_feature = None
         if self.status.session_active:
-            if self._start_next_session_feature():
-                return
+            self._start_next_session_feature()
             return
         if feature:
             self.status.last_message = f"{feature.title()} stopped"
