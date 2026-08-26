@@ -9,6 +9,8 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Optional
 
+import keyboard
+
 from .alert_watcher import SingleInstanceLock
 from .app import App
 from .bot.adapters import configured_scenario
@@ -23,6 +25,10 @@ class BotApp(App):
     """Normal-user bot shell that keeps the original editors as advanced tools."""
 
     def __init__(self, root):
+        # App.__init__ registers the legacy Scenario start hotkey near the end of
+        # startup. Set this before calling super() so our override suppresses
+        # that hidden editor hotkey while the normal Bot surface is active.
+        self._advanced_tools_visible = False
         super().__init__(root)
         root.title("PC Automation Bot")
 
@@ -65,8 +71,33 @@ class BotApp(App):
             style="Surface.TLabel",
         ).pack(side="left", padx=(12, 0))
 
+    def _clear_advanced_start_hotkey(self):
+        """Remove only the legacy Scenario-editor start hotkey, if registered."""
+
+        old_handle = getattr(self, "_start_hotkey_handle", None)
+        self._start_hotkey_handle = None
+        self._registered_start_hotkey = None
+        self._start_hotkey_registration_token = None
+        if old_handle is not None:
+            try:
+                keyboard.remove_hotkey(old_handle)
+            except Exception:
+                # Match App's best-effort cleanup semantics. Losing a stale
+                # keyboard handle must not prevent returning to normal Bot mode.
+                pass
+
+    def _register_start_hotkey(self):
+        """Register the legacy Scenario start hotkey only while Advanced is open."""
+
+        if not getattr(self, "_advanced_tools_visible", False):
+            self._clear_advanced_start_hotkey()
+            return False
+        return super()._register_start_hotkey()
+
     def _show_bot_surface(self):
         try:
+            self._advanced_tools_visible = False
+            self._register_start_hotkey()
             self.notebook.pack_forget()
             self.tool_header.pack_forget()
             if not self.bot_surface.winfo_manager():
@@ -83,6 +114,11 @@ class BotApp(App):
                 self.notebook.pack(fill="both", expand=True)
             self.notebook.tab(tab, text=label)
             self.notebook.select(tab)
+
+            # The old F8-style Scenario start binding belongs to the Advanced
+            # editor, not to the normal Bot or Alert Setup surfaces.
+            self._advanced_tools_visible = tab is self.macro_tab
+            self._register_start_hotkey()
         except tk.TclError:
             return
 
