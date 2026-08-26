@@ -17,6 +17,7 @@ def test_bot_config_round_trip(tmp_path):
     config.gather.enabled = True
     config.gather.start_level = 12
     config.gather.replacement_order = [3, 2, 1]
+    config.positions.retry_automatically = False
 
     save_bot_config(config, str(path))
     loaded = load_bot_config(str(path))
@@ -39,6 +40,7 @@ def test_bot_config_tolerates_bad_values_and_bounds_them():
                 "march_count": 99,
                 "replacement_order": "3 -> 2 -> 1",
             },
+            "positions": {"retry_automatically": "not-a-bool"},
         }
     )
 
@@ -50,6 +52,7 @@ def test_bot_config_tolerates_bad_values_and_bounds_them():
     assert loaded.gather.start_level == 1
     assert loaded.gather.march_count == 3
     assert loaded.gather.replacement_order == [3, 2, 1]
+    assert loaded.positions.retry_automatically is True
 
 
 def test_tolerant_loader_repairs_partial_order_and_low_team_caps():
@@ -68,6 +71,7 @@ def test_tolerant_loader_repairs_partial_order_and_low_team_caps():
     assert loaded.rally.team1_max_level == 30
     assert loaded.rally.team3_max_level == 30
     assert loaded.gather.replacement_order == [3, 2, 1]
+    assert loaded.positions.retry_automatically is True
     validate_bot_config(loaded)
 
 
