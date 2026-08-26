@@ -27,19 +27,22 @@ class BotApp(App):
         root.title("PC Automation Bot")
 
     def _build_ui(self):
-        # Build the mature editor and alert UI exactly as before, then place a
-        # new user-facing Bot surface in front of them. The implementation/debug
-        # tools stay alive but hidden until the user explicitly opens them.
+        # Build the mature editor and alert UI exactly as before so all proven
+        # backend/editor behavior remains available. Normal startup then hides
+        # that notebook entirely and presents BotFrame as the primary surface.
+        # This avoids the redundant lone outer "Bot" tab seen in the first
+        # supervised UI run while preserving the existing advanced tools.
         super()._build_ui()
         self.notebook.tab(self.macro_tab, text="Advanced")
         self.notebook.tab(self.alert_tab, text="Alert Setup")
+        self.notebook.pack_forget()
 
-        self.bot_tab = ttk.Frame(self.notebook)
-        self.notebook.insert(0, self.bot_tab, text="Bot")
-        self.bot_tab.columnconfigure(0, weight=1)
-        self.bot_tab.rowconfigure(0, weight=1)
+        self.bot_surface = ttk.Frame(self.root)
+        self.bot_surface.pack(fill="both", expand=True)
+        self.bot_surface.columnconfigure(0, weight=1)
+        self.bot_surface.rowconfigure(0, weight=1)
         self.bot_frame = BotFrame(
-            self.bot_tab,
+            self.bot_surface,
             host=self,
             alert_frame=self.alert_tab,
             show_advanced=self._show_advanced_tools,
@@ -47,18 +50,37 @@ class BotApp(App):
         )
         self.bot_frame.grid(row=0, column=0, sticky="nsew")
 
-        # A normal user should not need to understand Scenarios, Steps,
-        # Conditions, Actions, template regions, or confidence thresholds.
-        # Keep those existing tools available without presenting them as part
-        # of the everyday navigation.
-        self.notebook.hide(self.macro_tab)
-        self.notebook.hide(self.alert_tab)
-        self.notebook.select(self.bot_tab)
+        # Advanced mode gets a small explicit way back to the normal-user Bot
+        # surface. The legacy notebook itself is packed only while those tools
+        # are being used, so normal users never see a second navigation bar.
+        self.tool_header = ttk.Frame(self.root, style="Card.TFrame", padding=(12, 8))
+        ttk.Button(
+            self.tool_header,
+            text="← Back to Bot",
+            command=self._show_bot_surface,
+        ).pack(side="left")
+        ttk.Label(
+            self.tool_header,
+            text="Advanced tools — changes here affect the underlying automation configuration.",
+            style="Surface.TLabel",
+        ).pack(side="left", padx=(12, 0))
+
+    def _show_bot_surface(self):
+        try:
+            self.notebook.pack_forget()
+            self.tool_header.pack_forget()
+            if not self.bot_surface.winfo_manager():
+                self.bot_surface.pack(fill="both", expand=True)
+        except tk.TclError:
+            return
 
     def _show_tool_tab(self, tab, label):
         try:
-            if self.notebook.tab(tab, "state") == "hidden":
-                self.notebook.add(tab)
+            self.bot_surface.pack_forget()
+            if not self.tool_header.winfo_manager():
+                self.tool_header.pack(fill="x", padx=12, pady=(12, 0))
+            if not self.notebook.winfo_manager():
+                self.notebook.pack(fill="both", expand=True)
             self.notebook.tab(tab, text=label)
             self.notebook.select(tab)
         except tk.TclError:
