@@ -2,29 +2,29 @@
 
 A Windows desktop utility for **visual automation** and **passive screen monitoring**.
 
-The normal interface is now organized like a dedicated automation bot: users configure the behavior they want through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details.
+The normal interface is a dedicated automation-bot surface. Users configure what they want the bot to do through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details.
 
-The existing scenario engine remains underneath as the proven automation backend, and the original editor is still available through **Advanced** for development and debugging.
+The proven Scenario engine remains underneath, and the original editor is still available through **Advanced** for development/debugging.
 
 ## Main interface
 
-The Bot interface currently contains:
+The Bot interface contains:
 
-- **Dashboard** — bot status, current task, passive-alert status, Start/Stop, and quick actions.
-- **Rally** — configure supported mob/team level limits and join delay without editing the Rally scenario.
-- **Gather** — configure Gold gathering start level, number of marches, and busy-march replacement order.
-- **Positions** — enable or run the bundled Development and Science position workflows.
-- **Alerts** — start/stop passive image alerts and control common alert groups.
-- **Schedule** — configure bot start/stop times and active weekdays.
-- **Logs** — view runtime activity directly from the normal interface.
-- **Settings** — target-window settings and access to Advanced tools.
+- **Dashboard** — bot status, current task, passive-alert status, live team state, Start/Stop, and quick actions.
+- **Rally** — configure supported mob/team level limits and join delay.
+- **Gather** — configure Gold gathering start level and which Team 1/2/3 may be used.
+- **Positions** — enable or run Development and Science workflows.
+- **Alerts** — start/stop passive image alerts and common alert groups.
+- **Schedule** — bot start/stop times and active weekdays.
+- **Logs** — runtime activity.
+- **Settings** — target-window settings and Advanced access.
 
-Low-level automation internals remain available when needed:
+Low-level internals remain available through:
 
-- **Advanced** — Scenario / Step / Condition / Action editor and debugging tools.
+- **Advanced** — Scenario / Step / Condition / Action editor and diagnostics.
 - **Alert Setup** — detailed passive-alert template configuration.
 
-These advanced surfaces are hidden during normal use and can be opened from the Bot interface. The legacy Scenario-editor start hotkey is registered only while **Advanced** is actually open, so a normal Bot session cannot accidentally start a hidden Advanced scenario.
+The hidden Advanced start hotkey/legacy scheduler do not remain active during normal Bot use.
 
 ## Setup
 
@@ -42,17 +42,15 @@ For normal Windows use, double-click:
 Run PC Automation Bot.bat
 ```
 
-`Run PC Automation Bot.vbs` provides the same no-console launch directly. The older `Run PC Macro Builder.bat` / `.vbs` names are retained as compatibility launchers so existing shortcuts continue to work.
+`Run PC Automation Bot.vbs` provides the same no-console launch. Older Macro Builder launchers remain for compatibility.
 
-Startup failures are shown in a dialog and recorded under:
+Runtime logs are stored under the per-user data directory, normally:
 
 ```text
 %LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs
 ```
 
-Set `MACRO_CLICKER_DATA_DIR` to use a different writable runtime-data location.
-
-If the target application runs elevated, run this utility with matching privileges or Windows may block input sent by `pyautogui` / `keyboard`.
+Set `MACRO_CLICKER_DATA_DIR` to override writable runtime storage.
 
 ## Architecture overview
 
@@ -61,32 +59,27 @@ If the target application runs elevated, run this utility with matching privileg
                             │
                         BotConfig
                             │
-                 user-facing settings
-                            │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-       Feature adapters              BotController
-       configure runtime           serializes clicking
-          scenarios                    features
-              │                           │
-              └─────────────┬─────────────┘
-                            ▼
-                       MacroEngine
-                            │
-                  Scenario / Steps
-                            │
-               Detection / OCR / Safety
-                            │
-              ┌─────────────┴─────────────┐
-              │                           │
-              ▼                           ▼
-      Active automation             Passive alerts
-                                    alert_watcher.py
+          ┌─────────────────┼─────────────────┐
+          ▼                 ▼                 ▼
+   Feature adapters    BotController    TeamState services
+          │                 │                 │
+          │                 │          Continuous Gather
+          └──────────┬──────┴───────────────┬─┘
+                     ▼                      ▼
+                MacroEngine          read-only monitoring
+                     │
+             Scenarios / Steps
+                     │
+          Detection / OCR / Safety
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+   Active automation       Passive alerts
 ```
 
-The dedicated Bot UI is a **control layer**, not a replacement for the working automation engine.
+The Bot UI is a control layer, not a replacement for the working automation engine.
 
-For development details, see:
+For development details, read:
 
 - `AGENTS.md`
 - `docs/BOT_UI.md`
@@ -94,48 +87,35 @@ For development details, see:
 - `docs/MAINTAINABILITY.md`
 - `docs/TESTING.md`
 - `docs/AUTO_GATHER.md`
+- `docs/BOT_ROADMAP.md`
 
 ## Bot configuration
 
-Normal-user settings are stored separately from the bundled scenario files:
+Normal-user settings are stored separately from bundled Scenario JSON:
 
 ```text
 %LOCALAPPDATA%\Macro Clicker and Icon Watcher\bot_config.json
 ```
 
-This configuration contains user-facing choices such as Rally levels, Gather settings, enabled features, alert preferences, scheduling, and target-window title.
+Saving normal Bot settings does **not** rewrite tuned files under `scenarios/`. Runtime adapters clone the proven scenario and apply supported values in memory.
 
-Saving normal Bot settings does **not** rewrite the tuned scenario files in `scenarios/`. Instead, the application loads a bundled scenario, clones it in memory, applies the configured user values, validates the result, and runs that runtime copy.
+## Input ownership
 
-This keeps low-level image matching, recovery, OCR, and safety details protected from ordinary settings changes.
+Only one active clicking automation may own the target application at a time. Passive Alerts may run alongside it because they observe rather than click.
 
-## Active automation coordination
+Current coordination rules:
 
-Only one active clicking automation owns the target application at a time. Passive alerts can run alongside it because they observe rather than click.
+- Development and Science are finite tasks.
+- Rally is continuous.
+- Continuous Auto Gather is a persistent service driven by Team 1/2/3 visual state, not a finite queued 3-dispatch job.
+- Auto Gather waits while another controller/engine task owns input.
+- Continuous Rally and continuous Auto Gather are currently blocked from running together until a safe cooperative handoff/preemption design exists.
 
-The initial **Start Bot** cycle runs enabled finite tasks before continuous Rally:
-
-```text
-Development Position
-        ↓
-Science Position
-        ↓
-Auto Gather
-        ↓
-Gold Mob Rally
-```
-
-Disabled features are skipped.
-
-This is intentionally serialized rather than allowing multiple automation scenarios to fight over mouse/keyboard input. If a queued feature cannot establish its expected starting state, the Bot cycle stops rather than silently skipping ahead to another clicking workflow.
-
-Direct **Run Rally**, **Run Gather**, and Position buttons remain available for one-off runs.
+Do not run independent active automations concurrently and let them compete for mouse/keyboard input.
 
 ## Rally configuration
 
-The Bot Rally page exposes the values a normal user is expected to change, while the mature matching/OCR workflow remains internal.
-
-Current user-facing controls include:
+The Rally page exposes normal-user values such as:
 
 - minimum eligible mob level;
 - maximum eligible mob level;
@@ -143,229 +123,149 @@ Current user-facing controls include:
 - Team 3 maximum level;
 - pre-join delay.
 
-Underneath, the existing Rally backend still handles:
+The existing backend still owns row matching, OCR, team availability/selection, transition guards, retries, and safe input.
 
-- visual row/reference matching;
-- same-row target selection;
-- level OCR;
-- Team 1 / Team 3 availability;
-- team selection;
-- transition guards;
-- retries and recovery;
-- target-window and input safety.
+## Continuous Auto Gather
 
-The Rally implementation is mature behavior and should not be broadly rewritten merely because it is hidden behind a simpler UI.
-
-## Resource gathering
-
-The Bot Gather page currently configures the proven **Gold** gathering workflow.
+The normal Bot Gather feature is continuous and state-driven.
 
 User-facing controls include:
 
+- enable/disable Auto Gather;
+- resource (currently Gold);
 - starting resource level;
-- number of successful gathering marches to send;
-- busy-march replacement order.
+- which of Team 1/2/3 may gather.
 
-The backend behavior includes:
-
-```text
-start at configured level
-        ↓
-search
-        ↓
-not found → lower one level → search again
-        ↓
-continue until found
-        ↓
-Gather
-        ↓
-free march available → game auto-selects it → Dispatch
-        │
-        └─ all busy → explicitly replace configured march → Dispatch
-        ↓
-verify success
-        ↓
-repeat until configured successful-dispatch count
-```
-
-The default busy-march replacement priority is:
+The normal flow is:
 
 ```text
-3 → 2 → 1
+read Team 1/2/3 visual state
+        ↓
+configured team visually Idle?
+   ┌────┴────┐
+   No       Yes
+   │          │
+ wait      search Gold
+              ↓
+      lower level until found
+              ↓
+        open dispatch panel
+              ↓
+ re-verify exact selected team is idle
+              ↓
+      click that exact team card
+              ↓
+           Dispatch
+              ↓
+      watch team state again
 ```
 
-If a resource is taken before dispatch completes, the workflow uses the observed Cancel/retry path without consuming a successful-dispatch count or advancing the replacement pointer.
+Important behavior:
 
-See `docs/AUTO_GATHER.md` for the behavior contract.
+- there is no normal-user `3 -> 2 -> 1` replacement priority;
+- the bot does not intentionally overwrite travelling/gathering/returning/busy teams;
+- if all configured teams are busy, it waits;
+- existing team activity present before bot startup is respected;
+- visible countdowns are scheduling hints only;
+- a timer reaching zero never makes a team Idle without fresh visual confirmation;
+- before Dispatch, the exact requested team is re-verified and explicitly clicked;
+- if that team became busy, or the game reports no free march, the attempt closes/stops instead of allowing another team to be auto-selected/replaced;
+- resource-taken Cancel/retry remains part of the proven Gather backend;
+- an unconfirmed attempt pauses Auto Gather fail-closed rather than retrying blindly.
+
+See `docs/AUTO_GATHER.md` for the authoritative contract.
+
+Legacy `march_count` and `replacement_order` fields remain for backward compatibility with older configs/Advanced scenario behavior, but they are not the normal continuous Bot policy.
+
+## Team-state tracking
+
+The shared team tracker models:
+
+```text
+Idle
+Travelling
+Gathering
+Returning
+Busy
+Unknown
+```
+
+The world-map expedition sidebar is the visual source of truth. Countdown OCR is used only to choose efficient recheck timing.
+
+Example:
+
+```text
+Team 1  Gathering  04:33:18
+Team 2  Returning   00:00:08
+Team 3  Travelling  00:00:17
+```
+
+The bot waits. When a team is later **visually confirmed Idle**, that team may be sent.
 
 ## Position workflows
 
-Bundled supported workflows include:
+Supported bundled workflows include:
 
 - `scenarios/Apply Development Position.json`
 - `scenarios/Apply Science Position.json`
 
-The Bot interface exposes them as simple feature toggles/run buttons instead of requiring users to open their internal steps.
+The Bot exposes normal enable/run controls and keeps internal click/retry steps hidden.
 
 ## Passive Icon Alerts
 
-Icon Alerts are a separate passive-monitoring subsystem.
+Icon Alerts are a separate passive-monitoring subsystem. They scan configured regions/templates and notify with sound/popup without executing active macro actions.
 
-The watcher continuously scans configured screen regions for enabled image/text templates and can notify with sound and popup alerts without running macro actions.
+Passive alerts may continue while one active clicking automation owns input.
 
-Typical flow:
+## Shared detection and safety
 
-```text
-capture region
-    ↓
-find configured template
-    ↓
-confirm when required
-    ↓
-apply appearance/cooldown policy
-    ↓
-sound / popup
-```
+Automation and Alerts reuse `macro_clicker/detection_core.py` for capture, scaling, template preparation/matching, colored-text/grayscale handling, monitor/window-relative geometry, and cancellation-aware perception.
 
-The simple Bot Alerts page controls common alert behavior. The detailed **Alert Setup** tool remains available for template capture, thresholds, regions, and other development-level settings.
+Active input preserves:
 
-Passive alerts can continue running while one active automation feature owns input.
-
-## Shared detection foundation
-
-Automation and Icon Alerts both use `macro_clicker/detection_core.py` for reusable perception.
-
-Shared capabilities include:
-
-- DPI-aware BGR screen capture;
-- physical-monitor handling;
-- target-window and monitor-relative regions;
-- exact X/Y resolution scaling;
-- multi-scale template preparation;
-- static and rotated template variants;
-- colored-text isolation;
-- grayscale matching;
-- low-variance safety checks;
-- match scoring and duplicate suppression;
-- cancellation-aware matching.
-
-Workflow-specific policy remains outside this shared detection layer.
-
-## Window targeting and input safety
-
-When a target window is configured:
-
-- window-relative regions follow the target window;
-- detection follows its physical monitor where appropriate;
-- missing target-window geometry fails closed;
-- clicks are rejected outside the configured target window;
-- click/key actions require the selected target window to be foreground;
-- geometry is rechecked near input dispatch so stale coordinates are not used after a window move/resize;
-- the application does not automatically raise/focus the target window.
-
-`pyautogui.FAILSAFE` remains enabled, and scenario kill switches are checked throughout waits, capture, matching, OCR, and actions.
-
-## Advanced automation model
-
-The backend model remains:
-
-```text
-Scenario
-  → ordered Steps
-      → Conditions
-      → Actions
-```
-
-Steps may enable/disable other steps to implement state machines and recovery flows.
-
-Supported action types include specialized actions such as:
-
-- `click`
-- `click_matching_row`
-- `select_rally_team`
-- `gather_control`
-- `key`
-- `wait`
-- `set_step`
-- `stop`
-
-These details are primarily relevant to **Advanced** development rather than normal bot usage.
-
-## Diagnostics
-
-Automation scenarios can collect bounded diagnostic evidence under:
-
-```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs\diagnostics
-```
-
-The collector is selective so long-running automation does not save a screenshot for every poll.
-
-Evidence can include:
-
-- annotated context screenshots;
-- OCR crops/text/confidence;
-- template scores;
-- row/target geometry;
-- configured decision limits;
-- final decision metadata.
-
-Runtime decision metadata is also written to a bounded rotating JSONL log.
-
-The normal Bot **Logs** page mirrors runtime activity while the existing detailed diagnostic system remains available for investigation.
+- target-window geometry checks;
+- foreground-window requirement;
+- out-of-window/monitor-bound rejection;
+- live geometry recheck near dispatch;
+- `pyautogui.FAILSAFE`;
+- scenario kill-switch/stop handling;
+- unreadable OCR/visual states treated as unknown rather than guessed.
 
 ## Project layout
 
 ```text
-macro_clicker/bot/   Normal-user bot config, controller, adapters, and UI
-macro_clicker/       Existing engine, detection, OCR, alerts, safety, and Advanced UI
-tools/               Developer validation utilities
-tests/               Automated regression/safety/workflow tests
-templates/           Automation visual assets and OCR references
+macro_clicker/bot/   Bot config, adapters, controller, team-state services, UI/status
+macro_clicker/       Existing engine, Rally logic, detection, OCR, alerts, safety, Advanced UI
+tests/               Regression/safety/workflow tests
+templates/           Visual assets
 scenarios/           Bundled active-automation workflows
-alerts/              Passive alert settings and templates
-docs/                Architecture, bot UI, testing, and maintenance guides
-launcher.pyw         Windows GUI entry point
+alerts/              Passive alert settings/templates
+docs/                Living architecture, UI, testing, roadmap, and behavior guides
 ```
-
-Generated caches, logs, bot runtime configuration, and diagnostic captures do not belong in the repository.
 
 ## Development checks
 
-Install development dependencies:
-
 ```powershell
-.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy macro_clicker tools
+python -m tools.validate_scenarios
 ```
 
-Run the main checks:
+Blocking CI checks are pytest, Ruff lint, and scenario/template validation. Ruff formatting and mypy are informational.
 
-```powershell
-.\.venv\Scripts\python -m pytest -q
-.\.venv\Scripts\python -m ruff check .
-.\.venv\Scripts\python -m ruff format --check .
-.\.venv\Scripts\python -m mypy macro_clicker tools
-.\.venv\Scripts\python -m tools.validate_scenarios
-```
+## AI-assisted development rule
 
-Current CI policy treats pytest, Ruff lint, and scenario/template validation as blocking. Ruff formatting and mypy remain informational maintenance feedback.
+This repository is developed heavily with AI. Before changing behavior, read `AGENTS.md` and the relevant docs.
 
-## Development guidance
+Every meaningful commit must include a descriptive subject/body explaining:
 
-The normal development direction is now:
+- what changed;
+- why it changed;
+- intended runtime impact;
+- important behavior intentionally preserved;
+- tests/checks performed;
+- remaining live verification or follow-up work.
 
-```text
-user-facing choice
-      ↓
-BotConfig
-      ↓
-feature adapter/controller
-      ↓
-existing specialized backend
-```
-
-When adding a new normal-user setting, prefer updating BotConfig + the relevant adapter + Bot UI + focused tests instead of exposing internal Steps directly.
-
-When adding a new automation feature, first make its isolated backend reliable, then add the simple Bot-facing configuration/control layer.
-
-Existing tuned timing, matching, OCR, recovery, and safety behavior should be preserved unless a change is specifically required and test-backed.
+When behavior, architecture, UI, configuration, safety policy, test contracts, or roadmap status changes, update **all affected living Markdown files in the same work**. Do not leave future AI with conflicting documentation.
