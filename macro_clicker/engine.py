@@ -54,6 +54,7 @@ from .rally_matching import (
     _MATCHING_ROW_SNAPSHOT_KEY,
     _REFERENCE_UNSET,
 )
+from .resource_gathering import GatherController, replacement_click_offset
 from .window_locator import (
     find_window_rect,
     is_window_foreground,
@@ -111,6 +112,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
         self._rally_join_guard_until = 0.0
+        self._gather_controller = GatherController()
         self._last_join_diagnostic_log: dict[object, float] = {}
         self._last_join_condition_trace = None
         self._abort_current_step = False
@@ -190,6 +192,7 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
         self._rally_join_guard_until = 0.0
+        self._gather_controller.reset()
         self._last_join_diagnostic_log.clear()
         self._last_join_condition_trace = None
         self._abort_current_step = False
@@ -1868,6 +1871,9 @@ class MacroEngine(RallyMatchingMixin):
         elif action.type == "select_rally_team":
             return self._run_select_rally_team_action(action, points, matches)
 
+        elif action.type == "gather_control":
+            return self._run_gather_control_action(action, points, matches)
+
         elif action.type == "key":
             title = self.scenario.target_window_title.strip()
             foreground_provider = getattr(
@@ -1945,9 +1951,80 @@ class MacroEngine(RallyMatchingMixin):
         """Return whether an action consumes match points from step evaluation."""
         if action.type == "select_rally_team":
             return True
+        if (
+            action.type == "gather_control"
+            and action.gather_command == "select_replacement"
+        ):
+            return True
         if action.type != "click":
             return False
         return action.x is None and action.y is None
+
+    def _run_gather_control_action(self, action: Action, points: dict, matches: dict):
+        """Run the small stateful portion of the resource-gathering workflow."""
+        controller = self._gather_controller
+        command = action.gather_command
+
+        if command == "select_replacement":
+            anchor_index = action.on_condition_index
+            anchor_matches = (
+                matches.get(anchor_index, []) if anchor_index is not None else []
+            )
+            anchor_match = anchor_matches[0] if anchor_matches else None
+            anchor = points.get(anchor_index) if anchor_index is not None else None
+            if anchor is None or anchor_match is None:
+                self.log("  [retry] gathering replacement anchor is unavailable")
+                self._retry_current_step = True
+                return False
+
+            march = controller.current_replacement(action.gather_replacement_order)
+            if march is None:
+                self.log(
+                    "  [abort] gathering replacement order is exhausted before "
+                    "the target dispatch count was reached"
+                )
+                self.stop()
+                return False
+
+            offset_x, offset_y = replacement_click_offset(march)
+            scale_x, scale_y = self._match_geometry_scale(anchor_match)
+            click_x = round(anchor[0] + offset_x * scale_x)
+            click_y = round(anchor[1] + offset_y * scale_y)
+            if self._click_point(click_x, click_y, action.button) is False:
+                self._retry_current_step = True
+                return False
+            controller.mark_replacement_selected(action.gather_replacement_order)
+            self.log(
+                f"  [gather] select replacement March {march} "
+                f"({click_x}, {click_y})"
+            )
+            return True
+
+        if command == "cancel_retry":
+            controller.cancel_retry()
+            march = controller.current_replacement(action.gather_replacement_order)
+            suffix = f"; keep March {march} next" if march is not None else ""
+            self.log(f"  [gather] resource taken; retry same dispatch{suffix}")
+            return False
+
+        if command == "record_success":
+            progress = controller.record_success(
+                target_count=action.gather_target_count,
+                replacement_order=action.gather_replacement_order,
+            )
+            route = "replacement" if progress.used_replacement else "free march"
+            self.log(
+                f"  [gather] dispatch {progress.successful_dispatches}/"
+                f"{action.gather_target_count} confirmed via {route}"
+            )
+            if progress.complete:
+                self.log("Scenario completed.")
+                self.stop()
+            return False
+
+        self.log(f"  [abort] unsupported gather command: {command}")
+        self.stop()
+        return False
 
     @staticmethod
     def _scaled_relative_region(anchor, region, scale_x, scale_y):

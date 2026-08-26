@@ -695,6 +695,7 @@ def action_dialog(
         "click": "Click",
         "click_matching_row": "Click matching row",
         "select_rally_team": "Select rally team",
+        "gather_control": "Gather control",
         "key": "Press key",
         "wait": "Wait",
         "set_step": "Enable / disable step",
@@ -721,6 +722,7 @@ def action_dialog(
     click_frame = ttk.LabelFrame(body, text="Click")
     row_click_frame = ttk.LabelFrame(body, text="Click matching row")
     team_frame = ttk.LabelFrame(body, text="Select rally team")
+    gather_frame = ttk.LabelFrame(body, text="Gather control")
     key_frame = ttk.LabelFrame(body, text="Key press")
     wait_frame = ttk.LabelFrame(body, text="Wait")
     step_frame = ttk.LabelFrame(body, text="Enable / disable a step")
@@ -729,6 +731,7 @@ def action_dialog(
         "click": click_frame,
         "click_matching_row": row_click_frame,
         "select_rally_team": team_frame,
+        "gather_control": gather_frame,
         "key": key_frame,
         "wait": wait_frame,
         "set_step": step_frame,
@@ -1170,6 +1173,86 @@ def action_dialog(
         justify="left",
     ).grid(row=12, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
 
+    # --- resource-gathering state fields ---
+    gather_command_labels = {
+        "Select replacement march": "select_replacement",
+        "Record successful dispatch": "record_success",
+        "Cancel / retry same dispatch": "cancel_retry",
+    }
+    gather_command_values = {
+        label: value for label, value in gather_command_labels.items()
+    }
+    gather_command_label = next(
+        (
+            label
+            for label, value in gather_command_labels.items()
+            if value == getattr(a, "gather_command", "record_success")
+        ),
+        "Record successful dispatch",
+    )
+    gather_command_var = tk.StringVar(value=gather_command_label)
+    gather_anchor_var = tk.StringVar(
+        value=condition_choice_for_index(
+            conditions, a.on_condition_index, "Select condition"
+        )
+    )
+    gather_target_count_var = tk.IntVar(
+        value=getattr(a, "gather_target_count", 3)
+    )
+    gather_order_var = tk.StringVar(
+        value=", ".join(
+            str(march)
+            for march in getattr(a, "gather_replacement_order", [3, 2, 1])
+        )
+    )
+    ttk.Label(gather_frame, text="Command", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        gather_frame,
+        textvariable=gather_command_var,
+        values=list(gather_command_values.keys()),
+        state="readonly",
+        width=28,
+    ).grid(row=0, column=1, sticky="w", padx=4)
+    ttk.Label(gather_frame, text="Anchor condition", style="Surface.TLabel").grid(
+        row=1, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        gather_frame,
+        textvariable=gather_anchor_var,
+        values=condition_values,
+        state="readonly",
+        width=30,
+    ).grid(row=1, column=1, sticky="w", padx=4)
+    ttk.Label(gather_frame, text="Successful dispatches", style="Surface.TLabel").grid(
+        row=2, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Spinbox(
+        gather_frame,
+        textvariable=gather_target_count_var,
+        from_=1,
+        to=20,
+        increment=1,
+        width=8,
+    ).grid(row=2, column=1, sticky="w", padx=4)
+    ttk.Label(gather_frame, text="Replacement order", style="Surface.TLabel").grid(
+        row=3, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Entry(gather_frame, textvariable=gather_order_var, width=18).grid(
+        row=3, column=1, sticky="w", padx=4
+    )
+    ttk.Label(
+        gather_frame,
+        text=(
+            "The gather state is reset whenever the scenario starts. "
+            "Only Select replacement march uses the anchor condition."
+        ),
+        style="Muted.TLabel",
+        wraplength=380,
+        justify="left",
+    ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
+
     # --- key fields ---
     key_var = tk.StringVar(value=a.key)
     hold_var = tk.DoubleVar(value=a.hold)
@@ -1375,6 +1458,24 @@ def action_dialog(
                     team3_max_var.get(),
                     "Team 3 max level",
                 )
+            elif t == "gather_control":
+                new_action.gather_command = gather_command_values[gather_command_var.get()]
+                new_action.gather_target_count = gather_target_count_var.get()
+                try:
+                    new_action.gather_replacement_order = [
+                        int(part.strip())
+                        for part in gather_order_var.get().split(",")
+                        if part.strip()
+                    ]
+                except ValueError as exc:
+                    raise ValueError(
+                        "Replacement order must be comma-separated march numbers"
+                    ) from exc
+                if new_action.gather_command == "select_replacement":
+                    new_action.on_condition_index = condition_index_from_choice(
+                        gather_anchor_var.get(),
+                        "Gather replacement anchor",
+                    )
             elif t == "key":
                 if not key_var.get().strip():
                     messagebox.showerror("Missing key", "Enter a key name.", parent=win)

@@ -1,1 +1,754 @@
-{"name":"Gather Gold","steps":[{"name":"Gather - Open Search","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.35},{"type":"set_step","step_name":"Gather - Prepare Gold Lv12"},{"type":"set_step","step_name":"Gather - Open Search","set_enabled":false}],"cooldown":0.1},{"name":"Gather - Prepare Gold Lv12","conditions":[{"template_path":"templates/GatherSearchButton.jpg","confidence":0.84,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[780,900,360,170],"region_mode":"window","region_ratio":[0.40625,0.8333333333333334,0.1875,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":196,"offset_y":-348},{"type":"wait","seconds":0.15},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0,"offset_x":182,"offset_y":-74},{"type":"wait","seconds":0.05},{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.8},{"type":"set_step","step_name":"Gather - Resource Found"},{"type":"set_step","step_name":"Gather - Lv12 unavailable"},{"type":"set_step","step_name":"Gather - Prepare Gold Lv12","set_enabled":false}],"enabled":false,"cooldown":0.1},{"name":"Gather - Lv12 unavailable","conditions":[{"template_path":"templates/GatherSearchButton.jpg","confidence":0.84,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[780,900,360,170],"region_mode":"window","region_ratio":[0.40625,0.8333333333333334,0.1875,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":-183,"offset_y":-74},{"type":"wait","seconds":0.15},{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.8},{"type":"set_step","step_name":"Gather - Lv12 unavailable","set_enabled":false},{"type":"set_step","step_name":"Gather - Lv11 unavailable"}],"enabled":false,"cooldown":0.1},{"name":"Gather - Lv11 unavailable","conditions":[{"template_path":"templates/GatherSearchButton.jpg","confidence":0.84,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[780,900,360,170],"region_mode":"window","region_ratio":[0.40625,0.8333333333333334,0.1875,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":-183,"offset_y":-74},{"type":"wait","seconds":0.15},{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.8},{"type":"set_step","step_name":"Gather - Lv11 unavailable","set_enabled":false},{"type":"set_step","step_name":"Gather - Lv10 unavailable"}],"enabled":false,"cooldown":0.1},{"name":"Gather - Lv10 unavailable","conditions":[{"template_path":"templates/GatherSearchButton.jpg","confidence":0.84,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[780,900,360,170],"region_mode":"window","region_ratio":[0.40625,0.8333333333333334,0.1875,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.2,"repeatable":false},{"name":"Gather - Resource Found","conditions":[{"template_path":"templates/GatherPickaxeButton.jpg","confidence":0.88,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[820,500,300,260],"region_mode":"window","region_ratio":[0.4270833333333333,0.46296296296296297,0.15625,0.24074074074074073],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather - Lv12 unavailable","set_enabled":false},{"type":"set_step","step_name":"Gather - Lv11 unavailable","set_enabled":false},{"type":"set_step","step_name":"Gather - Lv10 unavailable","set_enabled":false},{"type":"set_step","step_name":"Gather - Resource Found","set_enabled":false}],"enabled":false,"cooldown":0.1},{"name":"Gather - Resource Taken","conditions":[{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.35},{"type":"set_step","step_name":"Gather S1 P3 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather - Open Search"}],"cooldown":0.1},{"name":"Gather S1 P3 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":63,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S1 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Replacement"}],"cooldown":0.1},{"name":"Gather S1 P3 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S1 P3 - Success Free"}],"cooldown":0.1},{"name":"Gather S1 P3 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - No Free March"},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Free"},{"type":"set_step","step_name":"Gather S1 P3 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S1 P3 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S1 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - No Free March"},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S1 P3 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S1 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S1 P3 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - No Free March"},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P3 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":63,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S2 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P3 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S2 P3 - Success Free"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P3 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - No Free March"},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Free"},{"type":"set_step","step_name":"Gather S2 P3 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P3 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S2 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - No Free March"},{"type":"set_step","step_name":"Gather S3 P3 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P3 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S2 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P3 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - No Free March"},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P2 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":-61,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S2 P2 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P2 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S2 P2 - Success Free"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P2 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - No Free March"},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Free"},{"type":"set_step","step_name":"Gather S2 P2 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P2 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S2 P2 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Success Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - No Free March"},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S2 P2 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"set_step","step_name":"Gather S2 P2 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S2 P2 - Success Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - No Free March"},{"type":"set_step","step_name":"Gather S3 P1 - Dispatch Free"},{"type":"set_step","step_name":"Gather - Open Search"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P3 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":63,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S3 P3 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - Dispatch Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P3 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P3 - Success Free"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P3 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P3 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P3 - No Free March"},{"type":"set_step","step_name":"Gather S3 P3 - Dispatch Free"},{"type":"set_step","step_name":"Gather S3 P3 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P3 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P3 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P2 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":-61,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S3 P2 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P2 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P2 - Success Free"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P2 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P2 - No Free March"},{"type":"set_step","step_name":"Gather S3 P2 - Dispatch Free"},{"type":"set_step","step_name":"Gather S3 P2 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P2 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P2 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P1 - No Free March","conditions":[{"template_path":"templates/GatherNoMarch.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[560,260,800,170],"region_mode":"window","region_ratio":[0.2916666666666667,0.24074074074074073,0.4166666666666667,0.1574074074074074],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0,"offset_x":-188,"offset_y":630},{"type":"wait","seconds":0.6},{"type":"set_step","step_name":"Gather S3 P1 - No Free March","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - Dispatch Free","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - Dispatch Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P1 - Dispatch Free","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P1 - Success Free"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P1 - Dispatch Replacement","conditions":[{"template_path":"templates/GatherDispatchButton.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[800,700,320,220],"region_mode":"window","region_ratio":[0.4166666666666667,0.6481481481481481,0.16666666666666666,0.2037037037037037],"region_window_size":[1920,1080]}],"actions":[{"type":"click","on_condition_index":0},{"type":"wait","seconds":0.55},{"type":"set_step","step_name":"Gather S3 P1 - Dispatch Replacement","set_enabled":false},{"type":"set_step","step_name":"Gather S3 P1 - No Free March"},{"type":"set_step","step_name":"Gather S3 P1 - Dispatch Free"},{"type":"set_step","step_name":"Gather S3 P1 - Success Replacement"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P1 - Success Free","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1},{"name":"Gather S3 P1 - Success Replacement","conditions":[{"template_path":"templates/GatherSearchIcon.jpg","confidence":0.9,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[0,760,110,150],"region_mode":"window","region_ratio":[0.0,0.7037037037037037,0.057291666666666664,0.1388888888888889],"region_window_size":[1920,1080]},{"template_path":"templates/GatherTakenCancel.jpg","confidence":0.92,"match_mode":"static_picture","template_reference_size":[1920,1080],"region":[650,640,500,180],"region_mode":"window","region_ratio":[0.3385416666666667,0.5925925925925926,0.2604166666666667,0.16666666666666666],"region_window_size":[1920,1080],"negate":true}],"actions":[{"type":"stop"}],"enabled":false,"cooldown":0.1}],"poll_interval":0.1,"monitor_index":1,"start_hotkey":"f8","kill_switch":"f12","auto_start_enabled":false,"auto_start_time":"06:00","auto_start_date":"","target_window_title":"Last War-Survival Game","diagnostics_enabled":true}
+{
+  "name": "Gather Gold",
+  "steps": [
+    {
+      "name": "Gather - Open Search",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchIcon.jpg",
+          "confidence": 0.9,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            0,
+            760,
+            110,
+            150
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.0,
+            0.7037037037037037,
+            0.057291666666666664,
+            0.1388888888888889
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.35
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Prepare Gold Lv12"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Open Search",
+          "set_enabled": false
+        }
+      ],
+      "enabled": true,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Prepare Gold Lv12",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchButton.jpg",
+          "confidence": 0.84,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            780,
+            900,
+            360,
+            170
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.40625,
+            0.8333333333333334,
+            0.1875,
+            0.1574074074074074
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 196,
+          "offset_y": -348
+        },
+        {
+          "type": "wait",
+          "seconds": 0.15
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": 182,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.05
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.8
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Resource Found"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv12 unavailable"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Prepare Gold Lv12",
+          "set_enabled": false
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Lv12 unavailable",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchButton.jpg",
+          "confidence": 0.84,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            780,
+            900,
+            360,
+            170
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.40625,
+            0.8333333333333334,
+            0.1875,
+            0.1574074074074074
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": -183,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.15
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.8
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv12 unavailable",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv11 unavailable"
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Lv11 unavailable",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchButton.jpg",
+          "confidence": 0.84,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            780,
+            900,
+            360,
+            170
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.40625,
+            0.8333333333333334,
+            0.1875,
+            0.1574074074074074
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0,
+          "offset_x": -183,
+          "offset_y": -74
+        },
+        {
+          "type": "wait",
+          "seconds": 0.15
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.8
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv11 unavailable",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv10 unavailable"
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Lv10 unavailable",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchButton.jpg",
+          "confidence": 0.84,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            780,
+            900,
+            360,
+            170
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.40625,
+            0.8333333333333334,
+            0.1875,
+            0.1574074074074074
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "stop"
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.2,
+      "repeatable": false
+    },
+    {
+      "name": "Gather - Resource Found",
+      "conditions": [
+        {
+          "template_path": "templates/GatherPickaxeButton.jpg",
+          "confidence": 0.88,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            820,
+            500,
+            300,
+            260
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.4270833333333333,
+            0.46296296296296297,
+            0.15625,
+            0.24074074074074073
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.6
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv12 unavailable",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv11 unavailable",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Lv10 unavailable",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - No Free March"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Dispatch Ready"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Resource Found",
+          "set_enabled": false
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - No Free March",
+      "conditions": [
+        {
+          "template_path": "templates/GatherNoMarch.jpg",
+          "confidence": 0.9,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            560,
+            260,
+            800,
+            170
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.2916666666666667,
+            0.24074074074074073,
+            0.4166666666666667,
+            0.1574074074074074
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "gather_control",
+          "gather_command": "select_replacement",
+          "on_condition_index": 0,
+          "gather_replacement_order": [
+            3,
+            2,
+            1
+          ]
+        },
+        {
+          "type": "wait",
+          "seconds": 0.6
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - No Free March",
+          "set_enabled": false
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Dispatch Ready",
+      "conditions": [
+        {
+          "template_path": "templates/GatherDispatchButton.jpg",
+          "confidence": 0.9,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            800,
+            700,
+            320,
+            220
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.4166666666666667,
+            0.6481481481481481,
+            0.16666666666666666,
+            0.2037037037037037
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.55
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Dispatch Ready",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - No Free March",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Resource Taken"
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Success"
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Resource Taken",
+      "conditions": [
+        {
+          "template_path": "templates/GatherTakenCancel.jpg",
+          "confidence": 0.92,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            650,
+            640,
+            500,
+            180
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.3385416666666667,
+            0.5925925925925926,
+            0.2604166666666667,
+            0.16666666666666666
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "on_condition_index": 0
+        },
+        {
+          "type": "wait",
+          "seconds": 0.35
+        },
+        {
+          "type": "gather_control",
+          "gather_command": "cancel_retry",
+          "gather_replacement_order": [
+            3,
+            2,
+            1
+          ]
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Resource Taken",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Success",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Open Search"
+        }
+      ],
+      "enabled": false,
+      "cooldown": 0.1
+    },
+    {
+      "name": "Gather - Success",
+      "conditions": [
+        {
+          "template_path": "templates/GatherSearchIcon.jpg",
+          "confidence": 0.9,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            0,
+            760,
+            110,
+            150
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.0,
+            0.7037037037037037,
+            0.057291666666666664,
+            0.1388888888888889
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "template_path": "templates/GatherTakenCancel.jpg",
+          "confidence": 0.92,
+          "match_mode": "static_picture",
+          "template_reference_size": [
+            1920,
+            1080
+          ],
+          "region": [
+            650,
+            640,
+            500,
+            180
+          ],
+          "region_mode": "window",
+          "region_ratio": [
+            0.3385416666666667,
+            0.5925925925925926,
+            0.2604166666666667,
+            0.16666666666666666
+          ],
+          "region_window_size": [
+            1920,
+            1080
+          ],
+          "negate": true
+        }
+      ],
+      "actions": [
+        {
+          "type": "gather_control",
+          "gather_command": "record_success",
+          "gather_target_count": 3,
+          "gather_replacement_order": [
+            3,
+            2,
+            1
+          ]
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Resource Taken",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Success",
+          "set_enabled": false
+        },
+        {
+          "type": "set_step",
+          "step_name": "Gather - Open Search"
+        }
+      ],
+      "condition_operator": "AND",
+      "enabled": false,
+      "cooldown": 0.1
+    }
+  ],
+  "poll_interval": 0.1,
+  "monitor_index": 1,
+  "start_hotkey": "f8",
+  "kill_switch": "f12",
+  "auto_start_enabled": false,
+  "auto_start_time": "06:00",
+  "auto_start_date": "",
+  "target_window_title": "Last War-Survival Game",
+  "diagnostics_enabled": true
+}

@@ -25,12 +25,19 @@ from .detection_core import LEGACY_MACRO_MATCH_MODE, MATCH_MODE_VALUES
 from .hotkeys import canonical_hotkey, permissive_single_key_conflict
 from .project_paths import MACRO_TEMPLATES_DIR, PROJECT_ROOT
 from .project_paths import SCENARIOS_DIR as SCENARIO_PATH
+from .resource_gathering import (
+    DEFAULT_GATHER_TARGET_COUNT,
+    DEFAULT_REPLACEMENT_ORDER,
+    GATHER_COMMANDS,
+    REPLACEMENT_CLICK_OFFSETS,
+)
 
 ACTION_TYPES = frozenset(
     {
         "click",
         "click_matching_row",
         "select_rally_team",
+        "gather_control",
         "key",
         "wait",
         "set_step",
@@ -487,6 +494,13 @@ class Action:
     offset_y: int = 0
     button: str = "left"
 
+    # gather_control -- specialized resource-gathering state, not screen detection
+    gather_command: str = "record_success"
+    gather_target_count: int = DEFAULT_GATHER_TARGET_COUNT
+    gather_replacement_order: List[int] = field(
+        default_factory=lambda: list(DEFAULT_REPLACEMENT_ORDER)
+    )
+
     # key
     key: str = ""
     hold: float = 0.0  # seconds to hold down; 0 = quick tap
@@ -504,6 +518,10 @@ class Action:
         if self.seconds_max is None:
             # Keep existing fixed-wait scenario files compact and backward compatible.
             data.pop("seconds_max", None)
+        if self.type != "gather_control":
+            data.pop("gather_command", None)
+            data.pop("gather_target_count", None)
+            data.pop("gather_replacement_order", None)
         data["team_idle_template_path"] = portable_project_path(
             self.team_idle_template_path
         )
@@ -671,6 +689,43 @@ class Action:
                 )
         a.step_name = str(d.get("step_name", a.step_name) or "")
         a.set_enabled = _bool_value(d.get("set_enabled"), a.set_enabled)
+        a.gather_command = str(
+            d.get("gather_command", a.gather_command) or a.gather_command
+        )
+        a.gather_target_count = _int_value(
+            d.get("gather_target_count"), a.gather_target_count
+        )
+        raw_gather_order = d.get("gather_replacement_order")
+        if raw_gather_order is None:
+            a.gather_replacement_order = list(DEFAULT_REPLACEMENT_ORDER)
+        else:
+            parsed_gather_order = _int_list(raw_gather_order)
+            if parsed_gather_order is None:
+                raise ValueError("gather_replacement_order must be whole numbers")
+            a.gather_replacement_order = parsed_gather_order
+        if a.gather_command not in GATHER_COMMANDS:
+            raise ValueError(f"unsupported gather command: {a.gather_command!r}")
+        if a.gather_target_count < 1:
+            raise ValueError("gather_target_count must be at least 1")
+        if not a.gather_replacement_order:
+            raise ValueError("gather_replacement_order cannot be empty")
+        if len(set(a.gather_replacement_order)) != len(a.gather_replacement_order):
+            raise ValueError("gather_replacement_order cannot contain duplicates")
+        unsupported_gather_marches = [
+            march
+            for march in a.gather_replacement_order
+            if march not in REPLACEMENT_CLICK_OFFSETS
+        ]
+        if unsupported_gather_marches:
+            raise ValueError(
+                "gather_replacement_order contains unsupported march numbers: "
+                + ", ".join(str(march) for march in unsupported_gather_marches)
+            )
+        if a.type == "gather_control":
+            if a.gather_command == "select_replacement" and a.on_condition_index is None:
+                raise ValueError(
+                    "select_replacement gather actions require an anchor condition"
+                )
         if a.type == "key" and not a.key.strip():
             raise ValueError("key actions require a key name")
         if a.type == "set_step" and not a.step_name.strip():
@@ -713,6 +768,13 @@ class Action:
                 f"{scope} of condition #{self.match_condition_index}{level}{delay}{fallback}"
                 f"{availability}  [{self.button}]"
             )
+        if self.type == "gather_control":
+            if self.gather_command == "select_replacement":
+                order = " -> ".join(str(march) for march in self.gather_replacement_order)
+                return f"Select next gathering replacement march ({order})"
+            if self.gather_command == "cancel_retry":
+                return "Retry gathering without advancing replacement march"
+            return f"Record gathering success ({self.gather_target_count} total)"
         if self.type == "select_rally_team":
             team3_limit = (
                 "unlimited"
@@ -1146,6 +1208,30 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 raise ValueError(f"{prefix} has unsupported type {action.type!r}")
             if action.type == "select_rally_team":
                 select_rally_team_count += 1
+            if action.type == "gather_control":
+                if action.gather_command not in GATHER_COMMANDS:
+                    raise ValueError(f"{prefix} has invalid gather command")
+                if (
+                    isinstance(action.gather_target_count, bool)
+                    or not isinstance(action.gather_target_count, int)
+                    or action.gather_target_count < 1
+                ):
+                    raise ValueError(f"{prefix} gather target count must be at least 1")
+                if (
+                    not isinstance(action.gather_replacement_order, list)
+                    or not action.gather_replacement_order
+                    or any(
+                        isinstance(march, bool)
+                        or not isinstance(march, int)
+                        or march not in REPLACEMENT_CLICK_OFFSETS
+                        for march in action.gather_replacement_order
+                    )
+                    or len(set(action.gather_replacement_order))
+                    != len(action.gather_replacement_order)
+                ):
+                    raise ValueError(
+                        f"{prefix} gather replacement order must contain unique supported marches"
+                    )
             if (
                 isinstance(action.row_tolerance, bool)
                 or not isinstance(action.row_tolerance, int)
@@ -1348,6 +1434,14 @@ def validate_scenario(scenario: Scenario, require_files=False):
                                     f"{prefix} team-busy template does not exist: "
                                     f"{raw_path}"
                                 )
+            if action.type == "gather_control":
+                if (
+                    action.gather_command == "select_replacement"
+                    and action.on_condition_index is None
+                ):
+                    raise ValueError(
+                        f"{prefix} select_replacement requires an anchor condition"
+                    )
             if action.type == "select_rally_team":
                 if action.on_condition_index is None:
                     raise ValueError(f"{prefix} requires an anchor condition")
