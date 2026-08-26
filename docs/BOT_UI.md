@@ -1,264 +1,166 @@
 # Dedicated Bot UI architecture
 
-The primary product experience is now a **dedicated automation bot**, not a Scenario/Step editor.
+The primary product experience is a **dedicated automation bot**, not a Scenario/Step editor.
 
-Normal users should configure what they want the automation to do. They should not need to understand template regions, condition indices, OCR crops, `set_step` transitions, or specialized action internals.
-
-The mature Scenario/Step system remains the implementation backend and is still available through **Advanced** for development and debugging.
+Normal users configure what they want the bot to do. Template regions, OCR crops, condition indices, `set_step` wiring, and recovery internals remain implementation details behind **Advanced**.
 
 ## Product layers
 
 ```text
-                         Normal user
-                             │
-                             ▼
-                         Bot UI
-                Dashboard / Rally / Gather
-             Positions / Alerts / Schedule
-                             │
-                             ▼
-                         BotConfig
-                             │
-                  user-understandable values
-                             │
-               ┌─────────────┴─────────────┐
-               ▼                           ▼
-        Feature adapters              BotController
-     clone/configure scenarios      serialize active jobs
-               │                           │
-               └─────────────┬─────────────┘
-                             ▼
-                    Existing MacroEngine
-                             │
-               Scenarios / Steps / Actions
-                             │
-              Detection / OCR / input safety
-
-Passive Icon Alerts remain a separate watcher and may run beside one active
-clicking automation.
+Normal user
+    ↓
+Bot UI
+    ↓
+BotConfig
+    ├───────────────┬────────────────────┐
+    ↓               ↓                    ↓
+Feature adapters  BotController   Team-state services
+    ↓               ↓                    ↓
+runtime Scenario  finite/Rally      Continuous Gather
+    └───────────────┴──────────────┬─────┘
+                                   ↓
+                              MacroEngine
+                                   ↓
+                         Detection / OCR / safety
 ```
 
-## Normal-user interface
+Passive Icon Alerts remain separate observers and may run beside one active clicking automation.
 
-`macro_clicker/bot/ui.py`, `ui_pages.py`, and `ui_runtime.py` own the simple bot-facing interface.
+## Normal-user pages
 
-The current pages are:
+- **Dashboard** — overall state, current/next task, Rally/Gather/Positions/Alerts/Schedule summaries, and Team 1/2/3 live state.
+- **Rally** — enable Rally and configure supported mob/team level limits plus join delay.
+- **Gather** — enable continuous Auto Gather, choose Gold start level, and choose which Team 1/2/3 may gather.
+- **Positions** — enable/run Development and Science workflows.
+- **Alerts** — common passive-alert controls.
+- **Schedule** — saved Bot start/stop times and weekdays.
+- **Logs** — runtime activity.
+- **Settings** — target window and access to Advanced tools.
 
-- **Dashboard** — bot status, current task, alert status, Start/Stop, and quick actions.
-- **Rally** — enable Rally and edit mob/team level limits plus join delay.
-- **Gather** — enable gathering, choose starting level, march count, and replacement order.
-- **Positions** — enable/run Development and Science position workflows.
-- **Alerts** — simple passive-alert controls, with detailed template setup available separately.
-- **Schedule** — start/stop time and weekdays for the bot session.
-- **Logs** — normal runtime log output without requiring the Advanced editor.
-- **Settings** — target-window title and access to Advanced tools.
+Do not expose legacy Gather `march_count` or `replacement_order` as normal controls. They remain backward-compatible backend fields only.
 
-`BotApp` mounts `BotFrame` directly as the normal root surface. The legacy App notebook is not wrapped around it, so normal users see only one navigation bar. Opening Advanced or Alert Setup temporarily hides the Bot surface and shows the legacy notebook with an explicit **Back to Bot** control.
+## Advanced isolation
 
-Do not add Step/Condition/Action fields to these pages merely because those fields exist in the backend. Only expose settings a normal user has a reason to understand and change.
+The legacy App remains available as **Advanced** and **Alert Setup**, but normal Bot mode must keep hidden legacy Scenario start hotkeys and legacy auto-start behavior inactive.
 
-## Advanced tools
-
-The original `App` is still built by `BotApp`, but its tabs are hidden during normal use:
-
-- **Advanced** — Scenario/Step/Condition/Action editor, template testing, regions, diagnostics controls.
-- **Alert Setup** — detailed passive-alert template manager and detection settings.
-
-These are intentionally retained because they are valuable for debugging, capture, tuning, and future development. They are not the normal product workflow.
-
-A bot feature should not require the user to open Advanced just to change ordinary behavior such as a mob level or gather march count.
-
-### Legacy editor isolation
-
-The hidden Advanced editor must not be able to start work behind the Bot surface.
-
-- its legacy global Scenario start hotkey is unregistered during normal Bot use;
-- the hotkey is registered only while **Advanced** itself is open;
-- its legacy one-time Scenario auto-start check is also dormant outside Advanced;
-- opening **Alert Setup** does not enable the Advanced Scenario start hotkey/auto-start.
-
-Stale queued hotkey callbacks remain protected by the existing registration-token checks in `App`.
+Normal users should not need Advanced for ordinary Rally levels, Gather team selection, schedules, or common alerts.
 
 ## BotConfig
 
-`macro_clicker/bot/config.py` owns the normal-user settings model.
+`macro_clicker/bot/config.py` owns validated user-facing settings persisted under per-user runtime storage.
 
-The configuration is persisted to:
+Important Gather settings now include:
 
-```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher\bot_config.json
-```
+- `enabled`;
+- `resource` (currently Gold);
+- `start_level`;
+- `teams_enabled`.
 
-or the directory selected by `MACRO_CLICKER_DATA_DIR`.
+Legacy `march_count` and `replacement_order` remain valid for compatibility with older configs/Advanced behavior, but continuous normal Bot gathering does not use them as a team priority or permission to replace a busy march.
 
-`BotConfig` currently groups:
-
-- Rally settings;
-- Gather settings;
-- Position toggles;
-- Alert preferences;
-- schedule settings;
-- target-window title.
-
-This runtime file is intentionally separate from project-owned Scenario JSON. Normal Bot UI saves must not rewrite the tuned bundled scenarios.
-
-UI collection is transactional: edits are built on a deep copy and become the live in-memory configuration only after validation and persistence succeed. A malformed field must not partially mutate the last known-good config.
-
-The tolerant config loader should likewise repair malformed persisted values into an internally valid configuration. For example, incomplete Gather replacement orders fall back to `3 → 2 → 1`, and Rally team caps are clamped inside the configured min/max range.
+UI collection remains transactional: invalid edits must not partially mutate the last known-good live config.
 
 ## Feature adapters
 
-`macro_clicker/bot/adapters.py` is the translation boundary between simple settings and the existing backend.
+`macro_clicker/bot/adapters.py` deep-copies proven scenarios and applies supported settings.
 
-The adapter pattern is:
+For continuous Gather, selected-team runtime mode:
 
-```text
-load proven bundled Scenario
-          ↓
-deep-copy runtime Scenario
-          ↓
-apply BotConfig values to known supported fields
-          ↓
-validate configured copy
-          ↓
-run it through MacroEngine
-```
+1. reuses the existing Gold search/resource/taken-warning scenario;
+2. changes one engine run into exactly one intended team-dispatch attempt;
+3. requires the chosen team's idle indicator on the dispatch panel;
+4. explicitly clicks that exact team card before Dispatch;
+5. adds a stale-team guard that exits if that team is no longer idle;
+6. changes the no-free-march branch to close/stop instead of replacing another march.
 
-The stored Scenario file remains unchanged.
+Stored scenario JSON is not rewritten.
 
-### Rally adapter
+## BotController vs ContinuousGatherService
 
-The Rally adapter currently maps normal-user values to the mature two-team Rally workflow:
+`BotController` serializes finite Position jobs and continuous Rally input ownership.
 
-- minimum eligible mob level;
-- maximum eligible mob level;
-- Team 1 maximum level;
-- Team 3 maximum level;
-- pre-join delay.
+Continuous Auto Gather is **not** a finite queued stage. It is a persistent service driven by `TeamStateTracker` and `TeamStatusMonitor`.
 
-It does not reimplement same-row matching, OCR, availability detection, team selection, transition guards, or recovery.
+Current rules:
 
-### Gather adapter
+- Development/Science run as finite setup jobs.
+- Rally is continuous and remains controller-owned.
+- Auto Gather may monitor team state while finite Position work runs, but it waits while input is busy.
+- Auto Gather starts one exact-team MacroEngine attempt only when a fresh visual Idle observation is available.
+- Rally and continuous Auto Gather are currently not allowed to run together because safe cooperative preemption has not yet been implemented.
+- Alerts may run beside either because they are passive.
 
-The Gather adapter currently maps:
+Do not fake concurrency by letting separate engines compete for clicks.
 
-- starting resource level;
-- number of successful marches to send;
-- busy-march replacement order.
+## Gather UI/status contract
 
-The proven Gather search/retry/resource-taken state machine and `GatherController` remain the backend.
-
-The current implemented resource is Gold. Do not expose another resource as functional until the corresponding backend flow/templates have actually been implemented and tested.
-
-## BotController
-
-`macro_clicker/bot/controller.py` owns coordination between **active clicking automations**.
-
-Only one `MacroEngine` may own game input at a time. Do not run Rally, Gather, or Position scenarios concurrently and let them compete for the mouse/keyboard.
-
-For **Start Bot**, the initial safe serialized order is:
+The Gather page should communicate actual team-state behavior, for example:
 
 ```text
-Development Position
-        ↓
-Science Position
-        ↓
-Auto Gather
-        ↓
-Gold Mob Rally
+Auto Gather                 ON
+Resource                    Gold
+Starting level              12
+Teams                       [✓] 1  [✓] 2  [✓] 3
+
+Team 1   Gathering   04:33:18
+Team 2   Returning   00:00:08
+Team 3   Idle
 ```
 
-Disabled features are skipped.
+If Team 3 is the only fresh Idle team, the next dispatch must target Team 3 specifically.
 
-The finite workflows run before Rally because Rally is normally continuous. If Rally ran first, later finite tasks would never receive control.
+When all configured teams are busy, the UI should say it is waiting rather than implying a replacement will occur.
 
-A queued feature that **finishes normally** advances to the next enabled feature. A queued feature that **cannot start** ends the Bot cycle and clears the remaining queue; do not silently skip ahead from an uncertain screen/input state.
+Visible timers are presentation/scheduling hints. UI countdown reaching zero must not imply the team is available until fresh visual state says `Idle`.
 
-`MacroEngine` cleans up its kill-switch hook and capture handle in its worker `finally` block before `is_running` becomes false, so the controller may safely hand ownership to the next engine after completion is observed.
+## Dashboard contract
 
-The direct **Run Rally / Run Gather / Run Position** buttons remain one-off actions and do not create a multi-feature queue.
+Dashboard status is read-only. It may display existing tracker/service/engine state but must not drive automation.
 
-**Stop Bot** cancels both the current active automation and any remaining queued active jobs.
+Useful summaries include:
 
-Passive Icon Alerts are different: they do not send automation input, so they may continue beside the currently active MacroEngine. However, a requested clicking-automation startup failure must still be surfaced even if passive Alerts started successfully; Alerts must not mask an automation failure.
+```text
+Current task: Auto Gather
+Gather: Waiting — all configured teams busy — next timer: Team 2 00:00:08
+Team 1: Gathering — 04:33:18
+Team 2: Returning — 00:00:08
+Team 3: Travelling — 00:00:17
+```
+
+or during an attempt:
+
+```text
+Gather: Running — Team 3 — selecting team and dispatching
+```
 
 ## Schedule semantics
 
-Bot scheduling is separate from the legacy Advanced Scenario auto-start.
+Bot scheduling uses the last validated/saved BotConfig. A scheduled start must not silently activate half-typed UI edits.
 
-- schedule polling reads the last validated/saved `BotConfig`;
-- typing into a control does not silently change a live schedule before Save;
-- a scheduled start uses that saved config and does not resave partially typed UI edits at trigger time;
-- the manual **Start Bot** button still validates/saves the current controls before starting.
+Manual Start Bot still validates/saves current controls first.
 
-Keep this distinction when extending schedule behavior.
+## Adding a normal-user setting
 
-## Future controller work
+1. Add a validated BotConfig field with a safe default.
+2. Add the simple control.
+3. Read/write it through `ui_runtime.py`.
+4. Translate it through the correct adapter/service boundary.
+5. Add focused tests.
+6. Update all affected living Markdown docs.
+7. Use a detailed AI-oriented commit subject/body.
 
-Do not implement fake concurrency by rapidly switching two independent scenarios.
+## Preservation rules
 
-If future requirements need Rally to interrupt Gather or a recurring finite task to run while Rally is active, add explicit cooperative task boundaries/return-to-known-state behavior first. A scheduler may then hand ownership between workflows safely.
+Protect:
 
-Until those boundaries exist, serialized input ownership is the safety contract.
-
-## Adding a new normal-user setting
-
-When a backend behavior should become configurable from the Bot UI:
-
-1. Add a validated field to the appropriate `BotConfig` section.
-2. Preserve a safe/backward-compatible default matching current proven behavior.
-3. Add the control to the relevant Bot page.
-4. Read/write it through `ui_runtime.py`.
-5. Translate it in the feature adapter rather than directly editing project scenario files.
-6. Add focused tests proving the value reaches the intended runtime Scenario/action.
-7. Update this guide when the product contract changes.
-
-Do not bypass validation or modify stored Scenario JSON merely because it is easier than creating a proper adapter.
-
-## Adding a new bot feature
-
-Prefer this sequence:
-
-1. Make the feature reliable as an isolated backend workflow/module.
-2. Add focused regression tests and safe recovery behavior.
-3. Add a `BotConfig` section containing only user-relevant choices.
-4. Add a feature adapter that reuses the working backend.
-5. Add the Bot UI page/controls.
-6. Decide whether the feature is finite or continuous and place it correctly in controller scheduling.
-7. Keep Advanced tools available for diagnostics, but do not make them required for ordinary use.
-
-## What remains backend-only by default
-
-These details should normally remain hidden from the normal Bot UI:
-
-- template confidence thresholds;
-- capture/detection regions;
-- condition indices;
-- comparison templates;
-- OCR crop geometry;
-- state-machine `set_step` wiring;
-- retry/transition guards;
-- row tolerances;
-- diagnostic sampling internals;
-- exact recovery click coordinates.
-
-Expose one of these only when there is a concrete user-facing need, not simply because it is configurable internally.
-
-## Preservation rule
-
-The bot migration is a **product/control-layer refactor**, not permission to rewrite mature automation internals.
-
-In particular, continue to protect:
-
-- Rally same-row matching;
-- atomic OCR/matching snapshots;
-- Team 1 / Team 3 availability and selection behavior;
-- rally transition/recovery guards;
-- Auto Gather search-until-found behavior;
-- resource-taken Cancel/retry behavior;
-- busy-march replacement state;
+- mature Rally matching/OCR/team/recovery behavior;
 - target-window/foreground input safety;
-- kill switch and PyAutoGUI failsafe;
-- passive alert confirmation/cooldown behavior.
+- Gather search-until-found and resource-taken recovery;
+- exact-team verification before continuous Gather Dispatch;
+- busy-team protection;
+- timer-not-authority semantics;
+- fail-closed stale/unknown state behavior;
+- passive alert isolation;
+- Advanced tooling availability without making it part of normal use.
 
-The desired end state is a simple bot interface backed by the same reliable specialized automation engine.
+See `AGENTS.md` for mandatory commit and documentation-sync requirements.
