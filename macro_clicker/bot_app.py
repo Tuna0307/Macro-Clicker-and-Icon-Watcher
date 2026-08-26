@@ -14,6 +14,7 @@ import keyboard
 from .alert_watcher import SingleInstanceLock
 from .app import App
 from .bot.adapters import configured_scenario
+from .bot.controller import FEATURE_GATHER
 from .bot.ui import BotFrame
 from .engine import MacroEngine
 from .models import validate_scenario
@@ -25,19 +26,11 @@ class BotApp(App):
     """Normal-user bot shell that keeps the original editors as advanced tools."""
 
     def __init__(self, root):
-        # App.__init__ registers the legacy Scenario start hotkey near the end of
-        # startup. Set this before calling super() so our override suppresses
-        # that hidden editor hotkey while the normal Bot surface is active.
         self._advanced_tools_visible = False
         super().__init__(root)
         root.title("PC Automation Bot")
 
     def _build_ui(self):
-        # Build the mature editor and alert UI exactly as before so all proven
-        # backend/editor behavior remains available. Normal startup then hides
-        # that notebook entirely and presents BotFrame as the primary surface.
-        # This avoids the redundant lone outer "Bot" tab seen in the first
-        # supervised UI run while preserving the existing advanced tools.
         super()._build_ui()
         self.notebook.tab(self.macro_tab, text="Advanced")
         self.notebook.tab(self.alert_tab, text="Alert Setup")
@@ -56,9 +49,6 @@ class BotApp(App):
         )
         self.bot_frame.grid(row=0, column=0, sticky="nsew")
 
-        # Advanced mode gets a small explicit way back to the normal-user Bot
-        # surface. The legacy notebook itself is packed only while those tools
-        # are being used, so normal users never see a second navigation bar.
         self.tool_header = ttk.Frame(self.root, style="Card.TFrame", padding=(12, 8))
         ttk.Button(
             self.tool_header,
@@ -82,8 +72,6 @@ class BotApp(App):
             try:
                 keyboard.remove_hotkey(old_handle)
             except Exception:
-                # Match App's best-effort cleanup semantics. Losing a stale
-                # keyboard handle must not prevent returning to normal Bot mode.
                 pass
 
     def _register_start_hotkey(self):
@@ -121,10 +109,6 @@ class BotApp(App):
                 self.notebook.pack(fill="both", expand=True)
             self.notebook.tab(tab, text=label)
             self.notebook.select(tab)
-
-            # The old F8-style Scenario start binding and one-time Scenario
-            # auto-start belong to the Advanced editor, not to the normal Bot or
-            # Alert Setup surfaces.
             self._advanced_tools_visible = tab is self.macro_tab
             self._register_start_hotkey()
         except tk.TclError:
@@ -136,7 +120,7 @@ class BotApp(App):
     def _show_alert_setup(self):
         self._show_tool_tab(self.alert_tab, "Alert Setup")
 
-    def _start_bot_feature(self, feature, config):
+    def _start_bot_feature(self, feature, config, *, gather_team=None):
         """Start a configured feature without changing the Advanced editor state."""
 
         if getattr(self, "_step_test_running", False):
@@ -151,7 +135,11 @@ class BotApp(App):
 
         engine = None
         try:
-            scenario = configured_scenario(feature, config)
+            scenario = configured_scenario(
+                feature,
+                config,
+                gather_team=gather_team,
+            )
             conflict = self._macro_alert_hotkey_conflict(
                 scenario.start_hotkey,
                 scenario.kill_switch,
@@ -179,6 +167,7 @@ class BotApp(App):
 
         self.engine = engine
         self._bot_engine_feature = feature
+        self._bot_gather_team = gather_team if feature == FEATURE_GATHER else None
         self._engine_ui_active = True
         self._engine_ready_announced = False
         self._set_macro_editor_locked(True)
@@ -192,6 +181,15 @@ class BotApp(App):
                 style="Preparing.Status.TLabel",
             )
         return True
+
+    def _start_bot_gather_team(self, team, config):
+        """Start one fail-closed Gather attempt for the exact selected team."""
+
+        return self._start_bot_feature(
+            FEATURE_GATHER,
+            config,
+            gather_team=int(team),
+        )
 
     def _log(self, msg):
         super()._log(msg)
@@ -243,9 +241,7 @@ def main():
             try:
                 os.makedirs(os.path.dirname(STARTUP_ERROR_LOG), exist_ok=True)
                 with open(STARTUP_ERROR_LOG, "a", encoding="utf-8") as handle:
-                    handle.write(
-                        f"\n[{datetime.now().isoformat(timespec='seconds')}]\n"
-                    )
+                    handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n")
                     handle.write(traceback.format_exc())
             except OSError:
                 pass
