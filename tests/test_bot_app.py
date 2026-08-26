@@ -18,6 +18,7 @@ def test_bot_frame_exposes_normal_user_pages():
 
 def test_bot_app_keeps_advanced_backends_behind_explicit_hooks():
     assert issubclass(BotApp, App)
+    assert callable(BotApp._show_bot_surface)
     assert callable(BotApp._show_advanced_tools)
     assert callable(BotApp._show_alert_setup)
     assert callable(BotApp._show_tool_tab)
