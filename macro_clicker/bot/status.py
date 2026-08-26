@@ -137,10 +137,11 @@ def _gather_status(config: BotConfig, active_feature: str | None, engine: Any) -
 
 
 def _positions_status(config: BotConfig, active_feature: str | None) -> str:
+    retry = "auto retry on" if config.positions.retry_automatically else "auto retry off"
     if active_feature == FEATURE_DEVELOPMENT:
-        return "Running — Development Position"
+        return f"Running — Development Position — {retry}"
     if active_feature == FEATURE_SCIENCE:
-        return "Running — Science Position"
+        return f"Running — Science Position — {retry}"
 
     enabled = []
     if config.positions.development_enabled:
@@ -149,7 +150,7 @@ def _positions_status(config: BotConfig, active_feature: str | None) -> str:
         enabled.append("Science")
     if not enabled:
         return "Disabled"
-    return "Enabled — " + " + ".join(enabled)
+    return "Enabled — " + " + ".join(enabled) + f" — {retry}"
 
 
 def _alerts_status(config: BotConfig, alerts_running: bool) -> str:
@@ -175,7 +176,12 @@ def _schedule_status(config: BotConfig) -> str:
     return f"Active — {schedule.start_time}–{schedule.stop_time} — {days}"
 
 
-def _live_last_status(active_feature: str | None, engine: Any, fallback: str) -> str:
+def _live_last_status(
+    config: BotConfig,
+    active_feature: str | None,
+    engine: Any,
+    fallback: str,
+) -> str:
     """Translate the latest already-fired backend step into normal-user wording."""
 
     latest_step = _latest_fired_step(engine)
@@ -213,13 +219,21 @@ def _live_last_status(active_feature: str | None, engine: Any, fallback: str) ->
         if latest_step == "Complete - Apply Available":
             return "Development Position application is available"
         if latest_step == "Retry - Apply Unavailable":
-            return "Development Position unavailable; retrying"
+            return (
+                "Development Position unavailable; retrying"
+                if config.positions.retry_automatically
+                else "Development Position unavailable; finishing this task"
+            )
 
     if active_feature == FEATURE_SCIENCE:
         if latest_step == "Complete - Apply Available":
             return "Science Position application is available"
         if latest_step == "Retry - Apply Unavailable":
-            return "Science Position unavailable; retrying"
+            return (
+                "Science Position unavailable; retrying"
+                if config.positions.retry_automatically
+                else "Science Position unavailable; finishing this task"
+            )
 
     return fallback
 
@@ -253,7 +267,7 @@ def build_dashboard_snapshot(
             else "None"
         ),
         next_task=_next_task(pending),
-        last_status=_live_last_status(active_feature, engine, last_message),
+        last_status=_live_last_status(config, active_feature, engine, last_message),
         rally=_rally_status(config, active_feature, engine),
         gather=_gather_status(config, active_feature, engine),
         positions=_positions_status(config, active_feature),
