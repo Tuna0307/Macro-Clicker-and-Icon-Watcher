@@ -1,9 +1,4 @@
-"""Read-only normal-user status summaries for the dedicated Bot UI.
-
-This module deliberately does not drive the automation. It translates the
-controller/config and already-existing engine state into concise, user-facing
-status text for the Dashboard.
-"""
+"""Read-only normal-user status summaries for the dedicated Bot UI."""
 
 from __future__ import annotations
 
@@ -13,11 +8,11 @@ from typing import Any, Iterable
 from .config import BotConfig
 from .controller import (
     FEATURE_DEVELOPMENT,
-    FEATURE_GATHER,
     FEATURE_LABELS,
     FEATURE_RALLY,
     FEATURE_SCIENCE,
 )
+from .team_state import TeamActivity, format_remaining
 
 
 @dataclass(frozen=True)
@@ -31,6 +26,7 @@ class DashboardSnapshot:
     positions: str
     alerts: str
     schedule: str
+    team_status: dict[int, str]
 
 
 def _latest_fired_step(engine: Any) -> str | None:
@@ -68,72 +64,107 @@ def _rally_status(config: BotConfig, active_feature: str | None, engine: Any) ->
         team = selected.get("team")
         if level is not None and team is not None:
             return f"Running — Lv{level} with Team {team}"
-
     pending_level = getattr(engine, "_pending_rally_level", None)
     if pending_level is not None:
         return f"Running — evaluating Lv{pending_level}"
-
     latest_step = _latest_fired_step(engine)
     if latest_step == "Back if no slot":
         return "Running — no slot, returning to rally list"
     if latest_step == "Back if wrong mob":
         return "Running — recovering from wrong target"
-    if latest_step == "Joining":
-        return (
-            f"Running — scanning eligible Lv{config.rally.min_level}–"
-            f"{config.rally.max_level} mobs"
-        )
-    return (
-        f"Running — monitoring Lv{config.rally.min_level}–"
-        f"{config.rally.max_level} mobs"
-    )
+    return f"Running — monitoring Lv{config.rally.min_level}–{config.rally.max_level} mobs"
 
 
 def _gather_phase(engine: Any, config: BotConfig) -> str:
     latest_step = _latest_fired_step(engine)
     phases = {
         "Gather - Open Search": "opening resource search",
-        "Gather - Prepare Gold Lv12": (
-            f"searching Gold from Lv{config.gather.start_level}"
-        ),
+        "Gather - Prepare Gold Lv12": f"searching Gold from Lv{config.gather.start_level}",
         "Gather - Search unavailable": "lowering level and searching again",
         "Gather - Resource Found": "resource found",
-        "Gather - No Free March": "all marches busy",
-        "Gather - Dispatch Ready": "dispatching march",
+        "Gather - No Free March": "game reports no free march",
+        "Gather - Dispatch Ready": "selecting team and dispatching",
+        "Gather - Selected Team Busy": "selected team changed to busy",
         "Gather - Resource Taken": "resource taken — retrying",
         "Gather - Success": "verifying successful dispatch",
     }
     return phases.get(latest_step, "searching for Gold")
 
 
-def _gather_status(config: BotConfig, active_feature: str | None, engine: Any) -> str:
-    target = int(config.gather.march_count)
-    if active_feature != FEATURE_GATHER:
+def _team_status_map(team_tracker: Any) -> dict[int, str]:
+    if team_tracker is None:
+        return {1: "Not monitored", 2: "Not monitored", 3: "Not monitored"}
+    result: dict[int, str] = {}
+    try:
+        snapshots = team_tracker.snapshots()
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return {1: "Unknown", 2: "Unknown", 3: "Unknown"}
+    labels = {
+        TeamActivity.IDLE: "Idle",
+        TeamActivity.TRAVELLING: "Travelling",
+        TeamActivity.GATHERING: "Gathering",
+        TeamActivity.RETURNING: "Returning",
+        TeamActivity.BUSY: "Busy",
+        TeamActivity.UNKNOWN: "Unknown",
+    }
+    for snapshot in snapshots:
+        text = labels.get(snapshot.activity, str(snapshot.activity).title())
+        if snapshot.activity not in {TeamActivity.IDLE, TeamActivity.UNKNOWN}:
+            if snapshot.remaining_seconds is not None:
+                text += f" — {format_remaining(snapshot.remaining_seconds)}"
+        if not snapshot.sidebar_visible and snapshot.activity != TeamActivity.UNKNOWN:
+            text += " — last known"
+        result[int(snapshot.team)] = text
+    for team in (1, 2, 3):
+        result.setdefault(team, "Unknown")
+    return result
+
+
+def _gather_status(
+    config: BotConfig,
+    engine: Any,
+    team_tracker: Any,
+    continuous_gather: Any,
+) -> str:
+    teams = ", ".join(f"Team {team}" for team in config.gather.teams_enabled)
+    service_status = getattr(continuous_gather, "status", None)
+    active = bool(getattr(service_status, "active", False))
+    in_flight = getattr(service_status, "in_flight_team", None)
+    if not active:
         if not config.gather.enabled:
             return "Disabled"
-        return (
-            f"Enabled — Gold Lv{config.gather.start_level}, "
-            f"{target} march{'es' if target != 1 else ''}"
-        )
+        return f"Enabled — Gold Lv{config.gather.start_level} — {teams}"
 
-    controller = getattr(engine, "_gather_controller", None)
+    if in_flight is not None:
+        return f"Running — Team {in_flight} — {_gather_phase(engine, config)}"
+    if team_tracker is None or not bool(getattr(team_tracker, "sidebar_visible", False)):
+        return "Watching — waiting for the team-status sidebar"
+
     try:
-        successful = max(0, int(getattr(controller, "successful_dispatches", 0)))
-    except (TypeError, ValueError):
-        successful = 0
+        idle = team_tracker.available_teams(config.gather.teams_enabled)
+    except (AttributeError, TypeError, ValueError):
+        idle = ()
+    if idle:
+        names = ", ".join(f"Team {team}" for team in idle)
+        return f"Watching — available: {names}"
 
-    next_replacement = None
-    current_replacement = getattr(controller, "current_replacement", None)
-    if callable(current_replacement):
-        try:
-            next_replacement = current_replacement(config.gather.replacement_order)
-        except (TypeError, ValueError):
-            next_replacement = None
-
-    text = f"Running — {successful}/{target} successful — {_gather_phase(engine, config)}"
-    if successful < target and next_replacement is not None:
-        text += f" — next busy replacement: March {next_replacement}"
-    return text
+    try:
+        snapshots = [
+            item
+            for item in team_tracker.snapshots()
+            if item.team in config.gather.teams_enabled
+            and item.remaining_seconds is not None
+            and item.remaining_seconds > 0
+        ]
+    except (AttributeError, TypeError, ValueError):
+        snapshots = []
+    if snapshots:
+        soonest = min(snapshots, key=lambda item: item.remaining_seconds)
+        return (
+            "Waiting — all configured teams busy — next timer: "
+            f"Team {soonest.team} {format_remaining(soonest.remaining_seconds)}"
+        )
+    return "Waiting — all configured teams busy"
 
 
 def _positions_status(config: BotConfig, active_feature: str | None) -> str:
@@ -142,7 +173,6 @@ def _positions_status(config: BotConfig, active_feature: str | None) -> str:
         return f"Running — Development Position — {retry}"
     if active_feature == FEATURE_SCIENCE:
         return f"Running — Science Position — {retry}"
-
     enabled = []
     if config.positions.development_enabled:
         enabled.append("Development")
@@ -160,7 +190,6 @@ def _alerts_status(config: BotConfig, alerts_running: bool) -> str:
     if config.alerts.secret_task_enabled:
         groups.append("Secret Task")
     detail = " + ".join(groups) if groups else "no alert groups enabled"
-
     if alerts_running:
         return f"Watching — {detail}"
     if config.alerts.enabled:
@@ -182,25 +211,9 @@ def _live_last_status(
     engine: Any,
     fallback: str,
 ) -> str:
-    """Translate the latest already-fired backend step into normal-user wording."""
-
     latest_step = _latest_fired_step(engine)
     if not latest_step:
         return fallback
-
-    if active_feature == FEATURE_GATHER:
-        labels = {
-            "Gather - Open Search": "Opened resource search",
-            "Gather - Prepare Gold Lv12": "Started Gold search",
-            "Gather - Search unavailable": "Lowered resource level and searched again",
-            "Gather - Resource Found": "Found a Gold resource",
-            "Gather - No Free March": "No free march; selecting a busy march to replace",
-            "Gather - Dispatch Ready": "Clicked Dispatch",
-            "Gather - Resource Taken": "Resource was taken; retrying",
-            "Gather - Success": "Verified a gathering dispatch",
-        }
-        return labels.get(latest_step, fallback)
-
     if active_feature == FEATURE_RALLY:
         selected = getattr(engine, "_pending_rally_team_selected", None)
         if isinstance(selected, dict):
@@ -214,7 +227,6 @@ def _live_last_status(
             "Back if wrong mob": "Wrong target; returned to the rally list",
         }
         return labels.get(latest_step, fallback)
-
     if active_feature == FEATURE_DEVELOPMENT:
         if latest_step == "Complete - Apply Available":
             return "Development Position application is available"
@@ -224,7 +236,6 @@ def _live_last_status(
                 if config.positions.retry_automatically
                 else "Development Position unavailable; finishing this task"
             )
-
     if active_feature == FEATURE_SCIENCE:
         if latest_step == "Complete - Apply Available":
             return "Science Position application is available"
@@ -234,7 +245,6 @@ def _live_last_status(
                 if config.positions.retry_automatically
                 else "Science Position unavailable; finishing this task"
             )
-
     return fallback
 
 
@@ -244,33 +254,57 @@ def build_dashboard_snapshot(
     controller: Any,
     engine: Any = None,
     alerts_running: bool = False,
+    team_tracker: Any = None,
+    continuous_gather: Any = None,
 ) -> DashboardSnapshot:
     """Build one safe, read-only Dashboard snapshot from current runtime state."""
 
     status = getattr(controller, "status", None)
     active_feature = getattr(status, "active_feature", None)
-    last_message = str(getattr(status, "last_message", "Ready"))
+    controller_message = str(getattr(status, "last_message", "Ready"))
     pending = getattr(controller, "pending_features", ())
+    gather_status = getattr(continuous_gather, "status", None)
+    gather_active = bool(getattr(gather_status, "active", False))
+    gather_in_flight = getattr(gather_status, "in_flight_team", None)
 
     labels = []
     if active_feature:
         labels.append(FEATURE_LABELS.get(active_feature, str(active_feature).title()))
+    elif gather_in_flight is not None:
+        labels.append(f"Auto Gather — Team {gather_in_flight}")
+    elif gather_active:
+        labels.append("Auto Gather")
     if alerts_running:
         labels.append("Alerts")
     overall = "● Running — " + " + ".join(labels) if labels else "● Stopped"
 
+    if active_feature:
+        current_task = FEATURE_LABELS.get(active_feature, str(active_feature).title())
+    elif gather_active:
+        current_task = "Auto Gather"
+    else:
+        current_task = "None"
+
+    next_task = _next_task(pending)
+    if next_task == "None" and active_feature is not None and gather_active:
+        next_task = "Auto Gather"
+
+    if active_feature is not None:
+        last_status = _live_last_status(config, active_feature, engine, controller_message)
+    elif gather_active:
+        last_status = str(getattr(gather_status, "last_message", "Watching team status"))
+    else:
+        last_status = controller_message
+
     return DashboardSnapshot(
         overall=overall,
-        current_task=(
-            FEATURE_LABELS.get(active_feature, str(active_feature).title())
-            if active_feature
-            else "None"
-        ),
-        next_task=_next_task(pending),
-        last_status=_live_last_status(config, active_feature, engine, last_message),
+        current_task=current_task,
+        next_task=next_task,
+        last_status=last_status,
         rally=_rally_status(config, active_feature, engine),
-        gather=_gather_status(config, active_feature, engine),
+        gather=_gather_status(config, engine, team_tracker, continuous_gather),
         positions=_positions_status(config, active_feature),
         alerts=_alerts_status(config, alerts_running),
         schedule=_schedule_status(config),
+        team_status=_team_status_map(team_tracker),
     )
