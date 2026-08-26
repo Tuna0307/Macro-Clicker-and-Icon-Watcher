@@ -11,8 +11,10 @@ from macro_clicker.bot.adapters import (
     apply_gather_config,
     apply_position_config,
     apply_rally_config,
+    configured_scenario,
 )
-from macro_clicker.bot.config import GatherConfig, PositionsConfig, RallyConfig
+from macro_clicker.bot.config import BotConfig, GatherConfig, PositionsConfig, RallyConfig
+from macro_clicker.bot.controller import FEATURE_GATHER
 from macro_clicker.models import Action, Scenario, Step
 
 
@@ -116,6 +118,42 @@ def test_gather_adapter_changes_start_level_count_and_target_marches():
         action for action in controls if action.gather_command == "record_success"
     )
     assert success.gather_target_count == 2
+
+
+def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replaces_busy():
+    config = BotConfig()
+    config.gather.enabled = True
+    config.gather.teams_enabled = [1, 2, 3]
+
+    scenario = configured_scenario(FEATURE_GATHER, config, gather_team=2)
+    dispatch = next(step for step in scenario.steps if step.name == "Gather - Dispatch Ready")
+    no_free = next(step for step in scenario.steps if step.name == "Gather - No Free March")
+    busy = next(step for step in scenario.steps if step.name == "Gather - Selected Team Busy")
+
+    assert dispatch.condition_operator == "AND"
+    assert len(dispatch.conditions) == 2
+    assert dispatch.conditions[1].template_path == "templates/Team2Idle.png"
+    assert dispatch.conditions[1].region == [837, 938, 40, 36]
+
+    # The exact Team 2 card selection must happen before the pre-existing
+    # Dispatch-button action, so the game cannot silently choose another team.
+    first = dispatch.actions[0]
+    assert first.type == "click"
+    assert first.on_condition_index == 1
+    assert (first.offset_x, first.offset_y) == (40, 21)
+    assert dispatch.actions[1].type == "wait"
+
+    # If no slot exists, continuous Gather leaves existing work alone. It
+    # closes/stops rather than invoking the legacy replacement controller.
+    assert [action.type for action in no_free.actions] == ["key", "wait", "stop"]
+    assert no_free.actions[0].key == "esc"
+    assert not any(action.type == "gather_control" for action in no_free.actions)
+
+    # A stale world-map idle observation gets re-verified on the dispatch panel.
+    assert busy.condition_operator == "AND"
+    assert busy.conditions[1].negate is True
+    assert busy.conditions[1].template_path == "templates/Team2Idle.png"
+    assert [action.type for action in busy.actions] == ["key", "wait", "stop"]
 
 
 def _position_scenario():
