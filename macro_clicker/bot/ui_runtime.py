@@ -28,6 +28,7 @@ class BotRuntimeMixin:
         self.replacement_order_var.set(" → ".join(map(str, c.gather.replacement_order)))
         self.development_enabled_var.set(c.positions.development_enabled)
         self.science_enabled_var.set(c.positions.science_enabled)
+        self.positions_retry_var.set(c.positions.retry_automatically)
         self.alerts_enabled_var.set(c.alerts.enabled)
         self.digs_enabled_var.set(c.alerts.digs_enabled)
         self.secret_task_enabled_var.set(c.alerts.secret_task_enabled)
@@ -75,6 +76,7 @@ class BotRuntimeMixin:
             c.gather.search_until_found = True
             c.positions.development_enabled = bool(self.development_enabled_var.get())
             c.positions.science_enabled = bool(self.science_enabled_var.get())
+            c.positions.retry_automatically = bool(self.positions_retry_var.get())
             c.alerts.enabled = bool(self.alerts_enabled_var.get())
             c.alerts.digs_enabled = bool(self.digs_enabled_var.get())
             c.alerts.secret_task_enabled = bool(self.secret_task_enabled_var.get())
