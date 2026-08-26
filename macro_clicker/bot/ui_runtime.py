@@ -8,7 +8,7 @@ from datetime import datetime
 from tkinter import messagebox
 
 from .config import BotConfigError, save_bot_config, validate_bot_config
-from .controller import FEATURE_LABELS
+from .controller import FEATURE_GATHER, FEATURE_LABELS
 from .status import build_dashboard_snapshot
 
 
@@ -24,8 +24,8 @@ class BotRuntimeMixin:
         self.gather_enabled_var.set(c.gather.enabled)
         self.resource_var.set(c.gather.resource)
         self.gather_start_level_var.set(c.gather.start_level)
-        self.gather_marches_var.set(c.gather.march_count)
-        self.replacement_order_var.set(" → ".join(map(str, c.gather.replacement_order)))
+        for team, var in self.gather_team_vars.items():
+            var.set(team in c.gather.teams_enabled)
         self.development_enabled_var.set(c.positions.development_enabled)
         self.science_enabled_var.set(c.positions.science_enabled)
         self.positions_retry_var.set(c.positions.retry_automatically)
@@ -40,16 +40,6 @@ class BotRuntimeMixin:
         for day, var in self.day_vars.items():
             var.set(day in c.schedule.days)
         self.target_window_var.set(c.target_window_title)
-
-    @staticmethod
-    def _parse_order(text):
-        parts = str(text).replace("→", ",").replace("->", ",").split(",")
-        order = [int(part.strip()) for part in parts if part.strip()]
-        if len(order) != 3 or set(order) != {1, 2, 3}:
-            raise BotConfigError(
-                "Replacement order must contain 1, 2, and 3 exactly once."
-            )
-        return order
 
     def _collect_config(self):
         # Build edits on a copy. A malformed value in one field must never
@@ -69,10 +59,9 @@ class BotRuntimeMixin:
             c.gather.enabled = bool(self.gather_enabled_var.get())
             c.gather.resource = self.resource_var.get().strip() or "Gold"
             c.gather.start_level = int(self.gather_start_level_var.get())
-            c.gather.march_count = int(self.gather_marches_var.get())
-            c.gather.replacement_order = self._parse_order(
-                self.replacement_order_var.get()
-            )
+            c.gather.teams_enabled = [
+                team for team, var in self.gather_team_vars.items() if var.get()
+            ]
             c.gather.search_until_found = True
             c.positions.development_enabled = bool(self.development_enabled_var.get())
             c.positions.science_enabled = bool(self.science_enabled_var.get())
@@ -85,9 +74,7 @@ class BotRuntimeMixin:
             c.schedule.enabled = bool(self.schedule_enabled_var.get())
             c.schedule.start_time = self.schedule_start_var.get().strip()
             c.schedule.stop_time = self.schedule_stop_var.get().strip()
-            c.schedule.days = [
-                day for day, var in self.day_vars.items() if var.get()
-            ]
+            c.schedule.days = [day for day, var in self.day_vars.items() if var.get()]
             validate_bot_config(c)
         except (tk.TclError, ValueError, TypeError) as exc:
             raise BotConfigError(str(exc)) from exc
@@ -114,11 +101,56 @@ class BotRuntimeMixin:
     def _run_feature(self, feature):
         return bool(self.host._start_bot_feature(feature, self.config))
 
+    def _run_gather_team(self, team):
+        return bool(self.host._start_bot_gather_team(int(team), self.config))
+
     def _stop_feature(self):
         self.host._stop_engine()
         return True
 
+    def _start_continuous_gather(self, *, save_first=True):
+        if save_first and not self._save_from_ui():
+            return False
+        engine = getattr(self.host, "engine", None)
+        if engine is not None and engine.is_running:
+            messagebox.showwarning(
+                "Automation busy",
+                "Stop the current clicking automation before starting Auto Gather.",
+                parent=self,
+            )
+            return False
+        self.team_monitor.start()
+        self.continuous_gather.start()
+        self._append_log("Continuous Auto Gather started; reading Team 1/2/3 state.")
+        return True
+
+    def _stop_continuous_gather(self):
+        was_active = self.continuous_gather.status.active
+        self.continuous_gather.stop()
+        engine = getattr(self.host, "engine", None)
+        if (
+            engine is not None
+            and engine.is_running
+            and getattr(self.host, "_bot_engine_feature", None) == FEATURE_GATHER
+            and getattr(self.host, "_bot_gather_team", None) is not None
+        ):
+            self.host._stop_engine()
+        self._continuous_gather_engine = None
+        self.team_monitor.stop()
+        if was_active:
+            self._append_log("Continuous Auto Gather stopped.")
+        return True
+
     def _run_feature_direct(self, feature):
+        if feature == FEATURE_GATHER:
+            return self._start_continuous_gather(save_first=True)
+        if self.continuous_gather.status.active:
+            messagebox.showwarning(
+                "Auto Gather running",
+                "Stop continuous Auto Gather before starting another clicking automation directly.",
+                parent=self,
+            )
+            return False
         if not self._save_from_ui():
             return False
         if self.controller.run_feature(feature):
@@ -138,17 +170,38 @@ class BotRuntimeMixin:
         if save_first and not self._save_from_ui():
             return
 
+        # Rally is itself a continuous screen-driving scenario. Arbitrarily
+        # stopping it when a Gather timer expires could leave the game on a
+        # rally/attack transition screen, so do not fake preemption. Preserve
+        # the mature Rally behavior until a separately-tested safe handoff is
+        # designed.
+        if self.config.gather.enabled and self.config.rally.enabled:
+            messagebox.showwarning(
+                "Choose Rally or Auto Gather for this test",
+                "Continuous Rally and continuous Auto Gather cannot safely share the mouse yet. "
+                "Disable one of them before Start Bot. Auto Gather will never interrupt Rally.",
+                parent=self,
+            )
+            return
+
+        gather_active = False
+        if self.config.gather.enabled:
+            gather_active = self._start_continuous_gather(save_first=False)
+            if not gather_active:
+                return
+
         requested_clicking_features = self.controller.enabled_features()
         alerts = self.config.alerts.enabled and self._start_alerts(save_first=False)
         active = self.controller.start() if requested_clicking_features else False
 
         if active:
             self._append_log(self.controller.status.last_message)
+        if gather_active:
+            self._append_log("Auto Gather will wait while finite Position tasks own the mouse.")
+        if active or gather_active:
             return
 
         if requested_clicking_features:
-            # Do not hide a requested automation failure merely because passive
-            # alerts happened to start successfully in parallel.
             message = self.controller.status.last_message
             self._append_log(message)
             if alerts:
@@ -171,9 +224,64 @@ class BotRuntimeMixin:
         )
 
     def _stop_bot(self):
+        self._stop_continuous_gather()
         self.controller.stop()
         self._stop_alerts()
         self._append_log("Bot stop requested.")
+
+    def _poll_continuous_gather(self):
+        """Bridge the read-only tracker to one exact-team engine attempt at a time."""
+
+        try:
+            service = self.continuous_gather
+            engine = getattr(self.host, "engine", None)
+
+            # Finish a previously-started selected-team attempt before choosing
+            # anything else. record_success=1 is the only success proof; any
+            # other stop (including F12) pauses fail-closed.
+            tracked_engine = self._continuous_gather_engine
+            if (
+                service.status.in_flight_team is not None
+                and tracked_engine is not None
+                and not tracked_engine.is_running
+            ):
+                gather_controller = getattr(tracked_engine, "_gather_controller", None)
+                successful = int(
+                    getattr(gather_controller, "successful_dispatches", 0) or 0
+                )
+                previous = service.status.last_message
+                service.complete_attempt(success=successful >= 1)
+                self._continuous_gather_engine = None
+                if service.status.last_message != previous:
+                    self._append_log(service.status.last_message)
+                if not service.status.active:
+                    self.team_monitor.stop()
+
+            if service.status.active and service.status.in_flight_team is None:
+                engine = getattr(self.host, "engine", None)
+                running = bool(engine is not None and engine.is_running)
+                # A finite BotController session owns the input between its
+                # stages as well; do not slip a Gather attempt into the tiny gap
+                # after Development stops but before Science starts.
+                input_busy = bool(
+                    running
+                    or self.controller.status.session_active
+                    or self.controller.status.active_feature is not None
+                )
+                previous = service.status.last_message
+                started = service.try_start_next(input_engine_busy=input_busy)
+                if started:
+                    self._continuous_gather_engine = getattr(self.host, "engine", None)
+                    self._append_log(service.status.last_message)
+                elif service.status.last_message != previous:
+                    self._append_log(service.status.last_message)
+        except (AttributeError, RuntimeError, tk.TclError, ValueError) as exc:
+            self.continuous_gather.stop(
+                f"Auto Gather paused after runtime error: {type(exc).__name__}: {exc}"
+            )
+            self.team_monitor.stop()
+            self._append_log(self.continuous_gather.status.last_message)
+        self.after(500, self._poll_continuous_gather)
 
     # ---- alerts ------------------------------------------------------------
     def _show_alert_setup(self):
@@ -200,9 +308,7 @@ class BotRuntimeMixin:
             if watcher is not None and watcher.is_alive():
                 watcher.templates_changed()
         frame.target_window_var.set(self.config.target_window_title)
-        volume = (
-            self.config.alerts.volume_percent if self.config.alerts.sound_enabled else 0
-        )
+        volume = self.config.alerts.volume_percent if self.config.alerts.sound_enabled else 0
         frame.volume_var.set(volume)
         frame._save_settings()
 
@@ -242,6 +348,8 @@ class BotRuntimeMixin:
                 controller=self.controller,
                 engine=engine,
                 alerts_running=alerts,
+                team_tracker=self.team_tracker,
+                continuous_gather=self.continuous_gather,
             )
             self.dashboard_status_var.set(snapshot.overall)
             self.active_task_var.set(snapshot.current_task)
@@ -252,14 +360,16 @@ class BotRuntimeMixin:
             self.gather_status_var.set(snapshot.gather)
             self.positions_status_var.set(snapshot.positions)
             self.schedule_status_var.set(snapshot.schedule)
+            for team, text in snapshot.team_status.items():
+                var = self.gather_team_status_vars.get(team)
+                if var is not None:
+                    var.set(text)
         except tk.TclError:
             return
         self.after(500, self._poll_status)
 
     def _poll_schedule(self):
         try:
-            # Scheduling uses only the last validated/saved config. Typing into
-            # a field should not silently change a live schedule before Save.
             schedule = self.config.schedule
             if schedule.enabled:
                 now = datetime.now()
