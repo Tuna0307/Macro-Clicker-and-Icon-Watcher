@@ -52,6 +52,34 @@ def test_controller_advances_through_enabled_bot_cycle():
     assert controller.status.last_message == "Bot cycle completed"
 
 
+def test_bot_cycle_stops_if_a_queued_feature_cannot_start():
+    config = BotConfig()
+    config.rally.enabled = False
+    config.positions.development_enabled = True
+    config.gather.enabled = True
+    attempted = []
+
+    def runner(feature):
+        attempted.append(feature)
+        return feature != "gather"
+
+    controller = BotController(lambda: config, runner, lambda: True)
+
+    assert controller.start() is True
+    assert attempted == ["development"]
+
+    controller.engine_stopped()
+    assert attempted == ["development", "gather"]
+    assert controller.status.active_feature is None
+    assert controller.status.session_active is False
+    assert controller.status.last_message == "Bot cycle stopped: could not start Gather"
+
+    # A later stop notification must not advance to anything that was queued
+    # after the failed stage.
+    controller.engine_stopped()
+    assert attempted == ["development", "gather"]
+
+
 def test_direct_run_stays_one_off_and_serializes_input():
     config = BotConfig()
     started = []
