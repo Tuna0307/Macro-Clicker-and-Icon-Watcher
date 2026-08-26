@@ -44,6 +44,7 @@ class GatherConfig:
 class PositionsConfig:
     development_enabled: bool = False
     science_enabled: bool = False
+    retry_automatically: bool = True
     development_scenario: str = "Apply Development Position"
     science_scenario: str = "Apply Science Position"
 
@@ -255,6 +256,10 @@ def bot_config_from_dict(data: Any) -> BotConfig:
         ),
         science_enabled=_bool(
             positions_data.get("science_enabled"), defaults.positions.science_enabled
+        ),
+        retry_automatically=_bool(
+            positions_data.get("retry_automatically"),
+            defaults.positions.retry_automatically,
         ),
         development_scenario=_text(
             positions_data.get("development_scenario"),
