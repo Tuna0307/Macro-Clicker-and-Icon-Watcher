@@ -1,29 +1,90 @@
 # AI Development Context
 
-This file is intended for AI coding assistants and future development sessions.
-Read it before making architectural changes.
+Read this file before making architectural or behavior changes.
 
-Also read these focused guides when relevant:
+Also read the focused guides that match the task:
 
+- `docs/BOT_UI.md` — primary product/control-layer architecture and normal-user settings rules.
 - `docs/ARCHITECTURE.md` — module ownership and runtime boundaries.
-- `docs/MAINTAINABILITY.md` — what is protected, what is safe cleanup, and when refactoring is justified.
-- `docs/TESTING.md` — automated checks, screenshot fixtures, headless limitations, and live verification.
+- `docs/MAINTAINABILITY.md` — protected behavior, safe cleanup, and refactor triggers.
+- `docs/TESTING.md` — automated checks, screenshot fixtures, Windows/headless limits, and live verification.
+- `docs/AUTO_GATHER.md` — Auto Gather behavior and recovery contract.
 
-## Project direction
+## Current product direction
 
-This repository originally started as a more general-purpose macro builder, but that is **not the current design goal**.
+This repository began as a more generic macro builder. That is no longer the product direction.
 
-The project is now a specialized Windows visual-automation and screen-monitoring application built around the workflows, templates, timing, and UI states already present in this repository.
+The project is now a **specialized Windows visual-automation bot with passive screen monitoring**. The normal user should configure what they want the bot to do without needing to understand Scenarios, Steps, Conditions, Actions, template regions, OCR crops, or recovery wiring.
 
-Do **not** spend development effort trying to make existing specialized behavior generic for unrelated applications. New work should preserve and extend the current workflows unless the user explicitly asks for a redesign.
+The public-facing description should remain neutral. Do not unnecessarily rename the project/docs to explicitly identify the external application being automated unless the user asks.
 
-The public-facing project description should remain neutral. Do not rename the project, modules, or documentation to explicitly identify the external application being automated unless the user asks for that change.
+## Primary UI vs backend
 
-## Two main runtime systems
+The normal application starts through `macro_clicker/bot_app.py`.
 
-The application has two distinct high-level functions that share the same vision foundation.
+Normal-user flow:
 
-### 1. Active automation
+```text
+Bot UI
+  -> BotConfig
+      -> feature adapter / BotController
+          -> runtime clone of proven Scenario
+              -> MacroEngine
+                  -> detection / OCR / safe input
+```
+
+The original Macro Builder is **not deleted**. `BotApp` still constructs it and keeps it as hidden **Advanced** tooling for scenario/template debugging. Detailed passive-alert configuration remains hidden **Alert Setup** tooling.
+
+Do not make normal users open Advanced merely to change ordinary behavior such as a Rally level or Gather march count.
+
+## Bot layer ownership
+
+`macro_clicker/bot/` is the normal-user control layer.
+
+- `config.py` — validated/persisted user-facing bot settings.
+- `adapters.py` — translate BotConfig into deep-copied runtime Scenarios.
+- `controller.py` — serialize active clicking automations; one MacroEngine owns input at a time.
+- `ui.py` — BotFrame shell.
+- `ui_pages.py` — Dashboard/Rally/Gather/Positions/Alerts/Schedule/Logs/Settings controls.
+- `ui_runtime.py` — save/apply settings, start/stop features/alerts, schedule polling, dashboard/log state.
+- `bot_app.py` — application shell layering Bot UI over the mature `App` backend.
+
+Normal BotConfig is written to the per-user runtime directory as `bot_config.json`. It must not rewrite project-owned scenario JSON just because a user changed a setting.
+
+### Adding a normal-user setting
+
+Use this pattern:
+
+1. Add a validated field to BotConfig with a safe default matching current working behavior.
+2. Add the simple UI control.
+3. Read/write it through Bot UI runtime code.
+4. Translate it in the appropriate adapter to a cloned runtime Scenario/backend object.
+5. Add a focused regression test proving the setting reaches the intended runtime behavior.
+
+Do **not** expose internal condition/action fields directly unless the user has a concrete reason to control them.
+
+## BotController / input ownership
+
+Only one active clicking automation may own mouse/keyboard input at a time.
+
+Start Bot currently serializes enabled finite jobs before continuous Rally:
+
+```text
+Development Position
+  -> Science Position
+      -> Auto Gather
+          -> Gold Mob Rally
+```
+
+Disabled features are skipped. Direct Run buttons are one-off runs rather than queued bot sessions.
+
+Stop Bot must cancel the current automation and pending queue.
+
+Passive Icon Alerts may run alongside the active MacroEngine because they observe rather than send macro input.
+
+Do not implement fake Rally/Gather concurrency by letting independent scenarios compete for clicks. If future requirements need interruption/time-slicing, first add explicit cooperative yield/known-state boundaries and then build scheduling around them.
+
+## Active automation backend
 
 Main runtime:
 
@@ -32,68 +93,13 @@ Main runtime:
 Supporting modules include:
 
 - `macro_clicker/rally_matching.py`
+- `macro_clicker/resource_gathering.py`
 - `macro_clicker/level_ocr.py`
 - `macro_clicker/models.py`
 - `macro_clicker/window_locator.py`
 - `macro_clicker/diagnostics.py`
 
-Automation evaluates visual conditions and then performs actions such as clicks, keys, waits, row-based target selection, OCR-assisted decisions, workflow transitions, retries, and recovery.
-
-Important bundled automation currently includes:
-
-- one-team and two-team rally workflows;
-- same-row reference/target matching;
-- level OCR and level filtering;
-- Team 1 / Team 3 availability and selection behavior;
-- rally entry, joining, confirmation, and recovery/back-out states;
-- Development Position application workflow;
-- Science Position application workflow;
-- one-time scheduled starts and configurable waits.
-
-The rally automation is mature and currently works well. Treat it as protected behavior. Do not rewrite or simplify it merely because some conditions, waits, step names, guards, retries, or recovery actions look redundant in isolation.
-
-### 2. Passive Icon Alerts
-
-Main runtime:
-
-- `macro_clicker/alert_watcher.py`
-
-Supporting modules include:
-
-- `macro_clicker/alert_settings.py`
-- `macro_clicker/alert_ui.py`
-
-Icon Alerts continuously scan selected screen regions for configured image or text templates and notify the user rather than taking automation actions.
-
-Examples include detecting saved event icons such as Dig-related images and producing a sound/popup alert.
-
-This system has its own confirmation, cooldown, activation, popup, and sound policy. Do not route passive alerts through the macro action engine unless the user explicitly requests that behavior.
-
-## Shared vision foundation
-
-Main module:
-
-- `macro_clicker/detection_core.py`
-
-Both automation and Icon Alerts use this shared implementation for reusable screen perception.
-
-It owns behavior such as:
-
-- DPI-aware screen capture;
-- physical monitor handling;
-- target-window and monitor-relative regions;
-- template scaling for resolution changes;
-- independent X/Y scaling when aspect ratio changes;
-- static, animated/rotating, grayscale, and colored-text matching;
-- low-variance protection;
-- match scoring and candidate suppression;
-- cancellation-aware matching.
-
-Reusable detection improvements belong here when both runtime systems can benefit from them. Workflow policy should remain in the automation or alert layer.
-
-## Automation model
-
-The automation model is:
+The backend model remains:
 
 ```text
 Scenario
@@ -102,169 +108,198 @@ Scenario
       -> Actions
 ```
 
-Steps are polled repeatedly. Conditions determine whether a step is ready. Actions then perform work and may enable/disable other steps.
+Steps are polled repeatedly. Existing workflows use enabled/disabled Step state as practical state machines. Those transitions can encode important sequencing and recovery behavior; do not treat them as cosmetic.
 
-The enabled-step mechanism is used by existing workflows as a practical state machine. Do not assume every enabled/disabled transition is merely UI configuration; some transitions are part of recovery and sequencing logic.
-
-Current action types include:
+Specialized action types are acceptable. Current behavior includes actions such as:
 
 - `click`
 - `click_matching_row`
 - `select_rally_team`
+- `gather_control`
 - `key`
 - `wait`
 - `set_step`
 - `stop`
 
-Some action fields and action types are intentionally specialized. It is acceptable for this project to contain specialized automation logic.
+This project does not need to remain generic for unrelated applications.
 
-## Rally workflow notes
+## Rally is protected mature behavior
 
-Rally behavior spans `engine.py`, `rally_matching.py`, scenario JSON, templates, OCR, and tests.
+Rally behavior spans `engine.py`, `rally_matching.py`, OCR, scenario JSON, templates, and focused tests.
 
-Important concepts include:
+Important protected behavior includes:
 
-- identifying desired row anchors;
-- finding available target/slot matches;
-- associating each target with the closest valid vertical row;
-- choosing the configured leftmost/rightmost target;
-- OCR-reading a level associated with a row;
-- applying configured level limits;
-- checking Team 1 and Team 3 availability;
-- selecting the appropriate team according to level and availability;
-- retrying when OCR is unreadable or the visible row changes;
-- preserving pre-entry team availability while the queue screen is temporarily hidden;
-- recovery when there is no valid mob, no usable slot, or no eligible idle team.
+- same-row reference/target association;
+- level OCR and eligibility filtering;
+- Team 1 / Team 3 availability and level-cap logic;
+- team selection behavior;
+- atomic screen snapshots for row matches and OCR when possible;
+- retrying unreadable OCR instead of guessing;
+- revalidating a row after configured pre-click delay;
+- carrying relevant team state across transitions;
+- guarded transition time after a successful Join click;
+- Back/recovery paths for no valid target/slot/team;
+- target-window and foreground input safety.
 
-### Atomic screenshots
+Do not broadly rewrite or simplify Rally just because the normal Bot UI now hides this complexity.
 
-For level-filtered row selection, reference matches, target matches, and OCR crops are intentionally based on one atomic screenshot when possible.
+### Atomic Rally snapshot
 
-This prevents decisions from mixing information from different moments while the list is updating.
+For level-filtered row decisions, row anchors, candidate targets, and OCR crops intentionally derive from one atomic screenshot whenever possible.
 
-Do not replace this with multiple independent captures without understanding the race condition it solves.
-
-### Transition guard
-
-`MacroEngine` contains a short rally join transition guard.
-
-After a valid row is clicked, a visible Join/slot target can disappear before the next screen is fully open. During that interval, normal recovery logic could otherwise misinterpret the transition as a failed join and press Back.
-
-The guard and the associated blocked/recovery steps are intentional behavior.
+This avoids mixing different moments while a live list changes. Do not replace it with multiple independent captures without understanding the race condition.
 
 ### Team selection
 
-The smart two-team flow uses Team 1 and Team 3 level limits and availability checks.
+The two-team workflow uses Team 1 and Team 3 limits/availability.
 
-The behavior is not simply "always use one team first." Lower eligible levels can prefer Team 3 when available, with Team 1 as fallback, while higher levels may require Team 1 according to configured limits.
+Lower eligible mobs may prefer Team 3 when available, with Team 1 as fallback. Higher mobs may require Team 1 according to configured caps.
 
-Tests in `tests/test_rally_team_selection.py` protect this behavior.
+BotConfig currently exposes user-facing limits, but the adapter only changes supported fields on a runtime copy; it does not reimplement the selection algorithm.
 
-## Position application workflows
+## Auto Gather behavior contract
 
-Bundled scenarios currently include:
+Current active scenario:
+
+- `scenarios/Gather Gold.json`
+
+State helper:
+
+- `macro_clicker/resource_gathering.py`
+
+Normal user settings are applied by the Gather adapter; the proven state machine remains underneath.
+
+Current behavior:
+
+- resource: Gold;
+- starts at configured level (default 12);
+- if not found, lowers one level and searches again;
+- there is no macro-defined minimum cutoff: continue until found; at the game's own minimum, repeated minus clicks leave the level unchanged and search continues;
+- default target: 3 verified successful gathering dispatches;
+- free march path: the game auto-selects an available march, then macro clicks Dispatch;
+- all-marches-busy path: explicitly replace marches in configured order (default `3 -> 2 -> 1`) before Dispatch;
+- replacement pointer advances only after verified successful replacement;
+- resource-taken warning: click Cancel and retry the same logical dispatch/replacement without consuming success count/pointer;
+- stop after configured verified success count.
+
+Do not recreate the old combinatorial `S1/P3`, `S2/P2`, etc. Step duplication. `GatherController` owns the small persistent state.
+
+`templates/GatherDispatchButton.jpg` is intentionally a tight crop of stable Dispatch-label pixels. Do not recapture it with mouse-cursor or changing timer pixels.
+
+## Position workflows
+
+Bundled supported scenarios include:
 
 - `scenarios/Apply Development Position.json`
 - `scenarios/Apply Science Position.json`
 
-Treat these as real specialized workflows, not sample/demo scenarios that may be freely removed or renamed.
+These are real supported workflows, not demos. The Bot UI exposes simple enable/run controls while the backend scenarios remain intact.
 
-## Alert workflow notes
+## Passive Icon Alerts
 
-Icon Alerts are passive observation.
+Main runtime:
 
-Typical flow:
+- `macro_clicker/alert_watcher.py`
 
-```text
-capture
-  -> detect template
-  -> confirm if required
-  -> apply cooldown
-  -> sound / popup
-```
+Supporting modules:
 
-Only templates enabled for detection should be scanned.
+- `macro_clicker/alert_settings.py`
+- `macro_clicker/alert_ui.py`
 
-Alert scanning and macro automation may run under different performance and confirmation requirements even though they share `detection_core.py`.
+Icon Alerts continuously scan configured regions/templates and notify with sound/popup. They do not execute macro actions.
+
+Examples include Dig-related templates and Secret Task detection.
+
+The simple Bot Alerts page may group common templates, but detailed template threshold/region/capture work remains in hidden Alert Setup.
+
+Do not route passive alerts through active macro input unless the user explicitly asks for that behavior.
+
+## Shared detection foundation
+
+Main module:
+
+- `macro_clicker/detection_core.py`
+
+Both active automation and passive alerts use shared perception including:
+
+- DPI-aware BGR capture;
+- physical monitor handling;
+- target-window/monitor-relative regions;
+- exact X/Y resolution scaling;
+- template resizing/rotations;
+- static/animated/grayscale/colored-text matching;
+- low-variance safety checks;
+- match scoring/candidate suppression;
+- cancellation-aware matching.
+
+Rule:
+
+- reusable perception -> `detection_core.py`;
+- active workflow decisions -> engine/specialized automation modules;
+- user-facing configuration translation -> `macro_clicker/bot/`;
+- passive alert policy -> alert subsystem.
 
 ## Safety invariants
 
-The current code deliberately fails closed in many uncertain situations. Preserve that philosophy.
+Preserve fail-closed behavior.
 
-Important safety behavior includes:
+Important invariants include:
 
-- do not click when target-window geometry is unavailable;
-- do not click outside the target window when a target window is configured;
-- do not send click/key actions to the wrong foreground window;
-- recheck target-window geometry close to input dispatch;
+- do not click when required target-window geometry is unavailable;
+- do not click outside the configured target window;
+- do not send click/key input when the target window is not foreground;
+- recheck window geometry close to input dispatch;
 - preserve `pyautogui.FAILSAFE`;
-- preserve the required scenario kill switch;
-- check stop requests during waits, captures, matching, OCR, and action execution;
-- treat unreadable OCR as unknown rather than inventing a value;
-- retry uncertain automation states rather than guessing when possible.
+- preserve scenario kill switch behavior;
+- check stop requests during waits, capture, matching, OCR, and actions;
+- treat unreadable OCR as unknown instead of inventing a value;
+- retry/stop uncertain states rather than guessing.
 
-A change that makes the automation faster but removes these fail-closed checks should be treated as a regression unless the user explicitly approves the tradeoff.
+A speed improvement that removes these checks is a regression unless explicitly approved.
 
 ## Diagnostics
 
-Automation diagnostics exist because many failures are timing- or image-dependent and cannot be understood from source code alone.
+Automation diagnostics exist because many failures are timing/image-dependent.
 
-`macro_clicker/diagnostics.py` provides bounded diagnostic evidence and rotating decision metadata.
+`macro_clicker/diagnostics.py` records bounded evidence such as:
 
-Rally diagnostics can record items such as:
-
-- row/reference matches;
-- target matches;
-- template scores;
-- OCR crops, text, and confidence;
-- configured level limits;
-- team availability/selection decisions;
-- row changes and retry reasons;
+- template/row matches;
+- OCR crops/text/confidence;
+- configured limits;
+- team decisions;
+- row changes/retry reasons;
 - final decision metadata.
 
-Keep expensive screenshot encoding and disk writes away from the timing-critical matching loop whenever possible.
+Keep expensive screenshot encoding/disk writes away from timing-critical matching where possible.
 
-## Data and persistence boundaries
+The Bot Logs page is a normal-user view of runtime log messages, not a replacement for detailed diagnostics.
 
-Project-owned configuration/assets:
+## Persistence boundaries
+
+Project-owned implementation/config/assets:
 
 - `scenarios/`
 - `templates/`
 - `alerts/settings.json`
 - `alerts/templates/`
 
-Use `macro_clicker/project_paths.py` for project-owned paths.
+Use `project_paths.py` for those paths.
 
-Writable runtime state such as logs, diagnostics, locks, and temporary state belongs under the per-user data directory exposed by `macro_clicker/runtime_paths.py`.
+Writable per-user state:
 
-Loading configuration should not silently rewrite it. Persistence should happen only through an intentional save/update path.
+- `bot_config.json`
+- logs/diagnostics;
+- locks;
+- UI preferences;
+- other runtime state.
 
-## When adding a new automation feature
+Use `runtime_paths.py` for writable state.
 
-Prefer the following approach:
+Loading project configuration should not silently rewrite it. Normal Bot settings persistence is separate from scenario/template persistence.
 
-1. Identify the visual state(s) required to make a decision.
-2. Reuse the shared capture/matching primitives where possible.
-3. Keep feature-specific decision policy separate from passive alert behavior.
-4. Decide explicitly what happens when detection is uncertain.
-5. Add retry/recovery paths before assuming the happy path is permanent.
-6. Add focused regression tests for any logic that could send input to the wrong place or choose the wrong target.
-7. Avoid modifying mature rally behavior unless the new feature actually needs it.
+## Testing and CI
 
-A feature does not need to be reusable by other games/applications to belong in this repository.
-
-## When adding a new alert feature
-
-Prefer:
-
-1. reusable detection in `detection_core.py` when appropriate;
-2. alert-specific confirmation/cooldown policy in the alert subsystem;
-3. passive notification by default;
-4. no macro action unless the user explicitly wants that detection to drive automation.
-
-## Validation before finishing a code change
-
-The repository uses the following checks:
+Before finishing code changes, run/rely on:
 
 ```powershell
 python -m pytest -q
@@ -279,19 +314,27 @@ Current CI policy:
 - **Blocking:** pytest, Ruff lint, scenario/template validation.
 - **Informational:** Ruff formatting, mypy.
 
-Formatting/type-hint feedback should still be reviewed, but it should not be treated as proof that a working runtime path is broken. See `docs/TESTING.md` for the testing layers and when screenshots/live verification are appropriate.
+For Bot changes, also protect focused tests for:
 
-For changes to stored scenarios or models, validate both the Python code and scenario/template integrity.
+- BotConfig persistence/validation;
+- adapter translation without mutating source scenarios;
+- BotController serialization/queueing;
+- BotApp UI shell/hidden Advanced tools;
+- existing Rally/Gather/Alert regressions.
+
+Windows GitHub Actions is appropriate for the full automated suite. Live game timing/click behavior still requires supervised testing on the actual target application when runtime input flow changes.
 
 ## Guidance for AI-generated changes
 
-Before editing code:
+Before editing:
 
-- inspect the existing implementation and focused tests;
-- assume unusual guards/retries may encode a real previously observed failure mode;
-- prefer small, behavior-preserving changes;
-- do not broadly refactor a working subsystem just to make it look more generic or theoretically cleaner;
-- update tests when intentionally changing behavior;
-- leave a descriptive commit message explaining both **what changed** and **why** so future AI sessions can reconstruct the development history.
+1. Read the relevant docs/tests.
+2. Identify whether the task is **normal-user product layer** or **backend behavior**.
+3. Preserve current working behavior unless the request explicitly changes it.
+4. Prefer small, test-backed changes.
+5. Do not generalize specialized logic for hypothetical unrelated applications.
+6. Do not expose backend complexity in the Bot UI without a user-facing reason.
+7. Update tests/docs when changing contracts.
+8. Leave a descriptive commit message explaining **what changed, why, and what was intentionally preserved**.
 
-If a request is ambiguous, preserve existing working behavior rather than inventing a new interpretation.
+If a requirement is ambiguous, preserve proven behavior rather than inventing a risky interpretation.
