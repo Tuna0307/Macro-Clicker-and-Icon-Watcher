@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import patch
 
 from macro_clicker.app import App
@@ -56,3 +57,30 @@ def test_advanced_mode_delegates_to_existing_start_hotkey_registration():
         assert app._register_start_hotkey() is True
 
     inherited.assert_called_once_with(app)
+
+
+def test_bot_mode_suppresses_legacy_scenario_auto_start():
+    app = BotApp.__new__(BotApp)
+    app._advanced_tools_visible = False
+    now = datetime(2026, 8, 26, 12, 0)
+
+    with patch.object(App, "_check_auto_start", autospec=True) as inherited:
+        assert app._check_auto_start(now) is False
+
+    inherited.assert_not_called()
+
+
+def test_advanced_mode_delegates_legacy_scenario_auto_start_check():
+    app = BotApp.__new__(BotApp)
+    app._advanced_tools_visible = True
+    now = datetime(2026, 8, 26, 12, 0)
+
+    with patch.object(
+        App,
+        "_check_auto_start",
+        autospec=True,
+        return_value=True,
+    ) as inherited:
+        assert app._check_auto_start(now) is True
+
+    inherited.assert_called_once_with(app, now)
