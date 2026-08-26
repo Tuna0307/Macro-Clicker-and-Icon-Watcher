@@ -93,7 +93,9 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
 
     @staticmethod
     def _spin(card, row, label, variable, low, high, increment=1):
-        ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=6)
+        ttk.Label(card, text=label, style="Surface.TLabel").grid(
+            row=row, column=0, sticky="w", pady=6
+        )
         ttk.Spinbox(
             card,
             textvariable=variable,
