@@ -1,5 +1,6 @@
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -52,6 +53,14 @@ def _harness():
     return runtime
 
 
+def _successful_controller():
+    return SimpleNamespace(
+        status=SimpleNamespace(last_message="Running Rally"),
+        enabled_features=lambda: ["rally"],
+        start=lambda: True,
+    )
+
+
 def test_collect_config_returns_pending_copy_without_mutating_live_config():
     runtime = _harness()
     original = deepcopy(runtime.config)
@@ -82,10 +91,7 @@ def test_scheduled_start_can_use_saved_config_without_resaving_ui():
     logs = []
     runtime._save_from_ui = lambda: save_calls.append(True) or True
     runtime._append_log = logs.append
-    runtime.controller = SimpleNamespace(
-        status=SimpleNamespace(last_message="Running Rally"),
-        start=lambda: True,
-    )
+    runtime.controller = _successful_controller()
 
     runtime._start_bot(save_first=False)
 
@@ -98,11 +104,36 @@ def test_manual_start_still_saves_current_ui_first():
     save_calls = []
     runtime._save_from_ui = lambda: save_calls.append(True) or True
     runtime._append_log = lambda _message: None
-    runtime.controller = SimpleNamespace(
-        status=SimpleNamespace(last_message="Running Rally"),
-        start=lambda: True,
-    )
+    runtime.controller = _successful_controller()
 
     runtime._start_bot()
 
     assert save_calls == [True]
+
+
+def test_requested_automation_failure_is_not_hidden_by_running_alerts():
+    runtime = _harness()
+    runtime.config.alerts.enabled = True
+    logs = []
+    runtime._append_log = logs.append
+    runtime._start_alerts = lambda save_first=False: True
+    runtime.controller = SimpleNamespace(
+        status=SimpleNamespace(
+            last_message="Bot cycle stopped: could not start Gather"
+        ),
+        enabled_features=lambda: ["gather"],
+        start=lambda: False,
+    )
+
+    with patch("macro_clicker.bot.ui_runtime.messagebox.showwarning") as warning:
+        runtime._start_bot(save_first=False)
+
+    assert logs == [
+        "Bot cycle stopped: could not start Gather",
+        "Passive alerts are still running.",
+    ]
+    warning.assert_called_once_with(
+        "Bot automation did not start",
+        "Bot cycle stopped: could not start Gather",
+        parent=runtime,
+    )
