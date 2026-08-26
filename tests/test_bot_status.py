@@ -1,14 +1,14 @@
 from types import SimpleNamespace
 
 from macro_clicker.bot.config import BotConfig
+from macro_clicker.bot.continuous_gather import ContinuousGatherService
 from macro_clicker.bot.controller import (
     FEATURE_DEVELOPMENT,
-    FEATURE_GATHER,
     FEATURE_RALLY,
     BotController,
 )
 from macro_clicker.bot.status import build_dashboard_snapshot
-from macro_clicker.resource_gathering import GatherController
+from macro_clicker.bot.team_state import TeamActivity, TeamObservation, TeamStateTracker
 
 
 def _controller(config):
@@ -26,35 +26,74 @@ def test_dashboard_snapshot_shows_next_queued_task():
     snapshot = build_dashboard_snapshot(config=config, controller=controller)
 
     assert snapshot.current_task == "Development Position"
-    assert snapshot.next_task == "Auto Gather"
+    # Continuous Gather is no longer a queued one-shot stage. Rally is the next
+    # queued clicking task; the Gather service reports separately.
+    assert snapshot.next_task == "Gold Mob Rally"
     assert snapshot.overall == "● Running — Development Position"
 
 
-def test_dashboard_snapshot_reports_live_gather_progress_and_pointer():
+def test_dashboard_snapshot_reports_continuous_gather_team_state_and_timers():
     config = BotConfig()
     config.gather.enabled = True
-    config.gather.march_count = 3
-    controller = _controller(config)
-    controller.status.active_feature = FEATURE_GATHER
-    controller.status.running = True
-
-    gather = GatherController()
-    gather.record_success(target_count=3, replacement_order=[3, 2, 1])
-    engine = SimpleNamespace(
-        _gather_controller=gather,
-        _last_fired={"Gather - Search unavailable": 12.0},
+    config.rally.enabled = False
+    tracker = TeamStateTracker()
+    tracker.update(
+        (
+            TeamObservation(1, TeamActivity.GATHERING, remaining_seconds=3600),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.RETURNING, remaining_seconds=15),
+        ),
+        sidebar_visible=True,
     )
+    service = ContinuousGatherService(lambda: config, tracker, lambda _team: True)
+    assert service.start() is True
+    controller = _controller(config)
+
+    snapshot = build_dashboard_snapshot(
+        config=config,
+        controller=controller,
+        team_tracker=tracker,
+        continuous_gather=service,
+    )
+
+    assert snapshot.current_task == "Auto Gather"
+    assert snapshot.overall == "● Running — Auto Gather"
+    assert snapshot.gather == "Watching — available: Team 2"
+    assert snapshot.team_status[1].startswith("Gathering — 01:00:")
+    assert snapshot.team_status[2] == "Idle"
+    assert snapshot.team_status[3].startswith("Returning — 00:00:")
+    assert snapshot.last_status == "Watching team status for an available team"
+
+
+def test_dashboard_snapshot_reports_exact_team_while_dispatching():
+    config = BotConfig()
+    config.gather.enabled = True
+    config.rally.enabled = False
+    tracker = TeamStateTracker()
+    tracker.update(
+        (
+            TeamObservation(1, TeamActivity.GATHERING, remaining_seconds=100),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.GATHERING, remaining_seconds=200),
+        ),
+        sidebar_visible=True,
+    )
+    service = ContinuousGatherService(lambda: config, tracker, lambda _team: True)
+    service.start()
+    service.status.in_flight_team = 2
+    engine = SimpleNamespace(_last_fired={"Gather - Dispatch Ready": 12.0})
+    controller = _controller(config)
 
     snapshot = build_dashboard_snapshot(
         config=config,
         controller=controller,
         engine=engine,
+        team_tracker=tracker,
+        continuous_gather=service,
     )
 
-    assert "1/3 successful" in snapshot.gather
-    assert "lowering level and searching again" in snapshot.gather
-    assert "March 3" in snapshot.gather
-    assert snapshot.last_status == "Lowered resource level and searched again"
+    assert snapshot.overall == "● Running — Auto Gather — Team 2"
+    assert snapshot.gather == "Running — Team 2 — selecting team and dispatching"
 
 
 def test_dashboard_snapshot_reports_selected_rally_team_and_level():
