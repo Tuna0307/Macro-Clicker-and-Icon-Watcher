@@ -20,25 +20,39 @@ class BotPagesMixin:
         self.active_task_var = tk.StringVar(value="None")
         self.last_action_var = tk.StringVar(value="Ready")
         self.alert_status_var = tk.StringVar(value="Idle")
-        ttk.Label(card, textvariable=self.dashboard_status_var).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10)
-        )
+        ttk.Label(
+            card,
+            textvariable=self.dashboard_status_var,
+            style="Section.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         rows = (
             ("Current task", self.active_task_var),
             ("Last status", self.last_action_var),
             ("Alerts", self.alert_status_var),
         )
         for row, (label, var) in enumerate(rows, start=1):
-            ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4)
-            ttk.Label(card, textvariable=var).grid(
-                row=row, column=1, sticky="w", padx=(12, 0), pady=4
+            ttk.Label(card, text=label, style="Surface.TLabel").grid(
+                row=row, column=0, sticky="w", pady=4
             )
-        self._button_row(card, 4, ("Start Bot", self._start_bot), ("Stop", self._stop_bot))
+            ttk.Label(card, textvariable=var, style="Surface.TLabel").grid(
+                row=row, column=1, sticky="w", padx=(16, 0), pady=4
+            )
+        self._button_row(
+            card,
+            4,
+            ("Start Bot", self._start_bot, "primary"),
+            ("Stop", self._stop_bot, "danger"),
+        )
 
         quick = self._card("Dashboard", "Quick Actions", 1)
+        ttk.Label(
+            quick,
+            text="Run one task immediately without changing which tasks are enabled for a full Bot cycle.",
+            style="Surface.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
         self._button_row(
             quick,
-            0,
+            1,
             ("Run Rally", lambda: self._run_feature_direct(FEATURE_RALLY)),
             ("Run Gather", lambda: self._run_feature_direct(FEATURE_GATHER)),
             ("Development", lambda: self._run_feature_direct(FEATURE_DEVELOPMENT)),
@@ -66,12 +80,13 @@ class BotPagesMixin:
         ttk.Label(
             card,
             text="Team 3 remains preferred when eligible; Team 1 is the fallback.",
+            style="Muted.TLabel",
         ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self._button_row(
             card,
             7,
             ("Save", self._save_from_ui),
-            ("Run Rally", lambda: self._run_feature_direct(FEATURE_RALLY)),
+            ("Run Rally", lambda: self._run_feature_direct(FEATURE_RALLY), "primary"),
         )
 
     def _build_gather(self):
@@ -86,31 +101,36 @@ class BotPagesMixin:
             text="Enable Auto Gather",
             variable=self.gather_enabled_var,
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
-        ttk.Label(card, text="Resource").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(card, text="Resource", style="Surface.TLabel").grid(
+            row=1, column=0, sticky="w", pady=5
+        )
         ttk.Combobox(
             card,
             textvariable=self.resource_var,
             values=("Gold",),
             state="readonly",
             width=12,
-        ).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=5)
+        ).grid(row=1, column=1, sticky="w", padx=(16, 0), pady=5)
         self._spin(card, 2, "Starting level", self.gather_start_level_var, 1, 99)
         self._spin(card, 3, "Marches to send", self.gather_marches_var, 1, 3)
-        ttk.Label(card, text="Busy-march replacement order").grid(
-            row=4, column=0, sticky="w", pady=5
-        )
+        ttk.Label(
+            card,
+            text="Busy-march replacement order",
+            style="Surface.TLabel",
+        ).grid(row=4, column=0, sticky="w", pady=5)
         ttk.Entry(card, textvariable=self.replacement_order_var, width=18).grid(
-            row=4, column=1, sticky="w", padx=(12, 0), pady=5
+            row=4, column=1, sticky="w", padx=(16, 0), pady=5
         )
         ttk.Label(
             card,
             text="Search behavior: keep lowering and re-searching until found.",
+            style="Muted.TLabel",
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self._button_row(
             card,
             6,
             ("Save", self._save_from_ui),
-            ("Run Gather", lambda: self._run_feature_direct(FEATURE_GATHER)),
+            ("Run Gather", lambda: self._run_feature_direct(FEATURE_GATHER), "primary"),
         )
 
     def _build_positions(self):
@@ -125,8 +145,9 @@ class BotPagesMixin:
         ttk.Button(
             card,
             text="Run Development",
+            style="Primary.TButton",
             command=lambda: self._run_feature_direct(FEATURE_DEVELOPMENT),
-        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ).grid(row=0, column=1, sticky="w", padx=(16, 0))
         ttk.Checkbutton(
             card,
             text="Enable Science Position",
@@ -135,8 +156,9 @@ class BotPagesMixin:
         ttk.Button(
             card,
             text="Run Science",
+            style="Primary.TButton",
             command=lambda: self._run_feature_direct(FEATURE_SCIENCE),
-        ).grid(row=1, column=1, sticky="w", padx=(12, 0))
+        ).grid(row=1, column=1, sticky="w", padx=(16, 0))
         self._button_row(card, 2, ("Save", self._save_from_ui))
 
     def _build_alerts(self):
@@ -161,8 +183,8 @@ class BotPagesMixin:
             card,
             5,
             ("Save", self._save_from_ui),
-            ("Start Alerts", self._start_alerts),
-            ("Stop Alerts", self._stop_alerts),
+            ("Start Alerts", self._start_alerts, "primary"),
+            ("Stop Alerts", self._stop_alerts, "danger"),
             ("Advanced Alert Setup", self._show_alert_setup),
         )
 
@@ -184,11 +206,13 @@ class BotPagesMixin:
             (("Start time", self.schedule_start_var), ("Stop time", self.schedule_stop_var)),
             start=1,
         ):
-            ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=5)
-            ttk.Entry(card, textvariable=var, width=10).grid(
-                row=row, column=1, sticky="w", padx=(12, 0), pady=5
+            ttk.Label(card, text=label, style="Surface.TLabel").grid(
+                row=row, column=0, sticky="w", pady=5
             )
-        days = ttk.Frame(card)
+            ttk.Entry(card, textvariable=var, width=10).grid(
+                row=row, column=1, sticky="w", padx=(16, 0), pady=5
+            )
+        days = ttk.Frame(card, style="Surface.TFrame")
         days.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
         for day, var in self.day_vars.items():
             ttk.Checkbutton(days, text=day, variable=var).pack(
@@ -208,15 +232,16 @@ class BotPagesMixin:
     def _build_settings(self):
         card = self._card("Settings", "General")
         self.target_window_var = tk.StringVar()
-        ttk.Label(card, text="Target window title").grid(
+        ttk.Label(card, text="Target window title", style="Surface.TLabel").grid(
             row=0, column=0, sticky="w", pady=5
         )
         ttk.Entry(card, textvariable=self.target_window_var, width=44).grid(
-            row=0, column=1, sticky="w", padx=(12, 0), pady=5
+            row=0, column=1, sticky="w", padx=(16, 0), pady=5
         )
         ttk.Label(
             card,
             text="Advanced keeps the Scenario / Step / template tools for debugging.",
+            style="Muted.TLabel",
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self._button_row(
             card,
