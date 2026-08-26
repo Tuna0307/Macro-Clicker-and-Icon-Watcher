@@ -38,6 +38,7 @@ def _harness():
     runtime.replacement_order_var = _Var("3 → 2 → 1")
     runtime.development_enabled_var = _Var(config.positions.development_enabled)
     runtime.science_enabled_var = _Var(config.positions.science_enabled)
+    runtime.positions_retry_var = _Var(config.positions.retry_automatically)
     runtime.alerts_enabled_var = _Var(config.alerts.enabled)
     runtime.digs_enabled_var = _Var(config.alerts.digs_enabled)
     runtime.secret_task_enabled_var = _Var(config.alerts.secret_task_enabled)
@@ -71,6 +72,16 @@ def test_collect_config_returns_pending_copy_without_mutating_live_config():
     assert pending is not runtime.config
     assert pending.rally.min_level == 12
     assert runtime.config == original
+
+
+def test_collect_config_reads_position_retry_choice():
+    runtime = _harness()
+    runtime.positions_retry_var = _Var(False)
+
+    pending = runtime._collect_config()
+
+    assert pending.positions.retry_automatically is False
+    assert runtime.config.positions.retry_automatically is True
 
 
 def test_invalid_ui_value_does_not_partially_mutate_live_config():
