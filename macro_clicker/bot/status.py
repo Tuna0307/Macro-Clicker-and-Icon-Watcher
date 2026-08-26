@@ -1,6 +1,6 @@
 """Read-only normal-user status summaries for the dedicated Bot UI.
 
-This module deliberately does not drive the automation.  It translates the
+This module deliberately does not drive the automation. It translates the
 controller/config and already-existing engine state into concise, user-facing
 status text for the Dashboard.
 """
@@ -175,6 +175,55 @@ def _schedule_status(config: BotConfig) -> str:
     return f"Active — {schedule.start_time}–{schedule.stop_time} — {days}"
 
 
+def _live_last_status(active_feature: str | None, engine: Any, fallback: str) -> str:
+    """Translate the latest already-fired backend step into normal-user wording."""
+
+    latest_step = _latest_fired_step(engine)
+    if not latest_step:
+        return fallback
+
+    if active_feature == FEATURE_GATHER:
+        labels = {
+            "Gather - Open Search": "Opened resource search",
+            "Gather - Prepare Gold Lv12": "Started Gold search",
+            "Gather - Search unavailable": "Lowered resource level and searched again",
+            "Gather - Resource Found": "Found a Gold resource",
+            "Gather - No Free March": "No free march; selecting a busy march to replace",
+            "Gather - Dispatch Ready": "Clicked Dispatch",
+            "Gather - Resource Taken": "Resource was taken; retrying",
+            "Gather - Success": "Verified a gathering dispatch",
+        }
+        return labels.get(latest_step, fallback)
+
+    if active_feature == FEATURE_RALLY:
+        selected = getattr(engine, "_pending_rally_team_selected", None)
+        if isinstance(selected, dict):
+            level = selected.get("level")
+            team = selected.get("team")
+            if level is not None and team is not None:
+                return f"Selected Team {team} for Lv{level} rally"
+        labels = {
+            "Joining": "Rally join attempt",
+            "Back if no slot": "No rally slot; returned to the rally list",
+            "Back if wrong mob": "Wrong target; returned to the rally list",
+        }
+        return labels.get(latest_step, fallback)
+
+    if active_feature == FEATURE_DEVELOPMENT:
+        if latest_step == "Complete - Apply Available":
+            return "Development Position application is available"
+        if latest_step == "Retry - Apply Unavailable":
+            return "Development Position unavailable; retrying"
+
+    if active_feature == FEATURE_SCIENCE:
+        if latest_step == "Complete - Apply Available":
+            return "Science Position application is available"
+        if latest_step == "Retry - Apply Unavailable":
+            return "Science Position unavailable; retrying"
+
+    return fallback
+
+
 def build_dashboard_snapshot(
     *,
     config: BotConfig,
@@ -204,7 +253,7 @@ def build_dashboard_snapshot(
             else "None"
         ),
         next_task=_next_task(pending),
-        last_status=last_message,
+        last_status=_live_last_status(active_feature, engine, last_message),
         rally=_rally_status(config, active_feature, engine),
         gather=_gather_status(config, active_feature, engine),
         positions=_positions_status(config, active_feature),
