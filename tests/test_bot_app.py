@@ -18,6 +18,8 @@ class BotAppTests(unittest.TestCase):
             with (
                 patch("macro_clicker.app.maintain_logs"),
                 patch("macro_clicker.app.App._write_log_file"),
+                patch("macro_clicker.app.App._register_start_hotkey"),
+                patch("macro_clicker.alert_watcher.AlertWatcherFrame._setup_hotkeys"),
             ):
                 ui = BotApp(root)
             tabs = [ui.notebook.tab(tab_id, "text") for tab_id in ui.notebook.tabs()]
