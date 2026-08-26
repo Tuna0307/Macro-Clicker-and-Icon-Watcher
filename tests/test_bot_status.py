@@ -95,6 +95,27 @@ def test_dashboard_snapshot_keeps_alerts_parallel_to_active_automation():
     assert snapshot.alerts.startswith("Watching —")
 
 
+def test_dashboard_snapshot_describes_position_yield_when_retry_is_disabled():
+    config = BotConfig()
+    config.positions.development_enabled = True
+    config.positions.retry_automatically = False
+    controller = _controller(config)
+    controller.status.active_feature = FEATURE_DEVELOPMENT
+    controller.status.running = True
+    engine = SimpleNamespace(
+        _last_fired={"Retry - Apply Unavailable": 8.0},
+    )
+
+    snapshot = build_dashboard_snapshot(
+        config=config,
+        controller=controller,
+        engine=engine,
+    )
+
+    assert "auto retry off" in snapshot.positions
+    assert snapshot.last_status == "Development Position unavailable; finishing this task"
+
+
 def test_dashboard_snapshot_describes_saved_schedule_when_idle():
     config = BotConfig()
     config.rally.enabled = False
