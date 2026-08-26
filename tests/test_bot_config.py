@@ -45,10 +45,30 @@ def test_bot_config_tolerates_bad_values_and_bounds_them():
     assert loaded.rally.min_level == 40
     assert loaded.rally.max_level == 40
     assert loaded.rally.team1_max_level == 40
+    assert loaded.rally.team3_max_level == 40
     assert loaded.rally.join_delay == 0.0
     assert loaded.gather.start_level == 1
     assert loaded.gather.march_count == 3
     assert loaded.gather.replacement_order == [3, 2, 1]
+
+
+def test_tolerant_loader_repairs_partial_order_and_low_team_caps():
+    loaded = bot_config_from_dict(
+        {
+            "rally": {
+                "min_level": 30,
+                "max_level": 70,
+                "team1_max_level": 10,
+                "team3_max_level": 20,
+            },
+            "gather": {"replacement_order": [3, 2]},
+        }
+    )
+
+    assert loaded.rally.team1_max_level == 30
+    assert loaded.rally.team3_max_level == 30
+    assert loaded.gather.replacement_order == [3, 2, 1]
+    validate_bot_config(loaded)
 
 
 def test_default_bot_config_is_valid():
