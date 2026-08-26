@@ -54,6 +54,7 @@ def test_dashboard_snapshot_reports_live_gather_progress_and_pointer():
     assert "1/3 successful" in snapshot.gather
     assert "lowering level and searching again" in snapshot.gather
     assert "March 3" in snapshot.gather
+    assert snapshot.last_status == "Lowered resource level and searched again"
 
 
 def test_dashboard_snapshot_reports_selected_rally_team_and_level():
@@ -74,6 +75,7 @@ def test_dashboard_snapshot_reports_selected_rally_team_and_level():
     )
 
     assert snapshot.rally == "Running — Lv58 with Team 3"
+    assert snapshot.last_status == "Selected Team 3 for Lv58 rally"
 
 
 def test_dashboard_snapshot_keeps_alerts_parallel_to_active_automation():
