@@ -1,19 +1,34 @@
-# PC Macro Builder
+# PC Automation Bot
 
 A Windows desktop utility for **visual automation** and **passive screen monitoring**.
 
-The project has two main runtime functions:
+The normal interface is now organized like a dedicated automation bot: users configure the behavior they want through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details.
 
-1. **Automation** — watches the screen for configured visual conditions and runs multi-step actions such as clicks, key presses, waits, row-based target selection, OCR-assisted decisions, and workflow transitions.
-2. **Icon Alerts** — continuously monitors selected screen regions for configured images or text and notifies the user with sound and popup alerts without performing macro actions.
+The existing scenario engine remains underneath as the proven automation backend, and the original editor is still available through **Advanced** for development and debugging.
 
-Both systems share the same screen-capture and image-recognition foundation, including OpenCV template matching, DPI-aware coordinates, window/monitor-relative regions, resolution scaling, and optional OCR.
+## Main interface
 
-> The repository contains tuned workflows, templates, and behavior developed for the bundled screen layouts. It is no longer treated as a blank general-purpose macro framework. Existing workflow-specific timing, recovery, matching, and safety behavior should be preserved when extending the project.
+The Bot interface currently contains:
+
+- **Dashboard** — bot status, current task, passive-alert status, Start/Stop, and quick actions.
+- **Rally** — configure supported mob/team level limits and join delay without editing the Rally scenario.
+- **Gather** — configure Gold gathering start level, number of marches, and busy-march replacement order.
+- **Positions** — enable or run the bundled Development and Science position workflows.
+- **Alerts** — start/stop passive image alerts and control common alert groups.
+- **Schedule** — configure bot start/stop times and active weekdays.
+- **Logs** — view runtime activity directly from the normal interface.
+- **Settings** — target-window settings and access to Advanced tools.
+
+Low-level automation internals remain available when needed:
+
+- **Advanced** — Scenario / Step / Condition / Action editor and debugging tools.
+- **Alert Setup** — detailed passive-alert template configuration.
+
+These advanced surfaces are hidden during normal use and can be opened from the Bot interface.
 
 ## Setup
 
-Using a project virtual environment is recommended so OCR and image-processing packages do not conflict with packages installed for other programs:
+Using a project virtual environment is recommended:
 
 ```powershell
 py -m venv .venv
@@ -21,7 +36,7 @@ py -m venv .venv
 .\.venv\Scripts\python -m macro_clicker
 ```
 
-On Windows, `Run PC Macro Builder.bat` starts the GUI without a console and automatically uses `.venv` when it exists.
+The existing Windows launch scripts continue to work and now launch the bot-style application shell.
 
 Startup failures are shown in a dialog and recorded under:
 
@@ -29,248 +44,295 @@ Startup failures are shown in a dialog and recorded under:
 %LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs
 ```
 
-Set `MACRO_CLICKER_DATA_DIR` to use a different runtime-data location.
+Set `MACRO_CLICKER_DATA_DIR` to use a different writable runtime-data location.
 
-If the target application runs elevated, run the macro utility with matching privileges or Windows may block clicks and key events sent by `pyautogui` / `keyboard`.
+If the target application runs elevated, run this utility with matching privileges or Windows may block input sent by `pyautogui` / `keyboard`.
 
-## Application overview
+## Architecture overview
 
 ```text
-                         Shared Detection Layer
-                      macro_clicker/detection_core.py
-                                  │
-                     capture / scale / match / OCR
-                                  │
-                 ┌────────────────┴────────────────┐
-                 │                                 │
-                 ▼                                 ▼
-        Automation / Macro                  Passive Icon Alerts
-        macro_clicker/engine.py             macro_clicker/alert_watcher.py
-                 │                                 │
-        Conditions → Decisions              Detect → Confirm
-                 │                                 │
-        Actions → Verification              Cooldown → Sound / Popup
-                 │
-        Retry / Recovery / State
+                          Bot UI
+                            │
+                        BotConfig
+                            │
+                 user-facing settings
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+       Feature adapters              BotController
+       configure runtime           serializes clicking
+          scenarios                    features
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                       MacroEngine
+                            │
+                  Scenario / Steps
+                            │
+               Detection / OCR / Safety
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+      Active automation             Passive alerts
+                                    alert_watcher.py
 ```
 
-The two workflows intentionally share visual detection but keep their behavior separate:
+The dedicated Bot UI is a **control layer**, not a replacement for the working automation engine.
 
-- **Automation** converts matches into controlled input and workflow transitions.
-- **Icon Alerts** observes the screen and reports detections without taking macro actions.
+For development details, see:
 
-## Automation system
+- `AGENTS.md`
+- `docs/BOT_UI.md`
+- `docs/ARCHITECTURE.md`
+- `docs/MAINTAINABILITY.md`
+- `docs/TESTING.md`
+- `docs/AUTO_GATHER.md`
 
-Automation is scenario-driven. A scenario contains ordered **Steps**, and each Step contains **Conditions** and **Actions**.
+## Bot configuration
 
-### Scenario
+Normal-user settings are stored separately from the bundled scenario files:
 
-A named set of steps stored under `scenarios/*.json`.
+```text
+%LOCALAPPDATA%\Macro Clicker and Icon Watcher\bot_config.json
+```
 
-Scenario settings include:
+This configuration contains user-facing choices such as Rally levels, Gather settings, enabled features, alert preferences, scheduling, and target-window title.
 
-- Start hotkey
-- Kill-switch / stop hotkey
-- Poll interval
-- Optional one-time scheduled start using the computer's local clock
-- Target window selection
-- Monitor selection
-- Diagnostic collection
+Saving normal Bot settings does **not** rewrite the tuned scenario files in `scenarios/`. Instead, the application loads a bundled scenario, clones it in memory, applies the configured user values, validates the result, and runs that runtime copy.
 
-### Step
+This keeps low-level image matching, recovery, OCR, and safety details protected from ordinary settings changes.
 
-A step is evaluated during each polling cycle when it is enabled and outside its cooldown.
+## Active automation coordination
 
-If the step's visual conditions are not currently satisfied, the engine skips it for that cycle rather than blocking the entire scenario.
+Only one active clicking automation owns the target application at a time. Passive alerts can run alongside it because they observe rather than click.
 
-Steps can enable or disable other steps, allowing bundled workflows to behave like small state machines with detection, action, confirmation, retry, and recovery phases.
+The initial **Start Bot** cycle runs enabled finite tasks before continuous Rally:
 
-### Conditions
+```text
+Development Position
+        ↓
+Science Position
+        ↓
+Auto Gather
+        ↓
+Gold Mob Rally
+```
 
-Conditions currently use visual template matching and support:
+Disabled features are skipped.
 
-- Image present / absent checks
-- AND / OR combinations
-- Per-condition confidence
-- Optional comparison templates
-- Screen, monitor, or target-window-relative regions
-- Resolution-aware template scaling
-- Static, animated/rotating, and colored-text matching modes
-- Grayscale picture matching when configured
+This is intentionally serialized rather than allowing multiple automation scenarios to fight over mouse/keyboard input.
 
-Templates can be captured directly from the screen using the built-in capture tools.
+Direct **Run Rally**, **Run Gather**, and Position buttons remain available for one-off runs.
 
-### Actions
+## Rally configuration
 
-Supported action types include:
+The Bot Rally page exposes the values a normal user is expected to change, while the mature matching/OCR workflow remains internal.
+
+Current user-facing controls include:
+
+- minimum eligible mob level;
+- maximum eligible mob level;
+- Team 1 maximum level;
+- Team 3 maximum level;
+- pre-join delay.
+
+Underneath, the existing Rally backend still handles:
+
+- visual row/reference matching;
+- same-row target selection;
+- level OCR;
+- Team 1 / Team 3 availability;
+- team selection;
+- transition guards;
+- retries and recovery;
+- target-window and input safety.
+
+The Rally implementation is mature behavior and should not be broadly rewritten merely because it is hidden behind a simpler UI.
+
+## Resource gathering
+
+The Bot Gather page currently configures the proven **Gold** gathering workflow.
+
+User-facing controls include:
+
+- starting resource level;
+- number of successful gathering marches to send;
+- busy-march replacement order.
+
+The backend behavior includes:
+
+```text
+start at configured level
+        ↓
+search
+        ↓
+not found → lower one level → search again
+        ↓
+continue until found
+        ↓
+Gather
+        ↓
+free march available → game auto-selects it → Dispatch
+        │
+        └─ all busy → explicitly replace configured march → Dispatch
+        ↓
+verify success
+        ↓
+repeat until configured successful-dispatch count
+```
+
+The default busy-march replacement priority is:
+
+```text
+3 → 2 → 1
+```
+
+If a resource is taken before dispatch completes, the workflow uses the observed Cancel/retry path without consuming a successful-dispatch count or advancing the replacement pointer.
+
+See `docs/AUTO_GATHER.md` for the behavior contract.
+
+## Position workflows
+
+Bundled supported workflows include:
+
+- `scenarios/Apply Development Position.json`
+- `scenarios/Apply Science Position.json`
+
+The Bot interface exposes them as simple feature toggles/run buttons instead of requiring users to open their internal steps.
+
+## Passive Icon Alerts
+
+Icon Alerts are a separate passive-monitoring subsystem.
+
+The watcher continuously scans configured screen regions for enabled image/text templates and can notify with sound and popup alerts without running macro actions.
+
+Typical flow:
+
+```text
+capture region
+    ↓
+find configured template
+    ↓
+confirm when required
+    ↓
+apply appearance/cooldown policy
+    ↓
+sound / popup
+```
+
+The simple Bot Alerts page controls common alert behavior. The detailed **Alert Setup** tool remains available for template capture, thresholds, regions, and other development-level settings.
+
+Passive alerts can continue running while one active automation feature owns input.
+
+## Shared detection foundation
+
+Automation and Icon Alerts both use `macro_clicker/detection_core.py` for reusable perception.
+
+Shared capabilities include:
+
+- DPI-aware BGR screen capture;
+- physical-monitor handling;
+- target-window and monitor-relative regions;
+- exact X/Y resolution scaling;
+- multi-scale template preparation;
+- static and rotated template variants;
+- colored-text isolation;
+- grayscale matching;
+- low-variance safety checks;
+- match scoring and duplicate suppression;
+- cancellation-aware matching.
+
+Workflow-specific policy remains outside this shared detection layer.
+
+## Window targeting and input safety
+
+When a target window is configured:
+
+- window-relative regions follow the target window;
+- detection follows its physical monitor where appropriate;
+- missing target-window geometry fails closed;
+- clicks are rejected outside the configured target window;
+- click/key actions require the selected target window to be foreground;
+- geometry is rechecked near input dispatch so stale coordinates are not used after a window move/resize;
+- the application does not automatically raise/focus the target window.
+
+`pyautogui.FAILSAFE` remains enabled, and scenario kill switches are checked throughout waits, capture, matching, OCR, and actions.
+
+## Advanced automation model
+
+The backend model remains:
+
+```text
+Scenario
+  → ordered Steps
+      → Conditions
+      → Actions
+```
+
+Steps may enable/disable other steps to implement state machines and recovery flows.
+
+Supported action types include specialized actions such as:
 
 - `click`
 - `click_matching_row`
 - `select_rally_team`
+- `gather_control`
 - `key`
 - `wait`
 - `set_step`
 - `stop`
 
-Some actions are intentionally specialized for the advanced bundled workflows. They should not be simplified into generic clicks unless the existing behavior and tests are preserved.
-
-### Row-based automation
-
-`click_matching_row` is used when a target button must belong to the same visible row as another detected object.
-
-The engine can:
-
-- detect multiple row references and multiple candidate targets;
-- associate each target with the closest valid row;
-- choose the leftmost or rightmost target in that row;
-- process the first valid row or multiple rows;
-- scale row tolerance with the detected geometry;
-- use OCR-based level filtering where configured;
-- revalidate a selected row after a pre-click delay before acting.
-
-For OCR-filtered row decisions, the reference matches, target matches, and OCR crop regions are derived from one atomic screenshot whenever possible. If the level cannot be read reliably or the row changes before the click, the workflow retries instead of guessing.
-
-## Icon Alerts
-
-Icon Alerts are a separate passive-monitoring feature.
-
-The user can save image/text templates, choose which ones are active, and configure where they should be detected. The watcher scans those templates independently from the automation scenario engine.
-
-Typical alert behavior is:
-
-```text
-Capture screen region
-        ↓
-Find configured template
-        ↓
-Confirm detection when required
-        ↓
-Apply per-template cooldown
-        ↓
-Sound / popup notification
-```
-
-Icon Alerts do **not** execute the macro scenario actions and do not collect the automation diagnostic screenshots.
-
-Use **Detect this icon** (or Space when the item is selected) to control which saved alert templates are actively scanned.
-
-## Shared detection foundation
-
-Automation and Icon Alerts both use `macro_clicker/detection_core.py` for the underlying visual-processing pipeline.
-
-Shared capabilities include:
-
-- DPI-aware BGR screen capture
-- Physical-monitor handling
-- Target-window-relative and monitor-relative regions
-- Exact X/Y resolution scaling
-- Multi-scale template preparation
-- Static and rotated template variants
-- Colored-text isolation
-- Grayscale matching
-- Low-variance safety checks
-- Match scoring and duplicate suppression
-- Cancellation-aware matching
-
-When a template has a reference window or monitor size, the matcher inserts the exact current X/Y scale before trying fallback scales. This allows saved regions and detected-target offsets to follow common resolution and aspect-ratio changes without relying only on absolute coordinates.
-
-Automation and alerts deliberately use different fallback ranges because they have different timing requirements, while known resolution changes can still inject exact scale candidates outside those fallback ranges.
-
-## Window targeting and input safety
-
-A scenario or alert configuration can target a window by title substring.
-
-When a target window is configured:
-
-- New regions can be stored relative to the target window.
-- Proportional region metadata lets them follow window resizing.
-- Detection follows the physical monitor containing the target window.
-- Missing target windows fail closed instead of silently clicking elsewhere.
-- Macro clicks are rejected when the resolved point is outside the target window.
-- Click and key actions require the selected target window to be in the foreground.
-- Window geometry is rechecked around input operations so a moved window does not receive stale coordinates.
-- The application does not automatically raise or focus the target window.
-
-When no target window is configured, monitor-relative and legacy absolute-screen behavior remain available.
-
-`pyautogui.FAILSAFE` remains enabled, and the scenario kill switch is checked throughout captures, matching, waits, and action execution.
-
-## Interface preferences and scheduling
-
-Open **Scenario settings** to configure scenario hotkeys, target settings, diagnostics, and the optional one-time automatic start.
-
-A scheduled start:
-
-- uses the computer's local time;
-- requires the application and selected scenario to remain open;
-- runs only once;
-- disables itself after it runs or expires;
-- does not restart a scenario that is already running.
-
-The application also stores shared interface preferences such as sound and animation settings in the per-user data directory.
-
-## Detection types
-
-Automation conditions and Icon Alert templates share the same main detection modes:
-
-- **Text / colored text** — isolates foreground text color so changing backgrounds have less influence on the match.
-- **Static picture** — searches configured scales without rotation.
-- **Animated/rotating picture** — searches configured scales at small positive and negative rotations for icons that visibly tilt or move.
-
-Alert and automation workflows may apply different confirmation or fallback policies even when they use the same underlying detection mode.
+These details are primarily relevant to **Advanced** development rather than normal bot usage.
 
 ## Diagnostics
 
-Automation scenarios can collect bounded diagnostic evidence when diagnostics are enabled.
-
-Runtime evidence is stored under:
+Automation scenarios can collect bounded diagnostic evidence under:
 
 ```text
 %LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs\diagnostics
 ```
 
-The collector is selective so long-running automation does not save a full screenshot for every normal poll. Important OCR failures, ambiguous decisions, row changes, near misses, and sampled successful decisions can retain evidence for later review.
+The collector is selective so long-running automation does not save a screenshot for every poll.
 
-Diagnostic events can contain:
+Evidence can include:
 
 - annotated context screenshots;
-- OCR crops;
+- OCR crops/text/confidence;
 - template scores;
-- matched row / target geometry;
-- OCR text and confidence;
+- row/target geometry;
 - configured decision limits;
-- the final automation decision.
+- final decision metadata.
 
-Decision metadata is also written to a bounded rotating JSONL log. Screenshot retention is limited by count, age, and total storage size.
+Runtime decision metadata is also written to a bounded rotating JSONL log.
 
-Icon Alerts use their own alert logging behavior and do not save the automation diagnostic screenshots.
+The normal Bot **Logs** page mirrors runtime activity while the existing detailed diagnostic system remains available for investigation.
 
 ## Project layout
 
 ```text
-macro_clicker/   Main application, automation engine, alerts, detection, OCR, diagnostics, and UI
-tools/           Developer validation utilities
-tests/           Automated regression, safety, matching, and workflow tests
-templates/       Automation image assets and OCR references
-scenarios/       Saved automation workflows
-alerts/          Passive Icon Alert settings and templates
-docs/            Architecture and maintenance notes
-launcher.pyw     Windows GUI entry point used by the launch scripts
+macro_clicker/bot/   Normal-user bot config, controller, adapters, and UI
+macro_clicker/       Existing engine, detection, OCR, alerts, safety, and Advanced UI
+tools/               Developer validation utilities
+tests/               Automated regression/safety/workflow tests
+templates/           Automation visual assets and OCR references
+scenarios/           Bundled active-automation workflows
+alerts/              Passive alert settings and templates
+docs/                Architecture, bot UI, testing, and maintenance guides
+launcher.pyw         Windows GUI entry point
 ```
 
-Important module ownership is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-Generated caches, logs, and runtime diagnostic captures do not belong in the repository.
+Generated caches, logs, bot runtime configuration, and diagnostic captures do not belong in the repository.
 
 ## Development checks
 
-Install the development dependencies:
+Install development dependencies:
 
 ```powershell
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 ```
 
-Run the same main checks used by CI:
+Run the main checks:
 
 ```powershell
 .\.venv\Scripts\python -m pytest -q
@@ -280,16 +342,24 @@ Run the same main checks used by CI:
 .\.venv\Scripts\python -m tools.validate_scenarios
 ```
 
-The repository's Windows CI runs the test suite, Ruff lint/format checks, mypy, and scenario/template validation on pushes and pull requests.
+Current CI policy treats pytest, Ruff lint, and scenario/template validation as blocking. Ruff formatting and mypy remain informational maintenance feedback.
 
 ## Development guidance
 
-This codebase contains mature workflow-specific behavior that has been tuned around real screen transitions and timing. When changing existing automation:
+The normal development direction is now:
 
-- Prefer small, test-backed changes over broad rewrites.
-- Preserve fail-closed behavior when detection, OCR, window state, or input validation is uncertain.
-- Keep reusable capture and matching logic in the shared detection layer.
-- Keep automation policy in the automation runtime and passive-alert policy in the alert watcher.
-- Do not remove delays, recovery paths, revalidation, or specialized actions simply because they look redundant without first checking the tests and the workflow that relies on them.
+```text
+user-facing choice
+      ↓
+BotConfig
+      ↓
+feature adapter/controller
+      ↓
+existing specialized backend
+```
 
-The current code should be treated as a specialized visual automation and monitoring application built around its existing workflows, not as an empty framework that must remain generic for unrelated uses.
+When adding a new normal-user setting, prefer updating BotConfig + the relevant adapter + Bot UI + focused tests instead of exposing internal Steps directly.
+
+When adding a new automation feature, first make its isolated backend reliable, then add the simple Bot-facing configuration/control layer.
+
+Existing tuned timing, matching, OCR, recovery, and safety behavior should be preserved unless a change is specifically required and test-backed.
