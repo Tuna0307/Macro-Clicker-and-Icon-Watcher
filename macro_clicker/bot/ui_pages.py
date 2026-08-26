@@ -18,8 +18,14 @@ class BotPagesMixin:
         card = self._card("Dashboard", "Bot Status")
         self.dashboard_status_var = tk.StringVar(value="● Stopped")
         self.active_task_var = tk.StringVar(value="None")
+        self.next_task_var = tk.StringVar(value="None")
         self.last_action_var = tk.StringVar(value="Ready")
-        self.alert_status_var = tk.StringVar(value="Idle")
+        self.alert_status_var = tk.StringVar(value="Disabled")
+        self.rally_status_var = tk.StringVar(value="Disabled")
+        self.gather_status_var = tk.StringVar(value="Disabled")
+        self.positions_status_var = tk.StringVar(value="Disabled")
+        self.schedule_status_var = tk.StringVar(value="Disabled")
+
         ttk.Label(
             card,
             textvariable=self.dashboard_status_var,
@@ -27,27 +33,54 @@ class BotPagesMixin:
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         rows = (
             ("Current task", self.active_task_var),
+            ("Next task", self.next_task_var),
             ("Last status", self.last_action_var),
             ("Alerts", self.alert_status_var),
         )
         for row, (label, var) in enumerate(rows, start=1):
             ttk.Label(card, text=label, style="Surface.TLabel").grid(
-                row=row, column=0, sticky="w", pady=4
+                row=row, column=0, sticky="nw", pady=4
             )
-            ttk.Label(card, textvariable=var, style="Surface.TLabel").grid(
-                row=row, column=1, sticky="w", padx=(16, 0), pady=4
-            )
+            ttk.Label(
+                card,
+                textvariable=var,
+                style="Surface.TLabel",
+                wraplength=620,
+                justify="left",
+            ).grid(row=row, column=1, sticky="w", padx=(16, 0), pady=4)
         self._button_row(
             card,
-            4,
+            5,
             ("Start Bot", self._start_bot, "primary"),
             ("Stop", self._stop_bot, "danger"),
         )
 
-        quick = self._card("Dashboard", "Quick Actions", 1)
+        live = self._card("Dashboard", "Feature Status", 1)
+        live_rows = (
+            ("Rally", self.rally_status_var),
+            ("Gather", self.gather_status_var),
+            ("Positions", self.positions_status_var),
+            ("Schedule", self.schedule_status_var),
+        )
+        for row, (label, var) in enumerate(live_rows):
+            ttk.Label(live, text=label, style="Surface.TLabel").grid(
+                row=row, column=0, sticky="nw", pady=5
+            )
+            ttk.Label(
+                live,
+                textvariable=var,
+                style="Surface.TLabel",
+                wraplength=620,
+                justify="left",
+            ).grid(row=row, column=1, sticky="w", padx=(16, 0), pady=5)
+
+        quick = self._card("Dashboard", "Quick Actions", 2)
         ttk.Label(
             quick,
-            text="Run one task immediately without changing which tasks are enabled for a full Bot cycle.",
+            text=(
+                "Run one task immediately without changing which tasks are enabled "
+                "for a full Bot cycle."
+            ),
             style="Surface.TLabel",
         ).grid(row=0, column=0, columnspan=2, sticky="w")
         self._button_row(
