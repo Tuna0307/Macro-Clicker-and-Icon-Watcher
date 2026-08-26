@@ -33,7 +33,11 @@ def test_auto_gather_scenario_is_compact_and_assets_exist():
 
 
 def test_auto_gather_model_loads_new_control_actions():
-    scenario = load_scenario(str(SCENARIO_PATH))
+    # load_scenario() deliberately accepts a scenario name, not an arbitrary
+    # filesystem path.  Using the stem keeps this test portable on Windows,
+    # where an absolute path contains characters that are invalid in a scenario
+    # name (for example the drive-letter colon and path separators).
+    scenario = load_scenario(SCENARIO_PATH.stem)
     commands = [
         action.gather_command
         for step in scenario.steps
