@@ -53,6 +53,8 @@ The current pages are:
 - **Logs** — normal runtime log output without requiring the Advanced editor.
 - **Settings** — target-window title and access to Advanced tools.
 
+`BotApp` mounts `BotFrame` directly as the normal root surface. The legacy App notebook is not wrapped around it, so normal users see only one navigation bar. Opening Advanced or Alert Setup temporarily hides the Bot surface and shows the legacy notebook with an explicit **Back to Bot** control.
+
 Do not add Step/Condition/Action fields to these pages merely because those fields exist in the backend. Only expose settings a normal user has a reason to understand and change.
 
 ## Advanced tools
@@ -65,6 +67,17 @@ The original `App` is still built by `BotApp`, but its tabs are hidden during no
 These are intentionally retained because they are valuable for debugging, capture, tuning, and future development. They are not the normal product workflow.
 
 A bot feature should not require the user to open Advanced just to change ordinary behavior such as a mob level or gather march count.
+
+### Legacy editor isolation
+
+The hidden Advanced editor must not be able to start work behind the Bot surface.
+
+- its legacy global Scenario start hotkey is unregistered during normal Bot use;
+- the hotkey is registered only while **Advanced** itself is open;
+- its legacy one-time Scenario auto-start check is also dormant outside Advanced;
+- opening **Alert Setup** does not enable the Advanced Scenario start hotkey/auto-start.
+
+Stale queued hotkey callbacks remain protected by the existing registration-token checks in `App`.
 
 ## BotConfig
 
@@ -88,6 +101,10 @@ or the directory selected by `MACRO_CLICKER_DATA_DIR`.
 - target-window title.
 
 This runtime file is intentionally separate from project-owned Scenario JSON. Normal Bot UI saves must not rewrite the tuned bundled scenarios.
+
+UI collection is transactional: edits are built on a deep copy and become the live in-memory configuration only after validation and persistence succeed. A malformed field must not partially mutate the last known-good config.
+
+The tolerant config loader should likewise repair malformed persisted values into an internally valid configuration. For example, incomplete Gather replacement orders fall back to `3 → 2 → 1`, and Rally team caps are clamped inside the configured min/max range.
 
 ## Feature adapters
 
@@ -155,11 +172,26 @@ Disabled features are skipped.
 
 The finite workflows run before Rally because Rally is normally continuous. If Rally ran first, later finite tasks would never receive control.
 
+A queued feature that **finishes normally** advances to the next enabled feature. A queued feature that **cannot start** ends the Bot cycle and clears the remaining queue; do not silently skip ahead from an uncertain screen/input state.
+
+`MacroEngine` cleans up its kill-switch hook and capture handle in its worker `finally` block before `is_running` becomes false, so the controller may safely hand ownership to the next engine after completion is observed.
+
 The direct **Run Rally / Run Gather / Run Position** buttons remain one-off actions and do not create a multi-feature queue.
 
 **Stop Bot** cancels both the current active automation and any remaining queued active jobs.
 
-Passive Icon Alerts are different: they do not send automation input, so they may continue beside the currently active MacroEngine.
+Passive Icon Alerts are different: they do not send automation input, so they may continue beside the currently active MacroEngine. However, a requested clicking-automation startup failure must still be surfaced even if passive Alerts started successfully; Alerts must not mask an automation failure.
+
+## Schedule semantics
+
+Bot scheduling is separate from the legacy Advanced Scenario auto-start.
+
+- schedule polling reads the last validated/saved `BotConfig`;
+- typing into a control does not silently change a live schedule before Save;
+- a scheduled start uses that saved config and does not resave partially typed UI edits at trigger time;
+- the manual **Start Bot** button still validates/saves the current controls before starting.
+
+Keep this distinction when extending schedule behavior.
 
 ## Future controller work
 
