@@ -49,7 +49,9 @@ class BotRuntimeMixin:
         parts = str(text).replace("→", ",").replace("->", ",").split(",")
         order = [int(part.strip()) for part in parts if part.strip()]
         if len(order) != 3 or set(order) != {1, 2, 3}:
-            raise BotConfigError("Replacement order must contain 1, 2, and 3 exactly once.")
+            raise BotConfigError(
+                "Replacement order must contain 1, 2, and 3 exactly once."
+            )
         return order
 
     def _collect_config(self):
@@ -150,15 +152,13 @@ class BotRuntimeMixin:
 
     # ---- alerts ------------------------------------------------------------
     def _show_alert_setup(self):
-        notebook = getattr(self.host, "notebook", None)
-        tab = getattr(self.host, "alert_tab", None)
-        if notebook is not None and tab is not None:
-            notebook.select(tab)
+        self.show_alert_setup()
 
     def _apply_alert_preferences(self):
         frame = self.alert_frame
         flags = {
             "digs text cyan": self.config.alerts.digs_enabled,
+            "resources dig icon": self.config.alerts.digs_enabled,
             "secret task": self.config.alerts.secret_task_enabled,
         }
         changed = False
@@ -175,7 +175,9 @@ class BotRuntimeMixin:
             if watcher is not None and watcher.is_alive():
                 watcher.templates_changed()
         frame.target_window_var.set(self.config.target_window_title)
-        volume = self.config.alerts.volume_percent if self.config.alerts.sound_enabled else 0
+        volume = (
+            self.config.alerts.volume_percent if self.config.alerts.sound_enabled else 0
+        )
         frame.volume_var.set(volume)
         frame._save_settings()
 
@@ -206,6 +208,8 @@ class BotRuntimeMixin:
                 and engine is not None
             ):
                 self.controller.engine_stopped()
+                engine = getattr(self.host, "engine", None)
+                running = bool(engine is not None and engine.is_running)
             feature = self.controller.status.active_feature
             self.active_task_var.set(
                 FEATURE_LABELS.get(feature, "None") if feature else "None"
