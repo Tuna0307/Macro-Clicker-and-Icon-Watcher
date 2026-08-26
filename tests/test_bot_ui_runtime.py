@@ -34,8 +34,9 @@ def _harness():
     runtime.gather_enabled_var = _Var(config.gather.enabled)
     runtime.resource_var = _Var(config.gather.resource)
     runtime.gather_start_level_var = _Var(config.gather.start_level)
-    runtime.gather_marches_var = _Var(config.gather.march_count)
-    runtime.replacement_order_var = _Var("3 → 2 → 1")
+    runtime.gather_team_vars = {
+        team: _Var(team in config.gather.teams_enabled) for team in (1, 2, 3)
+    }
     runtime.development_enabled_var = _Var(config.positions.development_enabled)
     runtime.science_enabled_var = _Var(config.positions.science_enabled)
     runtime.positions_retry_var = _Var(config.positions.retry_automatically)
@@ -84,6 +85,24 @@ def test_collect_config_reads_position_retry_choice():
     assert runtime.config.positions.retry_automatically is True
 
 
+def test_collect_config_reads_enabled_gather_teams():
+    runtime = _harness()
+    runtime.gather_team_vars = {1: _Var(True), 2: _Var(False), 3: _Var(True)}
+
+    pending = runtime._collect_config()
+
+    assert pending.gather.teams_enabled == [1, 3]
+    assert runtime.config.gather.teams_enabled == [1, 2, 3]
+
+
+def test_collect_config_requires_at_least_one_gather_team():
+    runtime = _harness()
+    runtime.gather_team_vars = {1: _Var(False), 2: _Var(False), 3: _Var(False)}
+
+    with pytest.raises(BotConfigError, match="at least one gathering team"):
+        runtime._collect_config()
+
+
 def test_invalid_ui_value_does_not_partially_mutate_live_config():
     runtime = _harness()
     original = deepcopy(runtime.config)
@@ -103,6 +122,8 @@ def test_scheduled_start_can_use_saved_config_without_resaving_ui():
     runtime._save_from_ui = lambda: save_calls.append(True) or True
     runtime._append_log = logs.append
     runtime.controller = _successful_controller()
+    runtime.config.gather.enabled = False
+    runtime.config.alerts.enabled = False
 
     runtime._start_bot(save_first=False)
 
@@ -116,6 +137,8 @@ def test_manual_start_still_saves_current_ui_first():
     runtime._save_from_ui = lambda: save_calls.append(True) or True
     runtime._append_log = lambda _message: None
     runtime.controller = _successful_controller()
+    runtime.config.gather.enabled = False
+    runtime.config.alerts.enabled = False
 
     runtime._start_bot()
 
@@ -125,14 +148,15 @@ def test_manual_start_still_saves_current_ui_first():
 def test_requested_automation_failure_is_not_hidden_by_running_alerts():
     runtime = _harness()
     runtime.config.alerts.enabled = True
+    runtime.config.gather.enabled = False
     logs = []
     runtime._append_log = logs.append
     runtime._start_alerts = lambda save_first=False: True
     runtime.controller = SimpleNamespace(
         status=SimpleNamespace(
-            last_message="Bot cycle stopped: could not start Gather"
+            last_message="Bot cycle stopped: could not start Rally"
         ),
-        enabled_features=lambda: ["gather"],
+        enabled_features=lambda: ["rally"],
         start=lambda: False,
     )
 
@@ -140,11 +164,11 @@ def test_requested_automation_failure_is_not_hidden_by_running_alerts():
         runtime._start_bot(save_first=False)
 
     assert logs == [
-        "Bot cycle stopped: could not start Gather",
+        "Bot cycle stopped: could not start Rally",
         "Passive alerts are still running.",
     ]
     warning.assert_called_once_with(
         "Bot automation did not start",
-        "Bot cycle stopped: could not start Gather",
+        "Bot cycle stopped: could not start Rally",
         parent=runtime,
     )
