@@ -16,6 +16,13 @@ FEATURE_GATHER = "gather"
 FEATURE_DEVELOPMENT = "development"
 FEATURE_SCIENCE = "science"
 
+FEATURE_LABELS = {
+    FEATURE_RALLY: "Gold Mob Rally",
+    FEATURE_GATHER: "Auto Gather",
+    FEATURE_DEVELOPMENT: "Development Position",
+    FEATURE_SCIENCE: "Science Position",
+}
+
 # Finite setup-style jobs run first. Rally is deliberately last because its
 # normal scenario is continuous and would otherwise prevent later jobs from
 # ever receiving control of the input engine.
@@ -50,6 +57,12 @@ class BotController:
         self._stopper = stopper
         self._pending_features: list[str] = []
         self.status = BotStatus()
+
+    @property
+    def pending_features(self) -> tuple[str, ...]:
+        """Read-only queued work for normal-user status displays."""
+
+        return tuple(self._pending_features)
 
     def enabled_features(self) -> list[str]:
         config = self._config_provider()
