@@ -21,11 +21,11 @@ def _report_startup_error(exc):
         pass
 
     message = (
-        f"PC Macro Builder could not start.\n\n{type(exc).__name__}: {exc}"
+        f"PC Automation Bot could not start.\n\n{type(exc).__name__}: {exc}"
         f"\n\nDetails were written to:\n{STARTUP_ERROR_LOG}"
     )
     try:
-        ctypes.windll.user32.MessageBoxW(None, message, "PC Macro Builder", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, message, "PC Automation Bot", 0x10)
     except Exception:
         pass
 
@@ -35,11 +35,11 @@ def main():
     if APP_DIR not in sys.path:
         sys.path.insert(0, APP_DIR)
     try:
-        from macro_clicker.app import main as run_application
+        from macro_clicker.bot_app import main as run_application
 
         return run_application()
     except SystemExit as exc:
-        # app.main() already reports expected non-zero exits (for example a
+        # bot_app.main() already reports expected non-zero exits (for example a
         # second instance or a GUI initialization failure).
         if exc.code is None:
             return 0
