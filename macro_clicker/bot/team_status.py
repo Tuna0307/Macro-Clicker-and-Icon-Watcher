@@ -194,9 +194,16 @@ class TeamStatusDetector:
         self._templates: dict[str, np.ndarray] = {}
         self._portrait_cache_dir = portrait_cache_dir
         self._team_portraits: dict[int, np.ndarray] = {}
+        self._missing_activity_templates: set[str] = set()
         self.last_busy_count: int | None = None
         self.last_identity_complete = False
         self._load_portraits()
+
+    @property
+    def missing_activity_templates(self) -> tuple[str, ...]:
+        """Return optional detailed-status assets missing from this runtime."""
+
+        return tuple(sorted(self._missing_activity_templates))
 
     def _template(self, path: str) -> np.ndarray:
         image = self._templates.get(path)
@@ -273,10 +280,22 @@ class TeamStatusDetector:
         return count, score
 
     def _activity(self, row: np.ndarray) -> tuple[TeamActivity, float]:
-        matches = [
-            (self._best_match(row, self._template(path))[0], activity)
-            for activity, path in ACTIVITY_TEMPLATES.items()
-        ]
+        matches: list[tuple[float, TeamActivity]] = []
+        for activity, path in ACTIVITY_TEMPLATES.items():
+            try:
+                template = self._template(path)
+            except FileNotFoundError:
+                # Detailed labels improve scheduling/UI but are not authority for
+                # whether a row is busy. A missing optional crop must not destroy
+                # the whole availability observation.
+                self._missing_activity_templates.add(path)
+                continue
+            self._missing_activity_templates.discard(path)
+            score, _loc = self._best_match(row, template)
+            matches.append((score, activity))
+
+        if not matches:
+            return TeamActivity.BUSY, 0.0
         score, activity = max(matches)
         if score < ACTIVITY_THRESHOLD:
             return TeamActivity.BUSY, max(0.0, score)
