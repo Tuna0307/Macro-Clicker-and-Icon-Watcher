@@ -1,4 +1,6 @@
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -13,6 +15,7 @@ from macro_clicker.bot.team_status import (
     WORLD_MAP_TEMPLATE,
     WORLD_MAP_THRESHOLD,
     TeamStatusDetector,
+    TeamTimerReader,
     parse_duration_text,
 )
 from macro_clicker.models import project_path
@@ -34,6 +37,74 @@ def test_duration_parser_handles_normal_and_common_ocr_confusions():
     assert parse_duration_text("OO:O3:39") == 219
     assert parse_duration_text("00；00；06") == 6
     assert parse_duration_text("not a timer") is None
+
+
+def test_ocr_initialization_emits_start_and_ready_diagnostics(monkeypatch):
+    logs = []
+
+    class FakeTextRecognition:
+        def __init__(self, **_kwargs):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(TextRecognition=FakeTextRecognition),
+    )
+    reader = TeamTimerReader(diagnostic_log=logs.append)
+
+    engine = reader._get_engine()
+
+    assert isinstance(engine, FakeTextRecognition)
+    assert logs[0] == "[team-diag] OCR initialization started"
+    assert logs[1].startswith("[team-diag] OCR initialization ready in ")
+    assert logs[1].endswith("s")
+
+
+def test_busy_count_records_each_template_score_and_selected_count(monkeypatch):
+    detector = TeamStatusDetector(portrait_cache_dir=None)
+    by_path = {
+        BUSY_COUNT_TEMPLATES[1]: 0.31,
+        BUSY_COUNT_TEMPLATES[2]: 0.91,
+        BUSY_COUNT_TEMPLATES[3]: 0.27,
+    }
+    monkeypatch.setattr(detector, "_template", lambda path: path)
+    monkeypatch.setattr(
+        detector,
+        "_best_match",
+        lambda _frame, template: (by_path[template], (0, 0)),
+    )
+
+    count, score = detector._busy_count(np.zeros((28, 51, 3), dtype=np.uint8))
+
+    assert count == 2
+    assert score == 0.91
+    assert detector.last_busy_count_score == 0.91
+    assert detector.last_busy_count_scores == {1: 0.31, 2: 0.91, 3: 0.27}
+
+
+def test_world_map_score_is_retained_when_gate_rejects_frame(monkeypatch):
+    detector = TeamStatusDetector(portrait_cache_dir=None)
+    monkeypatch.setattr(
+        detector,
+        "_template",
+        lambda _path: np.zeros((10, 10, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        detector,
+        "_best_match",
+        lambda _frame, _template: (0.42, (0, 0)),
+    )
+
+    visible, observations = detector.detect(
+        np.zeros((1080, 1920, 3), dtype=np.uint8),
+        read_timers=False,
+    )
+
+    assert not visible
+    assert observations == ()
+    assert detector.last_world_map_score == 0.42
+    assert detector.last_busy_count is None
 
 
 def test_partial_busy_without_identity_does_not_guess_team2():
