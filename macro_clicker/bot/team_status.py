@@ -1,11 +1,21 @@
-"""Read-only visual detection for Team 1/2/3 world-map march state."""
+"""Read-only visual detection for Team 1/2/3 world-map march availability.
+
+The game's left deployment queue shows busy marches only.  On a trusted world-map
+view, no busy-count/status rows therefore means 0/3 busy teams: all three teams are
+Idle candidates.  The selected-team Gather dispatch panel still performs the final
+blue-idle-icon check before any Dispatch click.
+
+This module deliberately classifies map-side availability as IDLE/BUSY/UNKNOWN.
+Detailed Travelling/Gathering/Returning labels and timer OCR can be layered back in
+after real, committed screen fixtures exist; they are not required to decide whether
+continuous Auto Gather may safely start one exact-team attempt.
+"""
 
 from __future__ import annotations
 
 import os
 import re
 import threading
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -16,31 +26,43 @@ import numpy as np
 from ..detection_core import capture_bgr, region_for_capture
 from ..models import project_path
 from ..window_locator import find_window_rect
-from .team_state import (
-    TEAM_NUMBERS,
-    TeamActivity,
-    TeamObservation,
-    TeamStateTracker,
-)
+from .team_state import TEAM_NUMBERS, TeamActivity, TeamObservation, TeamStateTracker
 
 REFERENCE_SIZE = (1920, 1080)
-SIDEBAR_REGION = (0, 230, 220, 250)
-HEADER_THRESHOLD = 0.88
-PORTRAIT_THRESHOLD = 0.90
-STATE_THRESHOLD = 0.82
 
-PORTRAIT_TEMPLATES = {
-    1: "templates/Team1MarchPortrait.png",
-    2: "templates/Team2MarchPortrait.png",
-    3: "templates/Team3MarchPortrait.png",
+# A known world-map control prevents a blank queue on another screen from being
+# interpreted as three idle teams.
+WORLD_MAP_ANCHOR_REGION = (1824, 633, 85, 90)
+WORLD_MAP_TEMPLATE = "templates/RallyIcon.png"
+WORLD_MAP_THRESHOLD = 0.85
+
+# One normalized crop contains both the march-count indicator and the compressed
+# busy-team queue.  The queue contains busy teams only and compresses upward.
+SIDEBAR_REGION = (0, 230, 220, 250)
+COUNTER_REGION = (154, 236, 51, 28)
+QUEUE_REGION = (0, 265, 220, 215)
+COUNTER_IN_SIDEBAR = (154, 6, 51, 28)
+QUEUE_IN_SIDEBAR = (0, 35, 220, 215)
+
+BUSY_COUNT_TEMPLATES = {
+    1: "templates/1_3Squad.png",
+    2: "templates/2_3Squad.png",
+    3: "templates/FullSquad3_3.png",
 }
-STATE_TEMPLATES = {
-    TeamActivity.GATHERING: "templates/TeamStatusGathering.png",
-    TeamActivity.RETURNING: "templates/TeamStatusReturning.png",
-    TeamActivity.TRAVELLING: "templates/TeamStatusTravelling.png",
+BUSY_COUNT_THRESHOLDS = {
+    1: 0.88,
+    2: 0.78,
+    3: 0.78,
 }
-HEADER_TEMPLATE = "templates/TeamStatusSidebarHeader.png"
-_TIMER_PATTERN = re.compile(r"(?<!\d)(\d{1,3})\s*[:：]\s*(\d{2})\s*[:：]\s*(\d{2})(?!\d)")
+BUSY_IDENTITY_TEMPLATES = {
+    1: "templates/Team1Busy.png",
+    3: "templates/Team3Busy.png",
+}
+BUSY_IDENTITY_THRESHOLD = 0.85
+
+_TIMER_PATTERN = re.compile(
+    r"(?<!\d)(\d{1,3})\s*[:：]\s*(\d{2})\s*[:：]\s*(\d{2})(?!\d)"
+)
 
 
 def parse_duration_text(text: str) -> int | None:
@@ -79,7 +101,7 @@ def parse_duration_text(text: str) -> int | None:
 
 
 class TeamTimerReader:
-    """Lazy Paddle text recognition for the small expedition countdown crop."""
+    """Retained lazy OCR reader for future richer team-state fixtures."""
 
     def __init__(self) -> None:
         self._engine: Any = None
@@ -160,7 +182,9 @@ class TeamTimerReader:
             engine = self._get_engine()
             if engine is None:
                 return None
-            enlarged = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+            enlarged = cv2.resize(
+                crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC
+            )
             blurred = cv2.GaussianBlur(enlarged, (0, 0), 0.8)
             sharpened = cv2.addWeighted(enlarged, 1.5, blurred, -0.5, 0)
             try:
@@ -175,9 +199,11 @@ class TeamTimerReader:
 
 
 class TeamStatusDetector:
-    """Classify world-map expedition rows using stable portrait and label templates."""
+    """Classify map-side Team 1/2/3 availability from existing proven assets."""
 
     def __init__(self, timer_reader: TeamTimerReader | None = None) -> None:
+        # Retain the injected reader API for compatibility. Current safe map-side
+        # availability classification does not depend on OCR timers.
         self.timer_reader = timer_reader or TeamTimerReader()
         self._templates: dict[str, np.ndarray] = {}
 
@@ -192,7 +218,10 @@ class TeamStatusDetector:
         return image
 
     @staticmethod
-    def _best_match(frame: np.ndarray, template: np.ndarray) -> tuple[float, tuple[int, int]]:
+    def _best_match(
+        frame: np.ndarray,
+        template: np.ndarray,
+    ) -> tuple[float, tuple[int, int]]:
         if (
             frame is None
             or frame.size == 0
@@ -205,27 +234,140 @@ class TeamStatusDetector:
         return float(maximum), (int(max_loc[0]), int(max_loc[1]))
 
     @staticmethod
-    def _row_crop(sidebar: np.ndarray, portrait_top: int) -> np.ndarray:
-        top = max(0, int(portrait_top) - 4)
-        bottom = min(sidebar.shape[0], int(portrait_top) + 30)
-        return sidebar[top:bottom, 58:178]
+    def _crop_local(frame: np.ndarray, region: tuple[int, int, int, int]) -> np.ndarray:
+        left, top, width, height = region
+        right = min(frame.shape[1], left + width)
+        bottom = min(frame.shape[0], top + height)
+        if left < 0 or top < 0 or left >= right or top >= bottom:
+            return np.empty((0, 0, 3), dtype=np.uint8)
+        return frame[top:bottom, left:right]
 
     @staticmethod
-    def _timer_crop(sidebar: np.ndarray, portrait_top: int) -> np.ndarray:
-        top = max(0, int(portrait_top) + 25)
-        bottom = min(sidebar.shape[0], int(portrait_top) + 51)
-        return sidebar[top:bottom, 66:174]
+    def _crop_reference_region(
+        frame: np.ndarray,
+        region: tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Crop a 1920x1080 reference region from an arbitrary window resolution."""
 
-    def _classify_row(self, sidebar: np.ndarray, portrait_top: int) -> TeamActivity:
-        row = self._row_crop(sidebar, portrait_top)
-        best_activity = TeamActivity.BUSY
-        best_score = STATE_THRESHOLD
-        for activity, path in STATE_TEMPLATES.items():
-            score, _location = self._best_match(row, self._template(path))
-            if score >= best_score:
-                best_score = score
-                best_activity = activity
-        return best_activity
+        if frame is None or frame.size == 0:
+            return np.empty((0, 0, 3), dtype=np.uint8)
+        height, width = frame.shape[:2]
+        ref_width, ref_height = REFERENCE_SIZE
+        left, top, region_width, region_height = region
+        scaled_left = round(left / ref_width * width)
+        scaled_top = round(top / ref_height * height)
+        scaled_right = round((left + region_width) / ref_width * width)
+        scaled_bottom = round((top + region_height) / ref_height * height)
+        scaled_left = max(0, min(scaled_left, width - 1))
+        scaled_top = max(0, min(scaled_top, height - 1))
+        scaled_right = max(scaled_left + 1, min(scaled_right, width))
+        scaled_bottom = max(scaled_top + 1, min(scaled_bottom, height))
+        crop = frame[scaled_top:scaled_bottom, scaled_left:scaled_right]
+        if crop.shape[:2] != (region_height, region_width):
+            crop = cv2.resize(
+                crop,
+                (region_width, region_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        return crop
+
+    def _detect_busy_count(self, counter: np.ndarray) -> tuple[int, float]:
+        """Return 0 when no committed 1/3, 2/3, or 3/3 indicator is present."""
+
+        qualified: list[tuple[float, int]] = []
+        best_score = -1.0
+        for count, path in BUSY_COUNT_TEMPLATES.items():
+            score, _location = self._best_match(counter, self._template(path))
+            best_score = max(best_score, score)
+            if score >= BUSY_COUNT_THRESHOLDS[count]:
+                qualified.append((score, count))
+        if not qualified:
+            # On a trusted world-map view this is the game's 0/3 state: there is
+            # no busy-team status to display.
+            return 0, max(0.0, best_score)
+        score, count = max(qualified)
+        return count, score
+
+    def _busy_identity(self, queue: np.ndarray, team: int) -> tuple[bool, float]:
+        score, _location = self._best_match(
+            queue,
+            self._template(BUSY_IDENTITY_TEMPLATES[team]),
+        )
+        return score >= BUSY_IDENTITY_THRESHOLD, score
+
+    @staticmethod
+    def _observations_from_busy_evidence(
+        busy_count: int,
+        *,
+        team1_busy: bool,
+        team3_busy: bool,
+        confidence: float | None = None,
+    ) -> tuple[TeamObservation, ...]:
+        """Infer Team 2 from count + known Team 1/3 portraits.
+
+        Team 2 intentionally has no portrait template.  Because the queue contains
+        exactly the busy teams, its state can be inferred by elimination once the
+        1/3, 2/3, or 3/3 count is known.
+
+        Contradictory evidence fails closed as UNKNOWN for all teams.
+        """
+
+        count = int(busy_count)
+        inconsistent = False
+        busy_teams: set[int]
+
+        if count == 0:
+            if team1_busy or team3_busy:
+                inconsistent = True
+                busy_teams = set()
+            else:
+                busy_teams = set()
+        elif count == 1:
+            if team1_busy and team3_busy:
+                inconsistent = True
+                busy_teams = set()
+            elif team1_busy:
+                busy_teams = {1}
+            elif team3_busy:
+                busy_teams = {3}
+            else:
+                busy_teams = {2}
+        elif count == 2:
+            if team1_busy and team3_busy:
+                busy_teams = {1, 3}
+            elif team1_busy:
+                busy_teams = {1, 2}
+            elif team3_busy:
+                busy_teams = {2, 3}
+            else:
+                inconsistent = True
+                busy_teams = set()
+        elif count == 3:
+            busy_teams = {1, 2, 3}
+        else:
+            inconsistent = True
+            busy_teams = set()
+
+        if inconsistent:
+            return tuple(
+                TeamObservation(
+                    team=team,
+                    activity=TeamActivity.UNKNOWN,
+                    confidence=confidence,
+                )
+                for team in TEAM_NUMBERS
+            )
+
+        return tuple(
+            TeamObservation(
+                team=team,
+                activity=(
+                    TeamActivity.BUSY if team in busy_teams else TeamActivity.IDLE
+                ),
+                confidence=confidence,
+            )
+            for team in TEAM_NUMBERS
+        )
 
     def detect_sidebar(
         self,
@@ -233,8 +375,13 @@ class TeamStatusDetector:
         *,
         read_timers: bool = True,
     ) -> tuple[bool, tuple[TeamObservation, ...]]:
-        """Detect from a normalized 220x250 sidebar crop (used by runtime and tests)."""
+        """Detect from the normalized 220x250 map-side team-status crop.
 
+        ``read_timers`` is retained for API compatibility.  The current safe
+        availability detector intentionally does not use timer OCR.
+        """
+
+        del read_timers
         if sidebar is None or sidebar.size == 0:
             return False, ()
         if sidebar.shape[:2] != (SIDEBAR_REGION[3], SIDEBAR_REGION[2]):
@@ -244,70 +391,46 @@ class TeamStatusDetector:
                 interpolation=cv2.INTER_AREA,
             )
 
-        header_score, _header_location = self._best_match(
-            sidebar,
-            self._template(HEADER_TEMPLATE),
-        )
-        if header_score < HEADER_THRESHOLD:
-            return False, ()
+        counter = self._crop_local(sidebar, COUNTER_IN_SIDEBAR)
+        queue = self._crop_local(sidebar, QUEUE_IN_SIDEBAR)
+        busy_count, count_score = self._detect_busy_count(counter)
+        team1_busy, team1_score = self._busy_identity(queue, 1)
+        team3_busy, team3_score = self._busy_identity(queue, 3)
 
-        observations = []
-        for team in TEAM_NUMBERS:
-            portrait = self._template(PORTRAIT_TEMPLATES[team])
-            portrait_score, portrait_location = self._best_match(sidebar, portrait)
-            if portrait_score < PORTRAIT_THRESHOLD:
-                # The expedition list contains busy teams only. Absence of this
-                # known captain portrait is therefore an idle candidate; the
-                # Gather dispatch panel still re-verifies the blue Z idle icon
-                # before any click, so this read-only hint cannot dispatch a
-                # falsely-idle team by itself.
-                observations.append(
-                    TeamObservation(
-                        team=team,
-                        activity=TeamActivity.IDLE,
-                        confidence=max(0.0, 1.0 - portrait_score),
-                    )
-                )
-                continue
-
-            portrait_top = portrait_location[1]
-            activity = self._classify_row(sidebar, portrait_top)
-            remaining = None
-            if read_timers:
-                remaining = self.timer_reader.read_seconds(
-                    self._timer_crop(sidebar, portrait_top)
-                )
-            observations.append(
-                TeamObservation(
-                    team=team,
-                    activity=activity,
-                    remaining_seconds=remaining,
-                    confidence=portrait_score,
-                )
+        confidence = count_score
+        if busy_count in {1, 2}:
+            confidence = min(
+                count_score,
+                max(team1_score, team3_score, 0.0),
             )
-        return True, tuple(observations)
+        observations = self._observations_from_busy_evidence(
+            busy_count,
+            team1_busy=team1_busy,
+            team3_busy=team3_busy,
+            confidence=max(0.0, confidence),
+        )
+        return True, observations
 
-    def detect(self, frame: np.ndarray, *, read_timers: bool = True):
-        """Normalize the expedition sidebar from a full target-window capture."""
+    def detect(
+        self,
+        frame: np.ndarray,
+        *,
+        read_timers: bool = True,
+    ) -> tuple[bool, tuple[TeamObservation, ...]]:
+        """Observe availability only when a trusted world-map anchor is visible."""
 
         if frame is None or frame.size == 0:
             return False, ()
-        height, width = frame.shape[:2]
-        ref_width, ref_height = REFERENCE_SIZE
-        left = round(SIDEBAR_REGION[0] / ref_width * width)
-        top = round(SIDEBAR_REGION[1] / ref_height * height)
-        right = round((SIDEBAR_REGION[0] + SIDEBAR_REGION[2]) / ref_width * width)
-        bottom = round((SIDEBAR_REGION[1] + SIDEBAR_REGION[3]) / ref_height * height)
-        left = max(0, min(left, width - 1))
-        top = max(0, min(top, height - 1))
-        right = max(left + 1, min(right, width))
-        bottom = max(top + 1, min(bottom, height))
-        sidebar = frame[top:bottom, left:right]
-        sidebar = cv2.resize(
-            sidebar,
-            (SIDEBAR_REGION[2], SIDEBAR_REGION[3]),
-            interpolation=cv2.INTER_AREA,
+
+        anchor = self._crop_reference_region(frame, WORLD_MAP_ANCHOR_REGION)
+        anchor_score, _anchor_location = self._best_match(
+            anchor,
+            self._template(WORLD_MAP_TEMPLATE),
         )
+        if anchor_score < WORLD_MAP_THRESHOLD:
+            return False, ()
+
+        sidebar = self._crop_reference_region(frame, SIDEBAR_REGION)
         return self.detect_sidebar(sidebar, read_timers=read_timers)
 
 
