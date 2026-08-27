@@ -48,6 +48,10 @@ Gathering and Rallying were rebuilt from verified screenshot-derived crops after
 
 Timers are for scheduling the next visual check, never for declaring Idle. Timer OCR may continue even when detailed activity classification is unavailable.
 
+## Diagnostic observability
+
+The current supervised build wraps the perception loop with `[team-diag]` evidence rather than changing its decisions. It records the trusted-world-map match score, all three busy-count candidate scores and selected count, identity completeness, rate-limited unreadable-view/window state, PaddleOCR initialization start and elapsed ready/failure time, and monitor passes taking at least two seconds. This is specifically intended to diagnose the reported startup-to-first-click delay. Diagnostic values must never be promoted into team-state or dispatch authority.
+
 ## Fixed dispatch geometry
 
 Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale, ambiguous, or only generic Busy.
