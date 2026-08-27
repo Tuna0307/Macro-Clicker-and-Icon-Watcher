@@ -51,15 +51,19 @@ def test_auto_gather_model_loads_new_control_actions():
     ]
 
 
-def test_auto_gather_forces_gold_and_max_level_before_search():
+def test_auto_gather_selects_gather_tab_then_gold_before_search():
     steps = step_map(load_raw_scenario())
     actions = steps["Gather - Prepare Gold Lv12"]["actions"]
     clicks = [action for action in actions if action["type"] == "click"]
-    assert clicks[0]["offset_x"] == 196
-    assert clicks[0]["offset_y"] == -348
+
+    # The resource-search popup has three tabs and remembers its last tab.
+    # Normalize it first: click the fixed middle Gather tab, then Gold.
+    assert (clicks[0]["offset_x"], clicks[0]["offset_y"]) == (0, -480)
+    assert (clicks[1]["offset_x"], clicks[1]["offset_y"]) == (196, -348)
+
     plus_clicks = [
         action
-        for action in clicks[1:-1]
+        for action in clicks[2:-1]
         if action.get("offset_x") == 182 and action.get("offset_y") == -74
     ]
     # The bundled backend may intentionally overshoot the '+' button because
