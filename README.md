@@ -62,6 +62,10 @@ The Dashboard can show detailed states with countdowns when the assets are avail
 
 If a cold start at `1/3` or `2/3` cannot safely identify the busy subset yet, state remains Unknown and Gather waits instead of guessing.
 
+### Delay diagnostics
+
+During the current supervised startup-delay investigation, the Logs tab emits `[team-diag]` evidence without changing automation behavior. It reports the world-map match score, separate `1/3` / `2/3` / `3/3` busy-count scores, whether team identity is complete, rate-limited unreadable-view messages, PaddleOCR initialization start/ready/failure duration, and any team-monitor scan that takes at least two seconds. These lines are intended to show exactly where a pause occurs; they are not dispatch authority.
+
 ## Fixed dispatch positions remain final authority
 
 On the dispatch panel Team 1, Team 2 and Team 3 have permanent card locations even when hero portraits change. Before Dispatch, the runtime must still verify the chosen team's exact blue idle indicator, click that exact fixed card, then use the proven Dispatch path. A stale/incorrect map-side guess therefore cannot intentionally overwrite another busy team.
