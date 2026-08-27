@@ -1,8 +1,8 @@
 """Continuous Auto Gather decisions built on visually observed team state.
 
-This coordinator intentionally owns no screen detection and no direct clicks.  The
+This coordinator intentionally owns no screen detection and no direct clicks. The
 TeamStatusMonitor is responsible for observations and the existing MacroEngine is
-responsible for a single selected-team Gather attempt.  This layer only decides
+responsible for a single selected-team Gather attempt. This layer only decides
 *when* it is safe to ask for another attempt.
 """
 
@@ -24,16 +24,7 @@ class ContinuousGatherStatus:
 
 
 class ContinuousGatherService:
-    """Dispatch whichever configured team is freshly observed as idle.
-
-    There is deliberately no user-facing team priority.  If several teams are
-    idle at once, the first idle team in the stable Team 1/2/3 snapshot is used;
-    after that dispatch is visually/engine-confirmed it becomes non-idle and the
-    next currently idle team can be used.
-
-    A timer reaching zero never makes a team available.  Only TeamStateTracker's
-    visual IDLE state can start an attempt.
-    """
+    """Dispatch whichever configured team is freshly observed as idle."""
 
     MAX_IDLE_OBSERVATION_AGE_SECONDS = 5.0
 
@@ -99,7 +90,16 @@ class ContinuousGatherService:
 
         team = self.next_idle_team()
         if team is None:
-            self.status.last_message = "All configured teams are busy; waiting"
+            configured = set(self._configured_teams())
+            snapshots = [
+                item for item in self.tracker.snapshots() if item.team in configured
+            ]
+            if any(item.activity == TeamActivity.UNKNOWN for item in snapshots):
+                self.status.last_message = (
+                    "Waiting for team identity/status confirmation"
+                )
+            else:
+                self.status.last_message = "All configured teams are busy; waiting"
             return False
 
         if not self._start_team(team):
@@ -111,13 +111,7 @@ class ContinuousGatherService:
         return True
 
     def complete_attempt(self, *, success: bool) -> None:
-        """Record one finished engine attempt.
-
-        A successful attempt immediately marks the selected team travelling so
-        a stale sidebar frame cannot dispatch it twice.  A failed exact-team
-        verification pauses the service.  That fail-closed behavior also means
-        F12 cannot accidentally be followed by an automatic restart.
-        """
+        """Record one finished exact-team engine attempt."""
 
         team = self.status.in_flight_team
         if team is None:

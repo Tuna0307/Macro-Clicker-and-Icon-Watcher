@@ -104,6 +104,7 @@ def _team_status_map(team_tracker: Any) -> dict[int, str]:
         TeamActivity.TRAVELLING: "Travelling",
         TeamActivity.GATHERING: "Gathering",
         TeamActivity.RETURNING: "Returning",
+        TeamActivity.RALLYING: "Rallying",
         TeamActivity.BUSY: "Busy",
         TeamActivity.UNKNOWN: "Unknown",
     }
@@ -149,15 +150,21 @@ def _gather_status(
         return f"Watching — available: {names}"
 
     try:
-        snapshots = [
+        all_snapshots = [
             item
             for item in team_tracker.snapshots()
             if item.team in config.gather.teams_enabled
-            and item.remaining_seconds is not None
-            and item.remaining_seconds > 0
         ]
     except (AttributeError, TypeError, ValueError):
-        snapshots = []
+        all_snapshots = []
+    if any(item.activity == TeamActivity.UNKNOWN for item in all_snapshots):
+        return "Watching — waiting for team identity/status confirmation"
+
+    snapshots = [
+        item
+        for item in all_snapshots
+        if item.remaining_seconds is not None and item.remaining_seconds > 0
+    ]
     if snapshots:
         soonest = min(snapshots, key=lambda item: item.remaining_seconds)
         return (

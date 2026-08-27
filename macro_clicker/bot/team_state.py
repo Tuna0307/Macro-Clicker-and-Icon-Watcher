@@ -22,6 +22,7 @@ class TeamActivity(str, Enum):
     TRAVELLING = "travelling"
     GATHERING = "gathering"
     RETURNING = "returning"
+    RALLYING = "rallying"
     BUSY = "busy"
 
 
@@ -60,6 +61,7 @@ class TeamStateTracker:
         self._states = {team: _StoredTeamState() for team in TEAM_NUMBERS}
         self._sidebar_visible = False
         self._last_sidebar_seen_at: float | None = None
+        self._busy_count: int | None = None
 
     @property
     def sidebar_visible(self) -> bool:
@@ -71,26 +73,46 @@ class TeamStateTracker:
         with self._lock:
             return self._last_sidebar_seen_at
 
+    @property
+    def busy_count(self) -> int | None:
+        """Return the current readable world-map busy count, otherwise None."""
+
+        with self._lock:
+            return self._busy_count if self._sidebar_visible else None
+
     def update(
         self,
         observations: Iterable[TeamObservation],
         *,
         sidebar_visible: bool,
+        busy_count: int | None = None,
         observed_at: float | None = None,
     ) -> bool:
         """Store one visual observation and return whether meaningful state changed.
 
-        When the march sidebar is not visible (for example while Rally or a
-        dispatch panel is open), existing states are retained instead of being
-        converted to UNKNOWN. This lets the Bot keep useful last-known timing
-        without mistaking a different game screen for three idle teams.
+        When the march sidebar is not readable (for example while Rally or a
+        dispatch panel is open), existing team states are retained instead of
+        being converted to UNKNOWN. The current busy-count signal is cleared so
+        an unrelated screen can never authorize a Gather decision.
         """
 
         now = time.monotonic() if observed_at is None else float(observed_at)
         with self._lock:
-            changed = self._sidebar_visible != bool(sidebar_visible)
-            self._sidebar_visible = bool(sidebar_visible)
-            if not sidebar_visible:
+            visible = bool(sidebar_visible)
+            normalized_count = None
+            if visible and busy_count is not None:
+                value = int(busy_count)
+                if value not in {0, 1, 2, 3}:
+                    raise ValueError(f"unsupported busy count: {busy_count!r}")
+                normalized_count = value
+
+            changed = (
+                self._sidebar_visible != visible
+                or self._busy_count != normalized_count
+            )
+            self._sidebar_visible = visible
+            self._busy_count = normalized_count
+            if not visible:
                 return changed
 
             self._last_sidebar_seen_at = now
@@ -215,7 +237,7 @@ class TeamStateTracker:
         if any(item.activity == TeamActivity.IDLE for item in states):
             return 1.0
         if any(item.activity == TeamActivity.UNKNOWN for item in states):
-            return 3.0
+            return 1.0
         if any(item.needs_visual_refresh for item in states):
             return 1.0
 
