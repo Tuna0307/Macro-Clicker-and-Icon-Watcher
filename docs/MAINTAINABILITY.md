@@ -31,6 +31,12 @@ Detailed `TeamStatus*.png` activity-label assets are optional detail, not core a
 
 Do not equate file existence with a valid visual template. The 2026-08-27 Gathering/Rallying repair was needed because earlier blobs existed in Git but failed OpenCV decoding. Any new or replaced visual asset should have a regression that actually loads it with `cv2.imread()` and verifies a non-empty image.
 
+### Diagnostic-only observability
+
+`[team-diag]` exists to explain perception delays, not to drive behavior. Preserve the ability to see world-map score, individual 1/3-2/3-3/3 busy-count scores, selected count/identity completeness, unreadable-view heartbeat, first PaddleOCR initialization timing, and scans taking at least two seconds while the supervised startup-delay investigation is active.
+
+Never use a diagnostic score, heartbeat, elapsed time, or OCR-init event to mark a team Idle, select a team, or authorize Dispatch. If diagnostics are later reduced, keep enough evidence to diagnose future long blocking scans; change logging separately from perception thresholds/state-machine behavior whenever practical.
+
 ### Dispatch remains independent safety authority
 
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.
