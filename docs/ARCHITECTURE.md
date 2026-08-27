@@ -30,7 +30,7 @@ Passive Icon Alerts reuse detection but remain a separate observer runtime.
 - `bot/adapters.py` — runtime Scenario copies, including exact-team Gather verification/clicking.
 - `bot/controller.py` — finite jobs and Rally input ownership.
 - `bot/team_state.py` — thread-safe Team 1/2/3 state/freshness model.
-- `bot/team_status.py` — read-only trusted-world-map march availability detector.
+- `bot/team_status.py` — read-only trusted-normal-world-map march availability detector.
 - `bot/continuous_gather.py` — persistent availability-driven Gather coordinator.
 - `bot/status.py` — read-only Dashboard summaries.
 - `bot/ui*.py` — normal-user presentation/runtime glue.
@@ -50,7 +50,7 @@ Only one active clicking automation may own mouse/keyboard input at a time.
 Normal Bot Auto Gather is state-driven rather than a finite “send N marches” job.
 
 ```text
-trusted world-map anchor (RallyIcon)
+trusted normal-map anchor (GatherSearchIcon)
         ↓
 busy-count indicator / compressed busy queue
         ↓
@@ -73,18 +73,26 @@ fresh configured Idle team?
            Dispatch
 ```
 
+### Trusted normal-map gate
+
+The current map gate uses `templates/GatherSearchIcon.jpg` in reference region `(0, 780, 110, 150)` at 1920×1080. A supervised real-game screenshot matched the committed Gather search icon at about **0.99**.
+
+The previous implementation used `templates/RallyIcon.png` as a generic world-map marker. On the same normal-map screenshot it scored only about **0.39**, proving the asset is not present on that screen and explaining why Auto Gather waited forever. `RallyIcon.png` remains valid for Rally workflow logic; it is not the normal-map gate.
+
+A small real-screen regression crop is stored at `tests/fixtures/team_status/world_map_search_anchor.jpg` so the gate is tied to actual normal-map pixels instead of assumed workflow geometry.
+
 ### Why blank status can mean Idle
 
-The game’s left deployment queue contains busy marches only. On the confirmed world map:
+The game’s left deployment queue contains busy marches only. On the confirmed normal world map:
 
 - no busy count/status row = 0/3 busy = all three teams are Idle candidates;
 - 1/3, 2/3, 3/3 identify how many teams are busy;
-- Team 1 (Murphy) and Team 3 (Stetmann) are identified with the existing Rally busy-portrait templates;
+- Team 1 (Murphy) and Team 3 (Stetmann) are identified with the existing busy-portrait templates;
 - Team 2 (Carlie) is inferred by elimination from the count.
 
-This detector reuses committed assets already exercised by Rally. It does not depend on the nonexistent `TeamStatusSidebarHeader.png` or uncommitted Team-status label/portrait templates.
+This detector reuses committed assets. It does not depend on nonexistent `TeamStatusSidebarHeader.png` or uncommitted Team-status label/portrait templates.
 
-A blank area on an untrusted screen remains unusable: if the Rally-icon world-map anchor is absent, the tracker marks the observation surface unavailable and continuous Gather cannot start from it.
+A blank area on an untrusted screen remains unusable: if the Gather-search normal-map anchor is absent, the tracker marks the observation surface unavailable and continuous Gather cannot start from it. User-facing status describes this as **waiting for a readable world-map team view**.
 
 ### Current map-side state resolution
 
@@ -123,6 +131,7 @@ Preserve:
 - geometry refresh near input;
 - `pyautogui.FAILSAFE`;
 - kill-switch/stop responsiveness;
+- normal-map gate before blank status can mean Idle;
 - untrusted/contradictory visual state remains unknown;
 - stale team observations cannot authorize Gather;
 - local countdown reaching zero cannot authorize Gather;

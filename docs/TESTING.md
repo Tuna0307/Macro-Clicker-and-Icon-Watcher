@@ -16,6 +16,7 @@ Important coverage includes Rally matching/OCR/team selection, model/scenario va
 
 `tests/test_team_status.py` protects the map-side availability contract:
 
+- a real normal-world-map Gather-search fixture matches the configured gate;
 - trusted 0-busy evidence -> Team 1/2/3 `IDLE`;
 - 1 busy with neither Team 1 nor Team 3 portrait -> Team 2 inferred busy;
 - 2 busy with Team 1 portrait -> Team 1/2 busy and Team 3 idle;
@@ -24,9 +25,17 @@ Important coverage includes Rally matching/OCR/team selection, model/scenario va
 - every detector template path exists in the repository;
 - no dependency on nonexistent `TeamStatusSidebarHeader.png`.
 
-The detector intentionally reuses:
+The current normal-map gate is:
 
-- `RallyIcon.png`;
+- `templates/GatherSearchIcon.jpg`;
+- reference region `(0, 780, 110, 150)` at 1920×1080;
+- threshold `0.90`;
+- regression fixture `tests/fixtures/team_status/world_map_search_anchor.jpg`.
+
+A supervised real-game screenshot matched the Gather search icon at about **0.99**. The previous `RallyIcon.png` gate matched only about **0.39** because the Rally workflow icon is absent from the normal map. `RallyIcon.png` should not be reintroduced as the generic map gate without new real-screen proof.
+
+After the map gate, the detector reuses:
+
 - `1_3Squad.png`;
 - `2_3Squad.png`;
 - `FullSquad3_3.png`;
@@ -43,7 +52,8 @@ The detector intentionally reuses:
 - selected team becoming busy exits fail-closed;
 - no-free-march does not replace;
 - confirmed dispatch marks exact team non-idle;
-- unconfirmed/aborted dispatch pauses.
+- unconfirmed/aborted dispatch pauses;
+- unavailable map state is described as waiting for a readable world-map team view.
 
 Legacy Scenario Gather tests remain because older configs/Advanced behavior still load compatibility state.
 
@@ -69,31 +79,33 @@ Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and myp
 
 Use screenshot fixtures whenever perception is disputed. Especially capture:
 
+- the normal-map Gather-search control used to prove the observation surface;
 - 0/3 world map with no busy status;
 - Team 1-only, Team 2-only, Team 3-only busy;
 - two-team combinations;
 - 3/3 busy;
 - resolution/scaling variants;
-- any false positive/negative for the world-map Rally-icon anchor;
+- any false positive/negative for the normal-map Gather-search anchor;
 - dispatch-panel idle indicator disagreements.
 
-Richer Travelling/Gathering/Returning/timer recognition should not be added from guessed geometry or nonexistent templates. Add real fixtures first.
+Do not choose a generic screen gate from a workflow template merely because it sounds related. Validate it against a real screenshot first. Richer Travelling/Gathering/Returning/timer recognition should likewise start from real fixtures, not guessed geometry or nonexistent templates.
 
 ## Live verification — Continuous Auto Gather
 
 Test these states deliberately:
 
-1. **0/3 busy**: all teams free and no status rows visible. Auto Gather must start.
-2. **1/3 busy**: verify correct team identity/inference.
-3. **2/3 busy**: verify the only free team is chosen.
-4. **3/3 busy**: Auto Gather must wait.
-5. **Team 2-only busy**: verify inference from count while Team 1/3 portraits are absent.
-6. Open an overlay/non-map screen: blank status must not be treated as all free.
-7. On dispatch panel, verify the exact chosen team’s blue idle indicator is required and its card is clicked.
-8. Verify busy teams are untouched.
-9. Verify resource-taken Cancel/retry.
-10. Verify no-free-march does not replace an existing march.
-11. Verify F12/unconfirmed attempt pauses instead of restarting.
+1. **Normal map gate**: Gather search icon is visible and the monitor produces a `[team]` observation.
+2. **0/3 busy**: all teams free and no status rows visible. Auto Gather must start.
+3. **1/3 busy**: verify correct team identity/inference. The latest supplied live screenshot is already a useful 1/3 case.
+4. **2/3 busy**: verify the only free team is chosen.
+5. **3/3 busy**: Auto Gather must wait.
+6. **Team 2-only busy**: verify inference from count while Team 1/3 portraits are absent.
+7. Open an overlay/non-map screen that hides the Gather search control: blank status must not be treated as all free.
+8. On dispatch panel, verify the exact chosen team’s blue idle indicator is required and its card is clicked.
+9. Verify busy teams are untouched.
+10. Verify resource-taken Cancel/retry.
+11. Verify no-free-march does not replace an existing march.
+12. Verify F12/unconfirmed attempt pauses instead of restarting.
 
 Current map-side detector reports `Idle/Busy/Unknown`. Do not block live Gather verification waiting for richer state labels/timers; those are a later perception enhancement.
 

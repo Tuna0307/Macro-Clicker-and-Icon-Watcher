@@ -72,7 +72,7 @@ User-facing controls include:
 The normal flow is:
 
 ```text
-confirm trusted world-map view
+confirm trusted normal world-map view
         ↓
 read busy-march count/identities
         ↓
@@ -97,11 +97,13 @@ configured team visually Idle?
 
 ### Important map-side behavior
 
-The game’s left march-status/deployment queue shows **busy marches only**. This means a blank status list on the confirmed world map is not “status unavailable”; it is the real **0/3 busy** state, so Team 1/2/3 are Idle candidates.
+The game’s left march-status/deployment queue shows **busy marches only**. A blank status list on a confirmed normal world map is therefore the real **0/3 busy** state, so Team 1/2/3 are Idle candidates.
 
-To avoid treating an unrelated blank screen as all-free, the monitor first verifies the world map with the existing Rally icon template. It then reuses the already-proven 1/3, 2/3, 3/3 squad-count assets and Team 1/Team 3 busy portraits. Team 2 is inferred from the count.
+To avoid treating an unrelated blank screen as all-free, the monitor first verifies the normal world map using the existing `templates/GatherSearchIcon.jpg` control in the bottom-left map UI. A supervised 1920×1080 game screenshot matched this template at about **0.99**. The previous gate incorrectly used `templates/RallyIcon.png`; that template scored only about **0.39** on the same normal-map screenshot because the Rally workflow icon is not present there, causing Auto Gather to wait forever.
 
-The broken prototype dependency on `templates/TeamStatusSidebarHeader.png` has been removed; that file never existed in the repository.
+After the map gate passes, the monitor reuses the proven 1/3, 2/3, 3/3 squad-count assets and Team 1/Team 3 busy portraits. Team 2 is inferred from the count.
+
+The broken prototype dependency on `templates/TeamStatusSidebarHeader.png` remains removed; that file never existed in the repository.
 
 Current map-side monitoring intentionally reports reliable `Idle`, `Busy`, or `Unknown`. The shared tracker can still model `Travelling`, `Gathering`, and `Returning` when future real visual evidence is added.
 
@@ -115,6 +117,8 @@ Important safety behavior remains:
 - if that team became busy, or the game reports no free march, the attempt closes/stops;
 - resource-taken Cancel/retry remains part of the proven Gather backend;
 - an unconfirmed attempt pauses Auto Gather fail-closed.
+
+When the normal-map anchor cannot be read, the UI/log now says it is **waiting for a readable world-map team view** rather than incorrectly implying that a sidebar itself must be present.
 
 Legacy `march_count` and `replacement_order` remain for backward compatibility only.
 
@@ -135,7 +139,7 @@ For the current live map detector, `Idle/Busy/Unknown` are the authoritative obs
 
 ## Rally, Positions, and Alerts
 
-Rally remains mature backend behavior with normal-user level/team-cap controls. Development/Science remain finite Position workflows. Icon Alerts remain passive observers.
+Rally remains mature backend behavior with normal-user level/team-cap controls. `RallyIcon.png` remains a Rally workflow asset; it is not the generic normal-world-map gate. Development/Science remain finite Position workflows. Icon Alerts remain passive observers.
 
 ## Shared detection and safety
 

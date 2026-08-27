@@ -7,7 +7,7 @@ The original MVP used a finite “send several marches” model with fixed busy-
 Current normal Bot behavior:
 
 ```text
-confirm world-map view
+confirm normal world-map view
         ↓
 read busy count + busy identities
         ↓
@@ -35,14 +35,21 @@ The left deployment queue contains **busy marches only**.
 Therefore:
 
 ```text
-trusted world map + no busy status = 0/3 busy = all teams free
+trusted normal world map + no busy status = 0/3 busy = all teams free
 ```
 
-This is not equivalent to “blank screen means free.” The detector first requires the existing Rally icon as a world-map anchor.
+This is not equivalent to “blank screen means free.” The detector first requires the normal-map Gather search control:
 
-Current evidence sources are all already committed/proven:
+- template: `GatherSearchIcon.jpg`
+- reference region: `(0, 780, 110, 150)` at 1920×1080
+- threshold: `0.90`
 
-- `RallyIcon.png`
+A supervised real-game screenshot matched the existing Gather search icon at about **0.99**. The previous gate used `RallyIcon.png`, which scored only about **0.39** on that normal map because it is a Rally workflow icon rather than a universal map control. That incorrect assumption caused Auto Gather to remain stuck in its waiting state.
+
+The real map-gate behavior is locked by `tests/fixtures/team_status/world_map_search_anchor.jpg`.
+
+After map confirmation, current evidence sources are all committed/proven:
+
 - `1_3Squad.png`
 - `2_3Squad.png`
 - `FullSquad3_3.png`
@@ -57,6 +64,8 @@ Current map-side classification is `Idle`, `Busy`, or `Unknown`. The tracker can
 
 Contradictory count/portrait evidence returns `Unknown`, not a guess.
 
+If the normal map cannot be confirmed, the service waits for a **readable world-map team view**. It does not require a visible busy-team sidebar and it does not treat an unrelated blank overlay as all free.
+
 ## Second safety gate
 
 Before Dispatch, the selected-team runtime still requires that exact team’s blue idle indicator and clicks that exact card. If it is no longer idle, the attempt exits. This protects against stale map observations and mid-search state changes.
@@ -70,6 +79,7 @@ Before Dispatch, the selected-team runtime still requires that exact team’s bl
 - Resource-taken Cancel/retry remains underneath.
 - An unconfirmed attempt pauses fail-closed.
 - Timer expiry, if timers are added later, must never create `Idle` by itself.
+- Workflow-specific templates must not become generic screen gates without real screenshot regression evidence.
 
 See `docs/AUTO_GATHER.md` for the authoritative current contract.
 

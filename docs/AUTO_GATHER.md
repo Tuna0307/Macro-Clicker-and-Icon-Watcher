@@ -22,7 +22,7 @@ MacroEngine
 
 Relevant modules:
 
-- `macro_clicker/bot/team_status.py` — read-only trusted-world-map availability observation.
+- `macro_clicker/bot/team_status.py` — read-only trusted-normal-world-map availability observation.
 - `macro_clicker/bot/team_state.py` — shared Team 1/2/3 state/freshness.
 - `macro_clicker/bot/continuous_gather.py` — decides when one configured team may be sent.
 - `macro_clicker/bot/adapters.py` — exact-team dispatch-panel verification/clicking.
@@ -51,18 +51,34 @@ The game’s left deployment/status queue shows **busy teams only**.
 That means this is valid visual evidence:
 
 ```text
-confirmed world map
+confirmed normal world map
 + no busy team status/count visible
 = 0/3 busy
 = Team 1 Idle, Team 2 Idle, Team 3 Idle
 ```
 
-The previous detector incorrectly required `templates/TeamStatusSidebarHeader.png`. That file does not exist, so Auto Gather remained stuck at “Waiting for the team-status sidebar” even when all three teams were free.
-
-The corrected detector does not use a fabricated header. It first verifies the world map via the existing Rally icon and then reuses proven assets:
+The detector must first prove that it is looking at the normal world map. The current trusted anchor is:
 
 ```text
-templates/RallyIcon.png
+templates/GatherSearchIcon.jpg
+reference search region: x=0, y=780, width=110, height=150
+reference resolution: 1920x1080
+threshold: 0.90
+```
+
+This anchor is based on supervised real-game evidence. On the supplied 1920×1080 normal-world-map screenshot, the committed Gather search icon matched at about **0.99**. The previous implementation incorrectly used `templates/RallyIcon.png`; that asset matched only about **0.39** because the Rally workflow icon is not visible on the normal map. That bad gate caused Auto Gather to wait indefinitely even while the game was on the correct screen.
+
+A small non-identifying real-screen regression fixture now lives at:
+
+```text
+tests/fixtures/team_status/world_map_search_anchor.jpg
+```
+
+Do not substitute a workflow-specific icon for the normal-world-map gate unless real fixtures prove it is actually present on the intended screen.
+
+After the map anchor passes, the detector reuses proven assets:
+
+```text
 templates/1_3Squad.png
 templates/2_3Squad.png
 templates/FullSquad3_3.png
@@ -89,7 +105,20 @@ The busy queue compresses upward, so row position is not team identity. Team 1 a
 
 If count and portrait evidence contradict each other, all teams become `UNKNOWN` for that observation. The bot does not guess.
 
-Crucially, “blank means 0/3” applies **only** after the trusted world-map anchor is visible. Blank/hidden status on another overlay or screen cannot authorize a dispatch.
+Crucially, “blank means 0/3” applies **only** after the trusted Gather-search world-map anchor is visible. Blank/hidden status on another overlay or screen cannot authorize a dispatch.
+
+## Previous detector failures that must not return
+
+The earlier prototype incorrectly required `templates/TeamStatusSidebarHeader.png`. That file does not exist, so Auto Gather raised a `FileNotFoundError` and remained stuck.
+
+A later correction removed that missing template but used `templates/RallyIcon.png` as a generic world-map anchor. A supervised live test proved that icon is not present on the normal map, so Auto Gather again stayed stuck at the waiting state.
+
+Both failures are now regression targets:
+
+- every detector template path must exist;
+- the normal-world-map anchor must match a real committed normal-map fixture.
+
+When the map cannot be trusted, logs/status should say **“Waiting for a readable world-map team view”**, not imply that a visible team-status sidebar is required.
 
 ## Current map-side states
 
@@ -145,7 +174,8 @@ The proven Scenario retains the observed resource-taken Cancel/retry path. A tak
 
 Preserve:
 
-- trusted world-map gate before blank status can mean 0/3;
+- trusted normal-world-map gate before blank status can mean 0/3;
+- Gather search icon is the current real-map gate, not RallyIcon;
 - contradictory count/identity evidence -> `UNKNOWN`;
 - fresh visual Idle required;
 - stale/untrusted observations cannot dispatch;
@@ -170,6 +200,7 @@ Important automated coverage includes:
 
 Protect at least:
 
+- real normal-map Gather-search fixture matches the configured gate;
 - 0 busy status on trusted world map -> all three Idle candidates;
 - 1/3, 2/3, 3/3 inference;
 - Team 2 inference from count;
@@ -186,14 +217,16 @@ Protect at least:
 
 A supervised real-game test should cover:
 
-1. all three teams free — no busy status visible — Auto Gather starts;
-2. one busy team;
-3. two busy teams;
-4. all three busy — waits;
-5. Team 2-only busy inference;
-6. exact intended dispatch card is clicked;
-7. busy teams remain untouched;
-8. one busy team later becomes visually free and can be sent;
-9. resource-taken Cancel/retry;
-10. F12/unconfirmed attempt pauses;
-11. no-free-march never replaces an occupied march.
+1. normal world map is recognized by the Gather search icon;
+2. all three teams free — no busy status visible — Auto Gather starts;
+3. one busy team;
+4. two busy teams;
+5. all three busy — waits;
+6. Team 2-only busy inference;
+7. exact intended dispatch card is clicked;
+8. busy teams remain untouched;
+9. one busy team later becomes visually free and can be sent;
+10. resource-taken Cancel/retry;
+11. F12/unconfirmed attempt pauses;
+12. no-free-march never replaces an occupied march;
+13. overlays that hide the normal-map search control do not authorize blank-status Idle.

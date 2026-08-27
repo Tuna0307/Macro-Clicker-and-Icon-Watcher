@@ -28,15 +28,21 @@ Maintain separation between:
 
 ### Protected perception contract
 
-The world-map busy queue contains busy marches only. On a **trusted world-map view**, absence of busy status/count is legitimate `0/3` evidence and means all three teams are Idle candidates.
+The world-map busy queue contains busy marches only. On a **trusted normal-world-map view**, absence of busy status/count is legitimate `0/3` evidence and means all three teams are Idle candidates.
 
-Do not weaken this into “blank anywhere = idle.” The world-map Rally-icon anchor must be visible first.
+Do not weaken this into “blank anywhere = idle.” The current trusted normal-map gate is the committed `templates/GatherSearchIcon.jpg` control in reference region `(0, 780, 110, 150)` at 1920×1080. A supervised real screenshot matched it at about **0.99**.
 
-Reuse the existing committed Rally assets for busy count and Team 1/3 identity. Team 2 is inferred from count. Contradictory evidence must fail closed as `UNKNOWN`.
+The previous implementation incorrectly used `templates/RallyIcon.png` as a generic world-map gate. It scored only about **0.39** on the supplied normal-map screenshot and caused Auto Gather to wait forever. RallyIcon remains valid for the Rally workflow, but workflow-specific templates must not be promoted to generic screen gates without real fixture evidence.
+
+`tests/fixtures/team_status/world_map_search_anchor.jpg` is the focused real-screen regression for the current map gate.
+
+Reuse the existing committed busy-count and Team 1/3 identity assets after the map gate passes. Team 2 is inferred from count. Contradictory evidence must fail closed as `UNKNOWN`.
 
 Do not invent or reference visual template files that are not committed. The previous `TeamStatusSidebarHeader.png` dependency caused a runtime `FileNotFoundError` and blocked Gather entirely. Any future Travelling/Gathering/Returning/timer detector must start from real fixtures/templates and focused tests.
 
 Map-side availability is only the first gate. The dispatch-panel exact-team blue-idle check remains the independent final gate before Dispatch.
+
+When the map observation cannot be trusted, status/log wording should describe **waiting for a readable world-map team view** rather than implying a sidebar is required.
 
 ## Safe cleanup
 

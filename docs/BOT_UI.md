@@ -36,9 +36,11 @@ The Gather page exposes:
 - Gold start level;
 - configured Team 1/2/3 subset.
 
-The map-side status monitor uses the game’s real semantics: the left queue lists **busy marches only**. Therefore a confirmed world-map view with no busy count/status is the `0/3` state and all Team 1/2/3 are Idle candidates.
+The map-side status monitor uses the game’s real semantics: the left queue lists **busy marches only**. Therefore a confirmed normal-world-map view with no busy count/status is the `0/3` state and all Team 1/2/3 are Idle candidates.
 
-The monitor must not infer all-idle from an arbitrary blank screen. It first verifies the world map using `templates/RallyIcon.png`, then uses the committed 1/3, 2/3, 3/3 squad-count templates plus Team 1/Team 3 busy portraits. Team 2 is inferred from count.
+The monitor must not infer all-idle from an arbitrary blank screen. It first verifies the normal world map using `templates/GatherSearchIcon.jpg` in the bottom-left map controls. A supervised 1920×1080 screenshot matched that committed icon at about **0.99**. The prior `templates/RallyIcon.png` gate scored only about **0.39** on the same normal-map screen and caused the service to wait forever; RallyIcon remains a Rally workflow asset, not the generic map gate.
+
+After the map gate passes, the detector uses the committed 1/3, 2/3, 3/3 squad-count templates plus Team 1/Team 3 busy portraits. Team 2 is inferred from count. `tests/fixtures/team_status/world_map_search_anchor.jpg` locks the map-gate behavior to real screen evidence.
 
 Current map-side labels are deliberately conservative:
 
@@ -50,7 +52,7 @@ Team 3   Idle / Busy / Unknown
 
 The tracker supports richer states for future evidence, but Travelling/Gathering/Returning/timers are not required for safe Gather scheduling today.
 
-When all configured teams are busy, the UI should say it is waiting. If the world-map observation is unavailable, it should wait for trusted team status rather than treating the screen as idle.
+When all configured teams are busy, the UI should say it is waiting. If the normal-world-map observation is unavailable, the UI/log should say **waiting for a readable world-map team view**, not imply that a visible team-status sidebar is itself required.
 
 ## Exact-team dispatch
 
@@ -82,7 +84,7 @@ Protect:
 - mature Rally behavior;
 - target-window/foreground safety;
 - Gather search-until-found and resource-taken recovery;
-- trusted-world-map gate before treating blank status as 0/3;
+- trusted Gather-search normal-world-map gate before treating blank status as 0/3;
 - contradictory evidence -> Unknown;
 - exact-team dispatch-panel verification;
 - busy-team protection;

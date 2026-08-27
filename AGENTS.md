@@ -125,7 +125,9 @@ The game’s left deployment queue contains **busy marches only**. Therefore:
 - when the bot is on a trusted world-map view and there is no busy-count/status row, that is the real `0/3` state and Team 1/2/3 are Idle candidates;
 - blank queue state must **not** be interpreted as idle on arbitrary overlays/screens.
 
-`team_status.py` first requires the existing `templates/RallyIcon.png` world-map anchor. It then reuses committed, already-proven assets:
+`team_status.py` first requires the normal-map `templates/GatherSearchIcon.jpg` control in the bottom-left world-map area. A supervised 1920x1080 map screenshot matched that committed template at about `0.99`; the previous `templates/RallyIcon.png` gate scored only about `0.39` because that Rally workflow icon is not present on the normal map and caused Auto Gather to wait forever.
+
+After the trusted map gate passes, the detector reuses committed, already-proven assets:
 
 - `templates/1_3Squad.png`
 - `templates/2_3Squad.png`
@@ -135,7 +137,7 @@ The game’s left deployment queue contains **busy marches only**. Therefore:
 
 Team 2 (Carlie) is inferred from busy count plus Team 1/3 identity because there is intentionally no Team 2 portrait template.
 
-Do **not** reintroduce a dependency on nonexistent `TeamStatusSidebarHeader.png`, `Team*MarchPortrait.png`, or `TeamStatusTravelling/Gathering/Returning.png` assets unless real committed fixtures/templates are added and tested.
+Do **not** reintroduce a dependency on nonexistent `TeamStatusSidebarHeader.png`, `Team*MarchPortrait.png`, or `TeamStatusTravelling/Gathering/Returning.png` assets unless real committed fixtures/templates are added and tested. Do not use a workflow-specific icon as a generic world-map gate unless real normal-map fixtures prove it is actually present.
 
 The current map-side detector intentionally emits `IDLE`, `BUSY`, or `UNKNOWN`. The tracker still supports richer `TRAVELLING`, `GATHERING`, and `RETURNING` states for future visual evidence, but those detailed labels/timers are not required to authorize Gather.
 
@@ -143,7 +145,7 @@ The current map-side detector intentionally emits `IDLE`, `BUSY`, or `UNKNOWN`. 
 
 Preserve:
 
-- map-side `IDLE` is trusted only when the world-map anchor is visible;
+- map-side `IDLE` is trusted only when the normal-map Gather search control is visible;
 - contradictory busy-count/portrait evidence fails closed as `UNKNOWN`;
 - stale observations cannot authorize Gather;
 - exact selected team must still show its blue idle indicator on the dispatch panel;
@@ -179,6 +181,7 @@ Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and myp
 
 Continuous Gather changes should protect tests for:
 
+- real normal-map Gather-search anchor fixture matches the configured gate;
 - trusted world-map `0/3` -> all Idle candidates;
 - 1/3, 2/3, 3/3 busy-count classification;
 - Team 2 inference from busy count + Team 1/3 portraits;
