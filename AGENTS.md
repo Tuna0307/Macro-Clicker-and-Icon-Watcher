@@ -114,6 +114,19 @@ Preserve:
 - unconfirmed/aborted attempts pause fail-closed;
 - timer expiry cannot authorize dispatch.
 
+### Team-monitor diagnostics
+
+`bot/team_status.py` emits observation-only `[team-diag]` lines to diagnose long startup or polling stalls without changing any decision. Preserve these signals while the supervised delay investigation is active:
+
+- world-map anchor score versus the `0.90` gate;
+- separate `1/3`, `2/3`, and `3/3` busy-count match scores plus the selected count;
+- whether compressed-row team identity is complete or partial;
+- rate-limited unreadable-view/target-window heartbeat messages;
+- `OCR initialization started` **before** PaddleOCR model construction, followed by ready/failure duration;
+- `slow scan ...` whenever one monitor pass takes at least two seconds.
+
+A diagnostic score or timer is never dispatch authority. Use the next supervised log to distinguish map gating, busy-count false positives, OCR initialization, and other slow detection stages before changing behavior.
+
 ## Testing
 
 Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and mypy are informational. Perception changes additionally require supervised Windows/game verification. Image-template tests must verify decodability with OpenCV, not merely filesystem presence.
