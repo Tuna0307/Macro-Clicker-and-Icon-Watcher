@@ -20,6 +20,8 @@ Busy
 Unknown
 ```
 
+Detailed status-label assets are optional. If one is missing locally, the affected non-idle row should display generic `Busy` (with a timer if OCR succeeds) rather than making the team monitor unavailable. Generic Busy remains non-dispatchable.
+
 The left game sidebar is a compressed busy-only list. Its first/second/third visible rows are **not** fixed Team 1/2/3 positions. Rows represent the busy subset in team-number order and move upward when a team becomes free.
 
 Hero faces also cannot be used as permanent team IDs because changing a lead hero changes both the dispatch and sidebar portrait. The monitor learns current portraits only from unambiguous assignments and uses them as additional evidence later.

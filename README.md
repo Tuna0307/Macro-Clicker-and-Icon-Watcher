@@ -54,7 +54,9 @@ Live screenshots confirmed:
 - Travelling (`去 X:... Y:...`)
 - Rallying (`集結中`)
 
-The Dashboard can show these states with countdowns. Timers reduce unnecessary polling, but reaching `00:00:00` never makes a team Idle automatically; fresh visual evidence is required.
+Detailed status images are optional enhancements. If one is unavailable in a local runtime, that busy row degrades to generic `Busy` instead of breaking the whole team monitor. Timer OCR may still provide a countdown. The bot never treats this fallback as Idle.
+
+The Dashboard can show detailed states with countdowns when the assets are available. Timers reduce unnecessary polling, but reaching `00:00:00` never makes a team Idle automatically; fresh visual evidence is required.
 
 If a cold start at `1/3` or `2/3` cannot safely identify the busy subset yet, state remains Unknown and Gather waits instead of guessing.
 

@@ -73,6 +73,8 @@ Confirmed game labels:
 集結中             -> RALLYING
 ```
 
+Detailed status-label images are optional enhancements. Missing/unreadable activity assets must never make the whole sidebar unreadable. `_activity()` skips unavailable detailed templates and falls back to generic `BUSY` when it cannot classify a specific status. Busy remains non-dispatchable, and timer OCR can still be used when available.
+
 Each busy row may provide an `HH:MM:SS` countdown. OCR tolerates common digit confusions. The tracker uses timers to reduce polling frequency:
 
 - near expiry -> check frequently;
@@ -95,8 +97,8 @@ If the selected team is no longer idle, the attempt exits. No-free-march never r
 
 ## Safety invariants
 
-Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, and target-window safety.
+Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, generic-Busy fallback for optional status assets, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, and target-window safety.
 
 ## Live verification required
 
-Test starting the search popup from each of its three tabs, then test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety.
+Test starting the search popup from each of its three tabs; then test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, missing-status-asset fallback, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety.

@@ -79,7 +79,7 @@ The current detector uses:
 
 The old `Team1Busy.png` / `Team3Busy.png` images are positive bootstrap hints only. A non-match proves nothing.
 
-### Status vocabulary
+### Status vocabulary and optional detail assets
 
 Confirmed live labels:
 
@@ -87,6 +87,8 @@ Confirmed live labels:
 - `返回` -> `RETURNING`
 - `去 X:... Y:...` -> `TRAVELLING`
 - `集結中` -> `RALLYING`
+
+Detailed activity-label templates improve status/timer presentation but are **not core availability authority**. If one or more detailed status images are missing/unreadable on a runtime installation, `_activity()` must degrade the row to generic `BUSY` instead of failing the whole sidebar observation. Core world-map, busy-count, and identity evidence remain required/fail-closed.
 
 Timers are scheduling hints. Countdown zero never promotes a team to Idle; a fresh screen observation is required.
 

@@ -8,7 +8,8 @@ Normal Bot Gather is continuous and team-state driven:
 trusted world map
  -> read busy count
  -> interpret compressed ordered busy rows
- -> attach status + timer to resolved teams
+ -> attach detailed status + timer when available
+ -> otherwise keep unresolved activity safely Busy
  -> choose fresh configured Idle team
  -> open resource search
  -> select middle 採集 / Gather tab
@@ -41,11 +42,13 @@ The detector learns current portraits only from unambiguous assignments (for exa
 
 ## Activity/timing design
 
-Confirmed states are Gathering, Returning, Travelling, and Rallying, with row countdowns. Timers are for scheduling the next visual check, never for declaring Idle.
+Confirmed detailed states are Gathering, Returning, Travelling, and Rallying, with row countdowns. Their real `TeamStatus*.png` crops improve display and polling but are optional detail assets. A missing or unreadable detailed status template must degrade the row to generic Busy rather than aborting the whole sidebar observation. Generic Busy is still non-dispatchable.
+
+Timers are for scheduling the next visual check, never for declaring Idle. Timer OCR may continue even when detailed activity classification is unavailable.
 
 ## Fixed dispatch geometry
 
-Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale or ambiguous.
+Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale, ambiguous, or only generic Busy.
 
 ## Historical MVP
 

@@ -26,6 +26,8 @@ Hero portraits cannot be static identity because changing a lead hero changes bo
 
 Current detailed activities are `IDLE`, `TRAVELLING`, `GATHERING`, `RETURNING`, `RALLYING`, `BUSY`, and `UNKNOWN`. Real Chinese status-label crops and timer OCR populate detailed busy states when readable.
 
+Detailed status-label templates are optional perception detail, not an availability prerequisite. If a status-label asset is missing/unreadable, that row falls back to generic `BUSY`; the whole sidebar observation must continue. Core map-anchor, busy-count and identity templates remain required and fail closed if missing.
+
 A `3/3` sidebar is inherently unambiguous: rows are Team 1, Team 2, Team 3. A cold ambiguous `1/3` or `2/3` without current identity evidence remains Unknown rather than guessing.
 
 ## Timer scheduling
@@ -38,4 +40,4 @@ Map perception only authorizes a candidate attempt. On the dispatch panel, Team 
 
 ## Input ownership and protected behavior
 
-Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, and fail-closed ambiguity.
+Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, optional-status fallback, and fail-closed ambiguity.

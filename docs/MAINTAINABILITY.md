@@ -27,6 +27,8 @@ The Gather search popup remembers its selected tab. Preserve the explicit middle
 
 Current real labels: Gathering, Returning, Travelling, Rallying. Timer OCR may optimize polling and presentation, but timer expiry cannot change state to Idle.
 
+Detailed `TeamStatus*.png` activity-label assets are optional detail, not core availability authority. If one is missing or unreadable, the detector must skip it and conservatively classify an unresolved activity as generic Busy. Do not let an optional status asset raise out of `_activity()` and invalidate the whole sidebar observation. Core world-map anchor, busy-count, and identity safety evidence remain fail-closed requirements.
+
 ### Dispatch remains independent safety authority
 
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.
