@@ -75,6 +75,8 @@ Confirmed game labels:
 
 Detailed status-label images are optional enhancements. Missing/unreadable activity assets must never make the whole sidebar unreadable. `_activity()` skips unavailable detailed templates and falls back to generic `BUSY` when it cannot classify a specific status. Busy remains non-dispatchable, and timer OCR can still be used when available.
 
+The Gathering and Rallying PNG blobs were repaired on 2026-08-27 after Windows CI reproduced OpenCV decode failure despite the Gathering path existing. Returning and Travelling already matched verified local crops. Real status assets must be validated by successful `cv2.imread()` decoding, not only filesystem presence.
+
 Each busy row may provide an `HH:MM:SS` countdown. OCR tolerates common digit confusions. The tracker uses timers to reduce polling frequency:
 
 - near expiry -> check frequently;

@@ -29,6 +29,8 @@ Current real labels: Gathering, Returning, Travelling, Rallying. Timer OCR may o
 
 Detailed `TeamStatus*.png` activity-label assets are optional detail, not core availability authority. If one is missing or unreadable, the detector must skip it and conservatively classify an unresolved activity as generic Busy. Do not let an optional status asset raise out of `_activity()` and invalidate the whole sidebar observation. Core world-map anchor, busy-count, and identity safety evidence remain fail-closed requirements.
 
+Do not equate file existence with a valid visual template. The 2026-08-27 Gathering/Rallying repair was needed because earlier blobs existed in Git but failed OpenCV decoding. Any new or replaced visual asset should have a regression that actually loads it with `cv2.imread()` and verifies a non-empty image.
+
 ### Dispatch remains independent safety authority
 
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.

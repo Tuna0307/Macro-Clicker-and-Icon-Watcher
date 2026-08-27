@@ -44,6 +44,8 @@ The detector learns current portraits only from unambiguous assignments (for exa
 
 Confirmed detailed states are Gathering, Returning, Travelling, and Rallying, with row countdowns. Their real `TeamStatus*.png` crops improve display and polling but are optional detail assets. A missing or unreadable detailed status template must degrade the row to generic Busy rather than aborting the whole sidebar observation. Generic Busy is still non-dispatchable.
 
+Gathering and Rallying were rebuilt from verified screenshot-derived crops after CI showed their earlier committed blobs were not reliably OpenCV-decodable. Returning and Travelling already matched the verified local assets. This is why asset regression must test actual decoding rather than file existence only.
+
 Timers are for scheduling the next visual check, never for declaring Idle. Timer OCR may continue even when detailed activity classification is unavailable.
 
 ## Fixed dispatch geometry

@@ -27,18 +27,18 @@ Protect:
 - `3/3` rows resolve Team 1,2,3 in order;
 - exact recent dispatch/history can narrow a row when safe;
 - real status crops classify Gathering, Returning, Travelling, Rallying when available;
+- every committed status crop must be successfully decoded by OpenCV, not merely exist by path;
 - missing/unreadable detailed activity templates degrade to generic Busy without raising or destroying the sidebar observation;
 - generic Busy fallback remains non-dispatchable;
 - timer parser accepts normal `HH:MM:SS` and common OCR confusions;
 - status/timer stay attached to resolved team identity;
-- committed status templates exist in the repository even though runtime fallback protects local missing-asset cases;
 - stale/untrusted/Unknown state cannot authorize Gather;
 - timer expiry never creates Idle;
 - exact fixed dispatch-card blue-idle verification remains required;
 - no-free-march never replaces;
 - unconfirmed attempt pauses.
 
-The committed real status-label crops came from supervised 1920x1080 game screenshots. Keep them as visual regression assets; do not replace them with guessed text rendering.
+The committed real status-label crops came from supervised 1920x1080 game screenshots. Keep them as visual regression assets; do not replace them with guessed text rendering. Gathering/Rallying were rebuilt on 2026-08-27 after CI caught unreadable earlier blobs; Returning/Travelling already matched the verified local crops.
 
 ## Live verification matrix
 
@@ -47,7 +47,7 @@ Test deliberately:
 1. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
 2. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
 3. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
-4. Confirm current local status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/Unreadable world map.
+4. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
 5. 0/3 all free.
 6. each single busy team where possible.
 7. each two-busy combination.

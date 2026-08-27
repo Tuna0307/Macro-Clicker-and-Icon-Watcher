@@ -90,6 +90,8 @@ Confirmed live labels:
 
 Detailed activity-label templates improve status/timer presentation but are **not core availability authority**. If one or more detailed status images are missing/unreadable on a runtime installation, `_activity()` must degrade the row to generic `BUSY` instead of failing the whole sidebar observation. Core world-map, busy-count, and identity evidence remain required/fail-closed.
 
+The 2026-08-27 CI failure proved binary asset existence alone is insufficient: `TeamStatusGathering.png` existed by path but OpenCV could not decode its earlier blob. Gathering and Rallying were rebuilt from the verified screenshot-derived crops. For future visual assets, test actual `cv2.imread()` decoding, not only `Path.is_file()`.
+
 Timers are scheduling hints. Countdown zero never promotes a team to Idle; a fresh screen observation is required.
 
 ### Identity and cold-start safety
@@ -114,4 +116,4 @@ Preserve:
 
 ## Testing
 
-Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and mypy are informational. Perception changes additionally require supervised Windows/game verification.
+Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and mypy are informational. Perception changes additionally require supervised Windows/game verification. Image-template tests must verify decodability with OpenCV, not merely filesystem presence.
