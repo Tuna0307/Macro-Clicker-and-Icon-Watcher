@@ -6,6 +6,7 @@ import itertools
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -95,10 +96,14 @@ def parse_duration_text(text: str) -> int | None:
 class TeamTimerReader:
     """Lazy OCR for numeric HH:MM:SS timer crops."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        diagnostic_log: Callable[[str], None] | None = None,
+    ) -> None:
         self._engine: Any = None
         self._error: str | None = None
         self._lock = threading.Lock()
+        self._diagnostic_log = diagnostic_log or (lambda _message: None)
 
     @staticmethod
     def _strings(value: Any, depth: int = 0) -> list[str]:
@@ -140,6 +145,8 @@ class TeamTimerReader:
     def _get_engine(self):
         if self._engine is not None or self._error is not None:
             return self._engine
+        started = time.perf_counter()
+        self._diagnostic_log("[team-diag] OCR initialization started")
         try:
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
             from paddleocr import TextRecognition
@@ -148,12 +155,21 @@ class TeamTimerReader:
             for kwargs in ({"model_name": "PP-OCRv6_medium_rec"}, {}):
                 try:
                     self._engine = TextRecognition(**kwargs)
+                    elapsed = time.perf_counter() - started
+                    self._diagnostic_log(
+                        f"[team-diag] OCR initialization ready in {elapsed:.2f}s"
+                    )
                     return self._engine
                 except Exception as exc:
                     last_error = exc
             self._error = str(last_error)
         except Exception as exc:
             self._error = str(exc)
+        elapsed = time.perf_counter() - started
+        self._diagnostic_log(
+            "[team-diag] OCR initialization failed "
+            f"after {elapsed:.2f}s: {self._error or 'unknown error'}"
+        )
         return self._engine
 
     def read_seconds(self, crop: np.ndarray) -> int | None:
@@ -195,7 +211,10 @@ class TeamStatusDetector:
         self._portrait_cache_dir = portrait_cache_dir
         self._team_portraits: dict[int, np.ndarray] = {}
         self._missing_activity_templates: set[str] = set()
+        self.last_world_map_score: float | None = None
         self.last_busy_count: int | None = None
+        self.last_busy_count_score: float | None = None
+        self.last_busy_count_scores: dict[int, float] = {}
         self.last_identity_complete = False
         self._load_portraits()
 
@@ -269,14 +288,21 @@ class TeamStatusDetector:
     def _busy_count(self, counter: np.ndarray) -> tuple[int, float]:
         matches = []
         best = -1.0
+        scores_by_count: dict[int, float] = {}
         for count, path in BUSY_COUNT_TEMPLATES.items():
             score, _loc = self._best_match(counter, self._template(path))
+            normalized_score = max(0.0, float(score))
+            scores_by_count[count] = normalized_score
             best = max(best, score)
             if score >= BUSY_COUNT_THRESHOLDS[count]:
                 matches.append((score, count))
+        self.last_busy_count_scores = scores_by_count
         if not matches:
-            return 0, max(0.0, best)
+            selected_score = max(0.0, best)
+            self.last_busy_count_score = selected_score
+            return 0, selected_score
         score, count = max(matches)
+        self.last_busy_count_score = max(0.0, float(score))
         return count, score
 
     def _activity(self, row: np.ndarray) -> tuple[TeamActivity, float]:
@@ -510,6 +536,8 @@ class TeamStatusDetector:
     ) -> tuple[bool, tuple[TeamObservation, ...]]:
         if sidebar is None or sidebar.size == 0:
             self.last_busy_count = None
+            self.last_busy_count_score = None
+            self.last_busy_count_scores = {}
             self.last_identity_complete = False
             return False, ()
         if sidebar.shape[:2] != (250, 220):
@@ -567,14 +595,18 @@ class TeamStatusDetector:
         known_busy_teams: Iterable[int] = (),
     ) -> tuple[bool, tuple[TeamObservation, ...]]:
         if frame is None or frame.size == 0:
+            self.last_world_map_score = None
             return False, ()
         anchor = self._crop_reference_region(frame, WORLD_MAP_ANCHOR_REGION)
         score, _loc = self._best_match(
             anchor,
             self._template(WORLD_MAP_TEMPLATE),
         )
+        self.last_world_map_score = max(0.0, float(score))
         if score < WORLD_MAP_THRESHOLD:
             self.last_busy_count = None
+            self.last_busy_count_score = None
+            self.last_busy_count_scores = {}
             self.last_identity_complete = False
             return False, ()
         return self.detect_sidebar(
@@ -586,6 +618,10 @@ class TeamStatusDetector:
 
 class TeamStatusMonitor:
     """Background observer; it never owns mouse or keyboard input."""
+
+    DIAGNOSTIC_INTERVAL_SECONDS = 30.0
+    UNREADABLE_DIAGNOSTIC_INTERVAL_SECONDS = 15.0
+    SLOW_SCAN_SECONDS = 2.0
 
     def __init__(
         self,
@@ -600,11 +636,15 @@ class TeamStatusMonitor:
             lambda: TEAM_NUMBERS
         )
         self.tracker = tracker
-        self.detector = TeamStatusDetector()
         self.log = log or (lambda _message: None)
+        self.detector = TeamStatusDetector(
+            timer_reader=TeamTimerReader(diagnostic_log=self.log)
+        )
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_error: str | None = None
+        self._last_diagnostic_at = 0.0
+        self._last_unreadable_diagnostic_at = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -659,6 +699,50 @@ class TeamStatusMonitor:
             parts.append(text)
         return ", ".join(parts)
 
+    def _busy_score_summary(self) -> str:
+        return ", ".join(
+            f"{count}/3={self.detector.last_busy_count_scores.get(count, 0.0):.3f}"
+            for count in (1, 2, 3)
+        )
+
+    def _readable_diagnostic(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_diagnostic_at < self.DIAGNOSTIC_INTERVAL_SECONDS:
+            return
+        self._last_diagnostic_at = now
+        map_score = self.detector.last_world_map_score
+        map_text = "n/a" if map_score is None else f"{map_score:.3f}"
+        count = self.detector.last_busy_count
+        count_text = "n/a" if count is None else f"{count}/3"
+        identity = "complete" if self.detector.last_identity_complete else "partial"
+        self.log(
+            "[team-diag] "
+            f"world-map={map_text} busy={count_text} "
+            f"busy-scores[{self._busy_score_summary()}] identity={identity}"
+        )
+
+    def _unreadable_diagnostic(self, message: str) -> None:
+        now = time.monotonic()
+        if (
+            now - self._last_unreadable_diagnostic_at
+            < self.UNREADABLE_DIAGNOSTIC_INTERVAL_SECONDS
+        ):
+            return
+        self._last_unreadable_diagnostic_at = now
+        self.log(f"[team-diag] {message}")
+
+    def _slow_scan_diagnostic(self, elapsed: float) -> None:
+        if elapsed < self.SLOW_SCAN_SECONDS:
+            return
+        map_score = self.detector.last_world_map_score
+        map_text = "n/a" if map_score is None else f"{map_score:.3f}"
+        count = self.detector.last_busy_count
+        count_text = "n/a" if count is None else f"{count}/3"
+        self.log(
+            f"[team-diag] slow scan {elapsed:.2f}s "
+            f"world-map={map_text} busy={count_text}"
+        )
+
     def _run(self) -> None:
         try:
             capture = mss.MSS()
@@ -668,6 +752,7 @@ class TeamStatusMonitor:
         try:
             while not self._stop_event.is_set():
                 delay = 3.0
+                scan_started = time.perf_counter()
                 try:
                     title = str(self._target_title_provider() or "").strip()
                     rect = find_window_rect(title) if title else None
@@ -676,6 +761,9 @@ class TeamStatusMonitor:
                             (),
                             sidebar_visible=False,
                             busy_count=None,
+                        )
+                        self._unreadable_diagnostic(
+                            f"target window not found: {title or '<empty title>'}"
                         )
                     else:
                         left, top, width, height = rect
@@ -698,6 +786,16 @@ class TeamStatusMonitor:
                         )
                         if changed and visible:
                             self.log(f"[team] {self._summary(observations)}")
+                            self._readable_diagnostic(force=True)
+                        elif visible:
+                            self._readable_diagnostic()
+                        else:
+                            score = self.detector.last_world_map_score
+                            score_text = "n/a" if score is None else f"{score:.3f}"
+                            self._unreadable_diagnostic(
+                                "world-map unreadable "
+                                f"score={score_text} threshold={WORLD_MAP_THRESHOLD:.2f}"
+                            )
                         delay = self.tracker.next_visual_check_delay(
                             self._configured_teams_provider()
                         )
@@ -713,6 +811,8 @@ class TeamStatusMonitor:
                         f"{type(exc).__name__}: {exc}"
                     )
                     delay = 5.0
+                finally:
+                    self._slow_scan_diagnostic(time.perf_counter() - scan_started)
                 self._stop_event.wait(max(0.5, min(30.0, float(delay))))
         finally:
             try:
