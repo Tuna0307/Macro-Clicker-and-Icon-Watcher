@@ -138,7 +138,7 @@ def _gather_status(
     if in_flight is not None:
         return f"Running — Team {in_flight} — {_gather_phase(engine, config)}"
     if team_tracker is None or not bool(getattr(team_tracker, "sidebar_visible", False)):
-        return "Watching — waiting for the team-status sidebar"
+        return "Watching — waiting for a readable world-map team view"
 
     try:
         idle = team_tracker.available_teams(config.gather.teams_enabled)

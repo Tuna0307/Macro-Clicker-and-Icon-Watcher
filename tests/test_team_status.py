@@ -1,13 +1,20 @@
 from pathlib import Path
 
+import cv2
+
 from macro_clicker.bot.team_state import TeamActivity
 from macro_clicker.bot.team_status import (
     BUSY_COUNT_TEMPLATES,
     BUSY_IDENTITY_TEMPLATES,
+    WORLD_MAP_ANCHOR_REGION,
     WORLD_MAP_TEMPLATE,
+    WORLD_MAP_THRESHOLD,
     TeamStatusDetector,
 )
 from macro_clicker.models import project_path
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "team_status"
 
 
 def _activities(observations):
@@ -84,6 +91,22 @@ def test_contradictory_single_count_with_two_known_busy_portraits_fails_closed()
     )
 
     assert all(item.activity == TeamActivity.UNKNOWN for item in observations)
+
+
+def test_real_world_map_search_anchor_matches_the_gate_template():
+    fixture = cv2.imread(
+        str(FIXTURE_DIR / "world_map_search_anchor.jpg"),
+        cv2.IMREAD_COLOR,
+    )
+    template = cv2.imread(project_path(WORLD_MAP_TEMPLATE), cv2.IMREAD_COLOR)
+
+    assert fixture is not None
+    assert template is not None
+    score, _location = TeamStatusDetector._best_match(fixture, template)
+
+    assert WORLD_MAP_TEMPLATE == "templates/GatherSearchIcon.jpg"
+    assert WORLD_MAP_ANCHOR_REGION == (0, 780, 110, 150)
+    assert score >= WORLD_MAP_THRESHOLD
 
 
 def test_team_status_detector_uses_only_committed_existing_templates():

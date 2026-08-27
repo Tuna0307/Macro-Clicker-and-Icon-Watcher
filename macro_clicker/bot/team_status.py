@@ -30,11 +30,12 @@ from .team_state import TEAM_NUMBERS, TeamActivity, TeamObservation, TeamStateTr
 
 REFERENCE_SIZE = (1920, 1080)
 
-# A known world-map control prevents a blank queue on another screen from being
+# The normal world-map search control is present on the real map screen even when
+# there are zero busy teams. It prevents a blank queue on another screen from being
 # interpreted as three idle teams.
-WORLD_MAP_ANCHOR_REGION = (1824, 633, 85, 90)
-WORLD_MAP_TEMPLATE = "templates/RallyIcon.png"
-WORLD_MAP_THRESHOLD = 0.85
+WORLD_MAP_ANCHOR_REGION = (0, 780, 110, 150)
+WORLD_MAP_TEMPLATE = "templates/GatherSearchIcon.jpg"
+WORLD_MAP_THRESHOLD = 0.90
 
 # One normalized crop contains both the march-count indicator and the compressed
 # busy-team queue.  The queue contains busy teams only and compresses upward.

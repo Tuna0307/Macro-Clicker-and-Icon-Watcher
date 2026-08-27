@@ -94,7 +94,7 @@ class ContinuousGatherService:
             self.status.last_message = "Waiting for the current automation to finish"
             return False
         if not self.tracker.sidebar_visible:
-            self.status.last_message = "Waiting for the team-status sidebar"
+            self.status.last_message = "Waiting for a readable world-map team view"
             return False
 
         team = self.next_idle_team()
