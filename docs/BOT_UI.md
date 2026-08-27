@@ -32,6 +32,10 @@ If identity at a partial-busy cold start is ambiguous, the UI should show Unknow
 
 Timers are useful scheduling/display hints, never authority for Idle.
 
+### Logs diagnostics
+
+During the current supervised delay investigation, the Logs tab may show `[team-diag]` lines containing the world-map match score, all three busy-count candidate scores, identity completeness, unreadable-view heartbeats, OCR initialization timing, and `slow scan` duration. These are read-only troubleshooting messages. They do not change Dashboard state, choose a team, or authorize a click.
+
 ## Dispatch panel
 
 Unlike the sidebar, Team 1/2/3 dispatch cards have fixed positions. Exact-team blue-idle verification and fixed-card clicking remain the final safety gate regardless of hero portrait.
