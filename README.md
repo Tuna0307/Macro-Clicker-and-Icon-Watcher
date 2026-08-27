@@ -2,39 +2,11 @@
 
 A Windows desktop utility for **visual automation** and **passive screen monitoring**.
 
-The normal interface is a dedicated automation-bot surface. Users configure what they want the bot to do through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details.
-
-The proven Scenario engine remains underneath, and the original editor is still available through **Advanced** for development/debugging.
+The normal interface is a dedicated automation-bot surface. Users configure what they want the bot to do through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details. The proven Scenario engine remains underneath, and the original editor is still available through **Advanced**.
 
 ## Main interface
 
-The Bot interface contains:
-
-- **Dashboard** — bot status, current task, passive-alert status, live team state, Start/Stop, and quick actions.
-- **Rally** — configure supported mob/team level limits and join delay.
-- **Gather** — configure Gold gathering start level and which Team 1/2/3 may be used.
-- **Positions** — enable or run Development and Science workflows.
-- **Alerts** — start/stop passive image alerts and common alert groups.
-- **Schedule** — bot start/stop times and active weekdays.
-- **Logs** — runtime activity.
-- **Settings** — target-window settings and Advanced access.
-
-Low-level internals remain available through:
-
-- **Advanced** — Scenario / Step / Condition / Action editor and diagnostics.
-- **Alert Setup** — detailed passive-alert template configuration.
-
-The hidden Advanced start hotkey/legacy scheduler do not remain active during normal Bot use.
-
-## Setup
-
-Using a project virtual environment is recommended:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python -m macro_clicker
-```
+The Bot interface contains Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings pages. Low-level Scenario editing remains behind **Advanced** and detailed alert tuning behind **Alert Setup**.
 
 For normal Windows use, double-click:
 
@@ -42,15 +14,11 @@ For normal Windows use, double-click:
 Run PC Automation Bot.bat
 ```
 
-`Run PC Automation Bot.vbs` provides the same no-console launch. Older Macro Builder launchers remain for compatibility.
-
-Runtime logs are stored under the per-user data directory, normally:
+Runtime data normally lives under:
 
 ```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher\logs
+%LOCALAPPDATA%\Macro Clicker and Icon Watcher
 ```
-
-Set `MACRO_CLICKER_DATA_DIR` to override writable runtime storage.
 
 ## Architecture overview
 
@@ -61,7 +29,7 @@ Set `MACRO_CLICKER_DATA_DIR` to override writable runtime storage.
                             │
           ┌─────────────────┼─────────────────┐
           ▼                 ▼                 ▼
-   Feature adapters    BotController    TeamState services
+   Feature adapters    BotController    Team-state services
           │                 │                 │
           │                 │          Continuous Gather
           └──────────┬──────┴───────────────┬─┘
@@ -71,63 +39,28 @@ Set `MACRO_CLICKER_DATA_DIR` to override writable runtime storage.
              Scenarios / Steps
                      │
           Detection / OCR / Safety
-                     │
-          ┌──────────┴──────────┐
-          ▼                     ▼
-   Active automation       Passive alerts
 ```
 
 The Bot UI is a control layer, not a replacement for the working automation engine.
 
-For development details, read:
-
-- `AGENTS.md`
-- `docs/BOT_UI.md`
-- `docs/ARCHITECTURE.md`
-- `docs/MAINTAINABILITY.md`
-- `docs/TESTING.md`
-- `docs/AUTO_GATHER.md`
-- `docs/BOT_ROADMAP.md`
+For development details, read `AGENTS.md` and the living documents under `docs/`.
 
 ## Bot configuration
 
-Normal-user settings are stored separately from bundled Scenario JSON:
-
-```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher\bot_config.json
-```
-
-Saving normal Bot settings does **not** rewrite tuned files under `scenarios/`. Runtime adapters clone the proven scenario and apply supported values in memory.
+Normal-user settings are stored separately from bundled Scenario JSON in `bot_config.json`. Saving normal Bot settings does **not** rewrite tuned files under `scenarios/`; runtime adapters clone the proven scenario and apply supported values in memory.
 
 ## Input ownership
 
-Only one active clicking automation may own the target application at a time. Passive Alerts may run alongside it because they observe rather than click.
-
-Current coordination rules:
+Only one active clicking automation may own the target application at a time.
 
 - Development and Science are finite tasks.
 - Rally is continuous.
-- Continuous Auto Gather is a persistent service driven by Team 1/2/3 visual state, not a finite queued 3-dispatch job.
+- Continuous Auto Gather is persistent and driven by actual Team 1/2/3 state.
 - Auto Gather waits while another controller/engine task owns input.
-- Continuous Rally and continuous Auto Gather are currently blocked from running together until a safe cooperative handoff/preemption design exists.
-
-Do not run independent active automations concurrently and let them compete for mouse/keyboard input.
-
-## Rally configuration
-
-The Rally page exposes normal-user values such as:
-
-- minimum eligible mob level;
-- maximum eligible mob level;
-- Team 1 maximum level;
-- Team 3 maximum level;
-- pre-join delay.
-
-The existing backend still owns row matching, OCR, team availability/selection, transition guards, retries, and safe input.
+- Continuous Rally and continuous Auto Gather are currently blocked from running together until a safe cooperative handoff exists.
+- Passive Alerts may observe alongside the active input owner.
 
 ## Continuous Auto Gather
-
-The normal Bot Gather feature is continuous and state-driven.
 
 User-facing controls include:
 
@@ -139,7 +72,9 @@ User-facing controls include:
 The normal flow is:
 
 ```text
-read Team 1/2/3 visual state
+confirm trusted world-map view
+        ↓
+read busy-march count/identities
         ↓
 configured team visually Idle?
    ┌────┴────┐
@@ -160,26 +95,32 @@ configured team visually Idle?
       watch team state again
 ```
 
-Important behavior:
+### Important map-side behavior
+
+The game’s left march-status/deployment queue shows **busy marches only**. This means a blank status list on the confirmed world map is not “status unavailable”; it is the real **0/3 busy** state, so Team 1/2/3 are Idle candidates.
+
+To avoid treating an unrelated blank screen as all-free, the monitor first verifies the world map with the existing Rally icon template. It then reuses the already-proven 1/3, 2/3, 3/3 squad-count assets and Team 1/Team 3 busy portraits. Team 2 is inferred from the count.
+
+The broken prototype dependency on `templates/TeamStatusSidebarHeader.png` has been removed; that file never existed in the repository.
+
+Current map-side monitoring intentionally reports reliable `Idle`, `Busy`, or `Unknown`. The shared tracker can still model `Travelling`, `Gathering`, and `Returning` when future real visual evidence is added.
+
+Important safety behavior remains:
 
 - there is no normal-user `3 -> 2 -> 1` replacement priority;
-- the bot does not intentionally overwrite travelling/gathering/returning/busy teams;
-- if all configured teams are busy, it waits;
-- existing team activity present before bot startup is respected;
-- visible countdowns are scheduling hints only;
-- a timer reaching zero never makes a team Idle without fresh visual confirmation;
-- before Dispatch, the exact requested team is re-verified and explicitly clicked;
-- if that team became busy, or the game reports no free march, the attempt closes/stops instead of allowing another team to be auto-selected/replaced;
+- busy teams are not intentionally overwritten;
+- contradictory map evidence becomes `Unknown`;
+- stale/untrusted map observations cannot dispatch;
+- before Dispatch, the exact requested team is re-verified via its blue idle indicator and explicitly clicked;
+- if that team became busy, or the game reports no free march, the attempt closes/stops;
 - resource-taken Cancel/retry remains part of the proven Gather backend;
-- an unconfirmed attempt pauses Auto Gather fail-closed rather than retrying blindly.
+- an unconfirmed attempt pauses Auto Gather fail-closed.
 
-See `docs/AUTO_GATHER.md` for the authoritative contract.
-
-Legacy `march_count` and `replacement_order` fields remain for backward compatibility with older configs/Advanced scenario behavior, but they are not the normal continuous Bot policy.
+Legacy `march_count` and `replacement_order` remain for backward compatibility only.
 
 ## Team-state tracking
 
-The shared team tracker models:
+The tracker supports:
 
 ```text
 Idle
@@ -190,58 +131,17 @@ Busy
 Unknown
 ```
 
-The world-map expedition sidebar is the visual source of truth. Countdown OCR is used only to choose efficient recheck timing.
+For the current live map detector, `Idle/Busy/Unknown` are the authoritative observed states. A timer or predicted completion time never makes a team free by itself.
 
-Example:
+## Rally, Positions, and Alerts
 
-```text
-Team 1  Gathering  04:33:18
-Team 2  Returning   00:00:08
-Team 3  Travelling  00:00:17
-```
-
-The bot waits. When a team is later **visually confirmed Idle**, that team may be sent.
-
-## Position workflows
-
-Supported bundled workflows include:
-
-- `scenarios/Apply Development Position.json`
-- `scenarios/Apply Science Position.json`
-
-The Bot exposes normal enable/run controls and keeps internal click/retry steps hidden.
-
-## Passive Icon Alerts
-
-Icon Alerts are a separate passive-monitoring subsystem. They scan configured regions/templates and notify with sound/popup without executing active macro actions.
-
-Passive alerts may continue while one active clicking automation owns input.
+Rally remains mature backend behavior with normal-user level/team-cap controls. Development/Science remain finite Position workflows. Icon Alerts remain passive observers.
 
 ## Shared detection and safety
 
-Automation and Alerts reuse `macro_clicker/detection_core.py` for capture, scaling, template preparation/matching, colored-text/grayscale handling, monitor/window-relative geometry, and cancellation-aware perception.
+Active input preserves target-window geometry checks, foreground-window requirements, out-of-window rejection, live geometry rechecks, `pyautogui.FAILSAFE`, stop/kill-switch handling, and fail-closed unreadable visual state.
 
-Active input preserves:
-
-- target-window geometry checks;
-- foreground-window requirement;
-- out-of-window/monitor-bound rejection;
-- live geometry recheck near dispatch;
-- `pyautogui.FAILSAFE`;
-- scenario kill-switch/stop handling;
-- unreadable OCR/visual states treated as unknown rather than guessed.
-
-## Project layout
-
-```text
-macro_clicker/bot/   Bot config, adapters, controller, team-state services, UI/status
-macro_clicker/       Existing engine, Rally logic, detection, OCR, alerts, safety, Advanced UI
-tests/               Regression/safety/workflow tests
-templates/           Visual assets
-scenarios/           Bundled active-automation workflows
-alerts/              Passive alert settings/templates
-docs/                Living architecture, UI, testing, roadmap, and behavior guides
-```
+The Gather dispatch-panel exact-team idle check remains the final safety gate before Dispatch.
 
 ## Development checks
 
@@ -257,15 +157,6 @@ Blocking CI checks are pytest, Ruff lint, and scenario/template validation. Ruff
 
 ## AI-assisted development rule
 
-This repository is developed heavily with AI. Before changing behavior, read `AGENTS.md` and the relevant docs.
+Every meaningful commit must include a descriptive subject/body explaining what changed, why, runtime impact, preserved safety/compatibility, tests/checks, and remaining live verification.
 
-Every meaningful commit must include a descriptive subject/body explaining:
-
-- what changed;
-- why it changed;
-- intended runtime impact;
-- important behavior intentionally preserved;
-- tests/checks performed;
-- remaining live verification or follow-up work.
-
-When behavior, architecture, UI, configuration, safety policy, test contracts, or roadmap status changes, update **all affected living Markdown files in the same work**. Do not leave future AI with conflicting documentation.
+When behavior, architecture, UI, configuration, safety policy, test contracts, or roadmap status changes, update **all affected living Markdown files in the same work**.

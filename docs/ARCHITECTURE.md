@@ -1,8 +1,6 @@
 # Architecture and maintenance guide
 
-The project is a specialized Windows visual-automation bot and passive screen-monitoring application.
-
-The mature Scenario engine still powers active automation, but the normal product interface is the dedicated Bot UI.
+The project is a specialized Windows visual-automation bot and passive screen-monitoring application. The mature Scenario engine still powers active automation; the normal product interface is the dedicated Bot UI.
 
 ## Top-level architecture
 
@@ -21,91 +19,40 @@ The mature Scenario engine still powers active automation, but the normal produc
                                          ↓
                                     MacroEngine
                                          ↓
-                            Scenario -> Steps -> Actions
-                                         ↓
                          Detection / OCR / safe input
-
-Passive Icon Alerts reuse detection but remain a separate observer runtime.
 ```
 
-The governing rule is:
-
-> **Bot UI controls what the user wants; specialized backend code decides how to do it safely.**
+Passive Icon Alerts reuse detection but remain a separate observer runtime.
 
 ## Product/control modules
 
-### `bot_app.py`
-Primary shell. Shows the dedicated Bot interface while preserving hidden Advanced and Alert Setup tooling.
-
-### `macro_clicker/bot/config.py`
-Validated/persisted normal-user settings. Project-owned Scenario JSON is not rewritten by normal Bot saves.
-
-### `macro_clicker/bot/adapters.py`
-Deep-copies proven Scenarios and applies supported user-facing values. Continuous Gather selected-team mode adds runtime-only exact-team verification/clicking and fail-closed no-free-march behavior.
-
-### `macro_clicker/bot/controller.py`
-Serializes controller-owned clicking work. Development and Science are finite; Rally is continuous. Continuous Auto Gather is deliberately not a finite queued stage.
-
-### `macro_clicker/bot/team_state.py`
-Thread-safe Team 1/2/3 state model. Stores activity, countdown hints, freshness, and whether a visual refresh is needed.
-
-### `macro_clicker/bot/team_status.py`
-Read-only world-map expedition-sidebar detector/monitor. Identifies Team 1/2/3 and classifies Travelling/Gathering/Returning/Busy/Idle candidates. Timer OCR is lazy and advisory.
-
-### `macro_clicker/bot/continuous_gather.py`
-Persistent Gather coordinator. Chooses a configured team only from fresh visual Idle state, starts one exact-team Gather attempt, and waits when all configured teams are busy.
-
-### `macro_clicker/bot/status.py`
-Read-only Dashboard summaries for active tasks and team state.
-
-### `macro_clicker/bot/ui*.py`
-Normal-user presentation/runtime glue.
-
-## Module ownership
-
-| Module | Responsibility |
-| --- | --- |
-| `bot/config.py` | user-facing settings/validation/persistence |
-| `bot/adapters.py` | runtime Scenario adaptation including exact-team Gather attempt |
-| `bot/controller.py` | finite/Rally input-owner sequencing |
-| `bot/team_state.py` | shared team-state model/countdown hints |
-| `bot/team_status.py` | read-only visual team-state observation |
-| `bot/continuous_gather.py` | persistent availability-driven Gather coordination |
-| `bot/status.py` | read-only Dashboard state |
-| `engine.py` | active automation polling/actions/state transitions/safe input |
-| `rally_matching.py` | Rally row/OCR/team logic |
-| `resource_gathering.py` | legacy/scenario Gather success/replacement state compatibility |
-| `detection_core.py` | shared perception primitives |
-| `alert_watcher.py` | passive alert runtime/UI/policy |
-| `models.py` | Scenario/Step/Condition/Action models/validation |
+- `bot/config.py` — validated/persisted normal-user settings.
+- `bot/adapters.py` — runtime Scenario copies, including exact-team Gather verification/clicking.
+- `bot/controller.py` — finite jobs and Rally input ownership.
+- `bot/team_state.py` — thread-safe Team 1/2/3 state/freshness model.
+- `bot/team_status.py` — read-only trusted-world-map march availability detector.
+- `bot/continuous_gather.py` — persistent availability-driven Gather coordinator.
+- `bot/status.py` — read-only Dashboard summaries.
+- `bot/ui*.py` — normal-user presentation/runtime glue.
 
 ## Input ownership
 
 Only one active clicking automation may own mouse/keyboard input at a time.
 
-Current rules:
-
 - finite Position jobs are controller-owned;
 - Rally is continuous and controller-owned;
-- continuous Auto Gather is a persistent service but starts an engine attempt only when input is free;
-- Auto Gather may observe team state while finite tasks run;
-- Rally + continuous Gather are currently blocked together because safe cooperative preemption has not been designed;
-- passive Alerts may run alongside active automation because they do not click.
+- continuous Auto Gather is persistent but starts an engine attempt only when input is free;
+- Rally + continuous Gather are currently blocked together;
+- passive Alerts may run alongside active automation.
 
-Do not let independent MacroEngines compete for input.
+## Continuous Auto Gather perception
 
-## Rally workflow
-
-Rally remains protected mature behavior spanning `engine.py`, `rally_matching.py`, OCR, scenario JSON, templates, and focused tests.
-
-Preserve same-row association, atomic snapshots, OCR retry, Team 1/3 availability/selection, transition guards, recovery, and target-window safety.
-
-## Continuous Auto Gather workflow
-
-Normal Bot Auto Gather is state-driven rather than a finite "send N marches" job.
+Normal Bot Auto Gather is state-driven rather than a finite “send N marches” job.
 
 ```text
-visual expedition sidebar
+trusted world-map anchor (RallyIcon)
+        ↓
+busy-count indicator / compressed busy queue
         ↓
 TeamStatusDetector
         ↓
@@ -117,49 +64,55 @@ fresh configured Idle team?
    ┌────┴────┐
    No       Yes
    │          │
- wait      start one selected-team Gather runtime Scenario
+ wait      selected-team Gather attempt
               ↓
-      search Gold until found
+   dispatch-panel blue-idle recheck
               ↓
-   re-verify selected team idle
-              ↓
-      click exact team card
+       exact team card click
               ↓
            Dispatch
 ```
 
-Team activities:
+### Why blank status can mean Idle
+
+The game’s left deployment queue contains busy marches only. On the confirmed world map:
+
+- no busy count/status row = 0/3 busy = all three teams are Idle candidates;
+- 1/3, 2/3, 3/3 identify how many teams are busy;
+- Team 1 (Murphy) and Team 3 (Stetmann) are identified with the existing Rally busy-portrait templates;
+- Team 2 (Carlie) is inferred by elimination from the count.
+
+This detector reuses committed assets already exercised by Rally. It does not depend on the nonexistent `TeamStatusSidebarHeader.png` or uncommitted Team-status label/portrait templates.
+
+A blank area on an untrusted screen remains unusable: if the Rally-icon world-map anchor is absent, the tracker marks the observation surface unavailable and continuous Gather cannot start from it.
+
+### Current map-side state resolution
+
+The current detector emits:
 
 - `IDLE`
-- `TRAVELLING`
-- `GATHERING`
-- `RETURNING`
 - `BUSY`
 - `UNKNOWN`
 
-Important invariants:
+The tracker still supports `TRAVELLING`, `GATHERING`, and `RETURNING` for future richer observations. Detailed state/timer recognition is intentionally deferred until real committed fixtures/templates exist; it must not block safe availability detection.
 
-- existing busy state before Bot startup is respected;
-- no user-facing fixed team priority;
-- all-busy means wait, not replace;
-- stale/hidden sidebar state cannot authorize a dispatch;
-- timer expiry requests a refresh but cannot change a team to Idle;
-- exact selected team is re-verified on the dispatch panel;
-- no-free-march stops/closes rather than replacing a busy march;
-- confirmed dispatch marks that exact team non-idle until visuals catch up;
-- unconfirmed attempt pauses fail-closed.
+Contradictory busy-count and portrait evidence fails closed to `UNKNOWN`.
 
-The existing `scenarios/Gather Gold.json` still supplies the proven search/resource/resource-taken state machine for one attempt. Legacy `resource_gathering.py` state remains for backward compatibility/Advanced use.
+## Dispatch safety
 
-See `docs/AUTO_GATHER.md`.
+Map-side availability only authorizes starting a candidate attempt. Before the actual Dispatch action, `bot/adapters.py` still:
 
-## Passive Icon Alerts
+1. requires the normal Dispatch button;
+2. requires the exact selected team’s blue idle indicator;
+3. clicks that exact team card;
+4. exits if the selected team is no longer idle;
+5. does not replace an occupied march on no-free-march.
 
-Alerts remain passive observers and may run beside one active input owner. Keep passive notification policy out of active macro decision code unless explicitly requested.
+This second check is intentionally independent from the map-side detector.
 
-## Shared perception
+## Rally workflow
 
-Reusable capture/scaling/matching belongs in `detection_core.py`. Workflow policy stays in specialized active modules or the Bot control/service layer.
+Rally remains protected mature behavior spanning `engine.py`, `rally_matching.py`, OCR, scenario JSON, templates, and focused tests. Preserve same-row association, OCR retry, Team 1/3 availability/selection, transition guards, recovery, and target-window safety.
 
 ## Safety invariants
 
@@ -170,38 +123,15 @@ Preserve:
 - geometry refresh near input;
 - `pyautogui.FAILSAFE`;
 - kill-switch/stop responsiveness;
-- unreadable OCR/visual state remains unknown;
-- stale team-state observations cannot authorize Gather;
+- untrusted/contradictory visual state remains unknown;
+- stale team observations cannot authorize Gather;
 - local countdown reaching zero cannot authorize Gather;
 - selected-team mismatch cannot silently dispatch another team.
 
 ## Persistence boundaries
 
-Project-owned implementation/assets:
-
-- `scenarios/`
-- `templates/`
-- `alerts/settings.json`
-- `alerts/templates/`
-
-Per-user writable runtime state:
-
-- `bot_config.json`
-- logs/diagnostics
-- locks/UI preferences
-
-Normal Bot settings modify runtime copies, not stored Scenarios.
+Project implementation/assets live under `scenarios/`, `templates/`, `alerts/`, and source code. Per-user writable state includes `bot_config.json`, logs/diagnostics, locks, and UI preferences.
 
 ## AI-assisted development workflow
 
-Before changing code:
-
-1. read `AGENTS.md` and affected living docs;
-2. identify ownership and preserved behavior;
-3. make the smallest coherent change;
-4. add/update regression tests;
-5. update every affected living Markdown file;
-6. run/check CI and record live verification still required;
-7. commit with a detailed subject/body explaining what, why, runtime impact, preserved invariants, tests, and remaining work.
-
-Dated plan/spec documents are historical records and should not be silently rewritten to erase earlier design context.
+Read `AGENTS.md`, identify preserved behavior, make the smallest coherent change, add focused tests, update every affected living Markdown file, check CI, record live verification still required, and commit with a descriptive AI-oriented subject/body.

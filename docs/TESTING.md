@@ -10,37 +10,42 @@ Primary command:
 python -m pytest -q
 ```
 
-Important coverage includes:
+Important coverage includes Rally matching/OCR/team selection, model/scenario validation, input safety, BotConfig, adapters/controller/UI runtime, continuous Gather state, exact-team dispatch adaptation, Dashboard status, and passive Alerts.
 
-- Rally row association, OCR, team selection, transition/recovery behavior;
-- model/scenario validation;
-- target-window and input safety;
-- BotConfig persistence/validation;
-- Bot adapters/controller/UI-runtime contracts;
-- continuous Gather TeamStateTracker behavior;
-- exact-team selected Gather adaptation;
-- Dashboard status formatting;
-- passive Alerts.
+## Continuous Gather perception regressions
 
-### Continuous Gather regressions
+`tests/test_team_status.py` protects the map-side availability contract:
 
-Protect at least:
+- trusted 0-busy evidence -> Team 1/2/3 `IDLE`;
+- 1 busy with neither Team 1 nor Team 3 portrait -> Team 2 inferred busy;
+- 2 busy with Team 1 portrait -> Team 1/2 busy and Team 3 idle;
+- 3 busy -> all busy;
+- contradictory count/portrait evidence -> all `UNKNOWN`;
+- every detector template path exists in the repository;
+- no dependency on nonexistent `TeamStatusSidebarHeader.png`.
 
-- `IDLE` team may be selected only from fresh visual state;
-- stale Idle observations cannot authorize a dispatch;
-- hidden/missing team sidebar cannot authorize a dispatch;
-- timer reaching `00:00:00` does **not** change a busy team to Idle;
+The detector intentionally reuses:
+
+- `RallyIcon.png`;
+- `1_3Squad.png`;
+- `2_3Squad.png`;
+- `FullSquad3_3.png`;
+- `Team1Busy.png`;
+- `Team3Busy.png`.
+
+`tests/test_continuous_gather.py` and adapter/status/UI tests continue to protect:
+
+- only fresh trusted `IDLE` may start an attempt;
+- stale/unavailable observation cannot authorize;
 - all configured teams busy means wait;
-- disabled gathering teams are ignored;
-- one selected-team attempt records only that requested team;
-- dispatch runtime requires the selected team's idle indicator and clicks that exact card before Dispatch;
-- selected team becoming busy triggers fail-closed exit rather than game auto-selection;
-- no-free-march in continuous mode does not replace another busy team;
-- confirmed dispatch marks the exact team non-idle immediately;
-- unconfirmed/aborted dispatch pauses the service rather than blindly retrying;
-- Dashboard can show Idle/Travelling/Gathering/Returning/Busy/Unknown and countdown hints.
+- disabled teams are ignored;
+- exact requested team is re-verified/clicked on dispatch panel;
+- selected team becoming busy exits fail-closed;
+- no-free-march does not replace;
+- confirmed dispatch marks exact team non-idle;
+- unconfirmed/aborted dispatch pauses.
 
-Legacy Scenario Gather tests should remain because `scenarios/Gather Gold.json`, `resource_gathering.py`, and legacy fields still need backward-compatible behavior for Advanced/older configs.
+Legacy Scenario Gather tests remain because older configs/Advanced behavior still load compatibility state.
 
 ## Scenario/template validation
 
@@ -48,7 +53,7 @@ Legacy Scenario Gather tests should remain because `scenarios/Gather Gold.json`,
 python -m tools.validate_scenarios
 ```
 
-This is blocking CI. Runtime Bot adapters deep-copy stored scenarios, so adapter tests must also prove user settings/runtime guards are applied without mutating project-owned JSON.
+This remains blocking CI.
 
 ## Static checks
 
@@ -58,86 +63,44 @@ python -m ruff format --check .
 python -m mypy macro_clicker tools
 ```
 
-Blocking CI:
-
-- pytest
-- Ruff lint
-- scenario/template validation
-
-Informational:
-
-- Ruff formatting
-- mypy
+Blocking CI: pytest, Ruff lint, scenario/template validation. Formatting and mypy are informational.
 
 ## Screenshot/fixture tests
 
-Use screenshot fixtures when perception is the problem, especially:
+Use screenshot fixtures whenever perception is disputed. Especially capture:
 
-- team status label/portrait not recognized;
-- Idle/busy classification disagreement;
-- Gathering/Returning/Travelling status confusion;
-- timer OCR error;
-- wrong team dispatch-card idle indicator match;
-- resolution/scaling issue;
-- false template match.
+- 0/3 world map with no busy status;
+- Team 1-only, Team 2-only, Team 3-only busy;
+- two-team combinations;
+- 3/3 busy;
+- resolution/scaling variants;
+- any false positive/negative for the world-map Rally-icon anchor;
+- dispatch-panel idle indicator disagreements.
 
-A good fixture records source image, templates, expected state/match/OCR, reference resolution, and a note describing the real failure.
+Richer Travelling/Gathering/Returning/timer recognition should not be added from guessed geometry or nonexistent templates. Add real fixtures first.
 
-## Live verification
+## Live verification — Continuous Auto Gather
 
-GitHub Actions cannot interact with the real target game, so meaningful visual/input changes need supervised Windows proof.
+Test these states deliberately:
 
-### Rally
+1. **0/3 busy**: all teams free and no status rows visible. Auto Gather must start.
+2. **1/3 busy**: verify correct team identity/inference.
+3. **2/3 busy**: verify the only free team is chosen.
+4. **3/3 busy**: Auto Gather must wait.
+5. **Team 2-only busy**: verify inference from count while Team 1/3 portraits are absent.
+6. Open an overlay/non-map screen: blank status must not be treated as all free.
+7. On dispatch panel, verify the exact chosen team’s blue idle indicator is required and its card is clicked.
+8. Verify busy teams are untouched.
+9. Verify resource-taken Cancel/retry.
+10. Verify no-free-march does not replace an existing march.
+11. Verify F12/unconfirmed attempt pauses instead of restarting.
 
-Verify target window, row/level selection, Team 1/3 behavior, recovery, and kill switch.
+Current map-side detector reports `Idle/Busy/Unknown`. Do not block live Gather verification waiting for richer state labels/timers; those are a later perception enhancement.
 
-### Continuous Auto Gather
+## Bot UI/control layer
 
-Start with a deliberately mixed state, for example:
-
-```text
-Team 1  Idle
-Team 2  Gathering
-Team 3  Travelling
-```
-
-Verify:
-
-1. the monitor reports the three real states correctly;
-2. only Team 1 is eligible;
-3. search starts from configured Gold level and keeps lowering until found;
-4. the dispatch panel re-verifies Team 1 is idle;
-5. the automation visibly clicks Team 1 before Dispatch;
-6. Team 2/3 are untouched;
-7. after Team 1 dispatch, all-busy state waits rather than replacing a march;
-8. visible timers/countdowns update reasonably;
-9. timer reaching zero causes fresh observation, not automatic Idle;
-10. when one team becomes visually Idle, that exact team is dispatched next;
-11. resource-taken Cancel/retry remains safe;
-12. no-free-march does not invoke legacy replacement behavior;
-13. F12 or an unconfirmed attempt pauses Auto Gather and does not auto-restart.
-
-### Bot UI/control layer
-
-Also verify:
-
-- app opens directly to Bot UI;
-- Advanced/Alert Setup remain hidden until explicitly opened;
-- Rally/Gather/Position settings affect runtime as intended;
-- Position finite tasks serialize safely;
-- continuous Gather waits while another input owner is active;
-- Rally + continuous Gather cannot accidentally compete for input;
-- Alerts can remain passive alongside active automation;
-- schedule Start/Stop uses saved settings;
-- Logs receives runtime activity;
-- Dashboard team statuses match the live screen.
+Also verify app startup, Advanced isolation, Position serialization, Rally/Gather input exclusion, passive Alerts, schedule, Logs, and Dashboard state.
 
 ## AI-assisted change rule
 
-For any behavior/config/UI/testing-contract change:
-
-1. update tests;
-2. update every affected living Markdown file;
-3. use a descriptive commit subject/body explaining what, why, runtime impact, preserved behavior, checks, and remaining live verification.
-
-See `AGENTS.md` for the full required format.
+For behavior/config/UI/testing-contract changes: update tests, update every affected living Markdown file, and use a descriptive commit subject/body explaining what, why, runtime impact, preserved behavior, checks, and remaining live verification.
