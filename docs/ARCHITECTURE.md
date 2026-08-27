@@ -34,6 +34,10 @@ A template path existing on disk does not prove OpenCV can use it. Windows CI on
 
 A `3/3` sidebar is inherently unambiguous: rows are Team 1, Team 2, Team 3. A cold ambiguous `1/3` or `2/3` without current identity evidence remains Unknown rather than guessing.
 
+### Perception diagnostics
+
+The team-status observer now exposes read-only `[team-diag]` telemetry during supervised delay investigation. It retains the latest world-map score, the three busy-count candidate scores and selected count, and identity completeness; the monitor rate-limits readable/unreadable heartbeat lines, emits an OCR-start line before PaddleOCR construction plus ready/failure duration afterward, and reports any scan taking at least two seconds. These diagnostics belong to observability only and must not feed availability or dispatch decisions.
+
 ## Timer scheduling
 
 Countdown values are used only to choose the next screen-check interval. Long timers can be polled less often, short/expired timers more often. Timer expiry never changes activity to Idle.
@@ -44,4 +48,4 @@ Map perception only authorizes a candidate attempt. On the dispatch panel, Team 
 
 ## Input ownership and protected behavior
 
-Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, optional-status fallback, binary-template validation, and fail-closed ambiguity.
+Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, optional-status fallback, binary-template validation, diagnostic-only observability, and fail-closed ambiguity.
