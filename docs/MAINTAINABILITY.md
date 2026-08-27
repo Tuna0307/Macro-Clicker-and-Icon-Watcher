@@ -4,7 +4,9 @@ Reliability first: do not rewrite proven behavior merely for cleaner abstraction
 
 ## Protected behavior
 
-Protect mature Rally, target-window/foreground safety, kill switch, proven Gather search/resource-taken flow, continuous Gather fresh-visual-Idle requirement, exact-team fixed-position dispatch verification, busy-team protection, and passive Alerts.
+Protect mature Rally, target-window/foreground safety, kill switch, proven Gather search/resource-taken flow, three-tab search-popup normalization, continuous Gather fresh-visual-Idle requirement, exact-team fixed-position dispatch verification, busy-team protection, and passive Alerts.
+
+The Gather search popup remembers its selected tab. Preserve the explicit middle `採集` / Gather click before Gold; do not simplify the Prepare step back to a direct Gold click just because a local test happened to begin on the correct tab.
 
 ## Continuous Gather perception boundary
 

@@ -6,6 +6,8 @@ The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule
 
 Users configure enable/disable, Gold start level, and the Team 1/2/3 subset allowed to gather. Do not expose legacy replacement order as a normal control.
 
+The backend resource-search popup has three remembered tabs. Normal users should not need to manage this: the Gather scenario always selects the fixed middle `採集` / Gather tab before selecting Gold.
+
 Dashboard team labels may show:
 
 ```text

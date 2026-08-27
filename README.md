@@ -28,6 +28,8 @@ Users choose Gold start level and which Team 1/2/3 may gather. Auto Gather watch
 
 The normal world map is verified with `GatherSearchIcon.jpg`. The left deployment queue shows busy marches only, so a trusted map with no busy count/status means real `0/3` and all teams are Idle candidates.
 
+The resource-search popup contains three remembered tabs. Auto Gather explicitly selects the fixed middle `採集` / Gather tab before selecting Gold, so it works even when the popup was previously left on `打野` or `末日精英`.
+
 ### Dynamic sidebar rows
 
 Sidebar rows are compressed, not fixed:

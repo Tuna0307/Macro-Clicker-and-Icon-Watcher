@@ -12,6 +12,10 @@ Bot UI
 
 `bot/team_status.py` is a read-only observer; `bot/team_state.py` stores shared state/freshness; `bot/continuous_gather.py` coordinates availability; `bot/adapters.py` owns exact-team one-attempt Scenario adaptation. Keep these boundaries separate.
 
+## Resource-search popup normalization
+
+`scenarios/Gather Gold.json` must normalize the three-tab search popup before choosing Gold. The popup remembers its last selected tab, so the Prepare step first clicks the fixed middle `採集` / Gather tab using the Search-button anchor `(0, -480)`, then clicks Gold at `(+196, -348)`, then applies level/search. This behavior belongs to the proven scenario layer, not team-state perception.
+
 ## Continuous Gather perception
 
 The trusted map gate is `templates/GatherSearchIcon.jpg`. After that, busy-count templates determine 0/3 through 3/3.
@@ -34,4 +38,4 @@ Map perception only authorizes a candidate attempt. On the dispatch panel, Team 
 
 ## Input ownership and protected behavior
 
-Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, stale-state rejection, and fail-closed ambiguity.
+Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, and fail-closed ambiguity.

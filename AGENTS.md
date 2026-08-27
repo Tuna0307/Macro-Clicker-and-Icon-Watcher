@@ -52,6 +52,10 @@ Core modules:
 - `bot/adapters.py` — final exact-team dispatch-panel verification/click.
 - `scenarios/Gather Gold.json` — proven resource search/taken flow.
 
+### Resource-search popup normalization
+
+The search popup has three tabs and remembers the previously selected tab. Every Gather prepare pass must explicitly click the fixed middle `採集` / Gather tab before clicking Gold. At the 1920x1080 reference geometry, both clicks are anchored to the existing Search button: Gather tab `(0, -480)`, then Gold `(+196, -348)`. Do not remove or reorder this normalization just because a recording happens to start with Gather already selected.
+
 ### Confirmed game semantics
 
 The left deployment queue contains busy marches only and compresses upward. Rows are **not fixed team slots**. Busy rows remain ordered by team number among the busy subset:

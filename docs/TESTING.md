@@ -18,6 +18,8 @@ Blocking CI: pytest, Ruff lint, scenario/template validation.
 
 Protect:
 
+- resource-search Prepare explicitly clicks middle `採集` / Gather before Gold;
+- Gather-tab click is Search-button offset `(0, -480)` and precedes Gold `(+196, -348)`;
 - trusted `0/3` -> all Idle candidates;
 - 1/3, 2/3, 3/3 busy-count handling;
 - compressed ordered-subset mapping rather than fixed row slots;
@@ -40,20 +42,23 @@ The committed real status-label crops came from supervised 1920x1080 game screen
 
 Test deliberately:
 
-1. 0/3 all free.
-2. each single busy team where possible.
-3. each two-busy combination.
-4. 3/3 all busy.
-5. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
-6. Gathering (`採集中`).
-7. Returning (`返回`).
-8. Travelling (`去 X/Y`).
-9. Rallying (`集結中`).
-10. long and near-zero timers.
-11. timer reaches zero but row remains busy: no dispatch until visual Idle.
-12. change a team's lead hero and verify no stale portrait misidentification.
-13. exact fixed dispatch card is selected before Dispatch.
-14. resource taken, no-free-march, F12/unconfirmed safety.
+1. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
+2. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
+3. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
+4. 0/3 all free.
+5. each single busy team where possible.
+6. each two-busy combination.
+7. 3/3 all busy.
+8. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
+9. Gathering (`採集中`).
+10. Returning (`返回`).
+11. Travelling (`去 X/Y`).
+12. Rallying (`集結中`).
+13. long and near-zero timers.
+14. timer reaches zero but row remains busy: no dispatch until visual Idle.
+15. change a team's lead hero and verify no stale portrait misidentification.
+16. exact fixed dispatch card is selected before Dispatch.
+17. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity
 

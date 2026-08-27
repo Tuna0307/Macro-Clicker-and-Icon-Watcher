@@ -15,6 +15,20 @@ TeamStatusMonitor
 
 Normal Gather is persistent and state-driven. It does not use the legacy `3 -> 2 -> 1` replacement policy.
 
+## Resource-search popup normalization
+
+The search popup has three tabs and remembers the last selected one. Therefore every Gather Prepare pass must explicitly normalize the popup before choosing Gold:
+
+```text
+open resource search
+ -> click middle 採集 / Gather tab
+ -> click Gold
+ -> apply configured start level
+ -> Search
+```
+
+At the 1920x1080 reference geometry, both clicks use the existing Search-button anchor: Gather tab `(0, -480)`, then Gold `(+196, -348)`. This must happen even when Gather already appears selected; relying on remembered UI state is not safe.
+
 ## Trusted world map and busy count
 
 `GatherSearchIcon.jpg` proves the normal map view. Only after that may absence of busy status mean `0/3`.
@@ -81,8 +95,8 @@ If the selected team is no longer idle, the attempt exits. No-free-march never r
 
 ## Safety invariants
 
-Preserve trusted-map gating, fresh Idle, fail-closed Unknown, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, and target-window safety.
+Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, and target-window safety.
 
 ## Live verification required
 
-Test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety.
+Test starting the search popup from each of its three tabs, then test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety.
