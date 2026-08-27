@@ -87,6 +87,16 @@
         {
           "type": "click",
           "on_condition_index": 0,
+          "offset_x": 0,
+          "offset_y": -480
+        },
+        {
+          "type": "wait",
+          "seconds": 0.15
+        },
+        {
+          "type": "click",
+          "on_condition_index": 0,
           "offset_x": 196,
           "offset_y": -348
         },
