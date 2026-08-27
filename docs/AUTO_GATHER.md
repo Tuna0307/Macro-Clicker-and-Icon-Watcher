@@ -85,6 +85,12 @@ Each busy row may provide an `HH:MM:SS` countdown. OCR tolerates common digit co
 
 **Timer zero never means Idle.** Only fresh screen evidence can authorize a new dispatch.
 
+## Team-monitor delay diagnostics
+
+The current supervised build emits `[team-diag]` lines to make long waits explainable without altering behavior. A readable/state-change diagnostic records the world-map score, chosen busy count, all `1/3` / `2/3` / `3/3` candidate scores, and whether identity is complete. Unreadable map/window messages are rate-limited. The first timer OCR use logs `OCR initialization started` before PaddleOCR model construction and then logs ready/failure duration. Any complete monitor pass lasting at least two seconds logs `slow scan ...` with map/count context.
+
+These values are evidence only. A high score, a timer, or a diagnostic line cannot by itself make a team Idle or authorize Dispatch.
+
 ## Exact-team dispatch second gate
 
 The dispatch panel is different from the sidebar: Team 1/2/3 card positions are permanently fixed even when hero portraits change. Before Dispatch the runtime still:
@@ -99,8 +105,8 @@ If the selected team is no longer idle, the attempt exits. No-free-march never r
 
 ## Safety invariants
 
-Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, generic-Busy fallback for optional status assets, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, and target-window safety.
+Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, generic-Busy fallback for optional status assets, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, target-window safety, and diagnostic-only observability.
 
 ## Live verification required
 
-Test starting the search popup from each of its three tabs; then test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, missing-status-asset fallback, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety.
+Test starting the search popup from each of its three tabs; then test 0/3, each 1/3 identity, each 2/3 combination, 3/3, all four statuses, timer OCR, missing-status-asset fallback, hero changes, Team 2 disappearing from a 3-row list and Team 3 compressing upward, exact-team dispatch clicking, resource-taken retry, and no-free-march safety. For the current delay investigation, also capture the full `[team-diag]` sequence from Start Bot until the first Gather click so map score, count scores, OCR startup, and slow scans can be compared with timestamps.
