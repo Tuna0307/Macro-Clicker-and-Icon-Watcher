@@ -1,151 +1,66 @@
 # PC Automation Bot
 
-A Windows desktop utility for **visual automation** and **passive screen monitoring**.
+A Windows visual-automation and passive-monitoring utility. Normal users configure Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings; low-level Scenario editing remains under Advanced.
 
-The normal interface is a dedicated automation-bot surface. Users configure what they want the bot to do through simple feature pages instead of editing low-level Steps, Conditions, Actions, image regions, or OCR details. The proven Scenario engine remains underneath, and the original editor is still available through **Advanced**.
-
-## Main interface
-
-The Bot interface contains Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings pages. Low-level Scenario editing remains behind **Advanced** and detailed alert tuning behind **Alert Setup**.
-
-For normal Windows use, double-click:
+Run with:
 
 ```text
 Run PC Automation Bot.bat
 ```
 
-Runtime data normally lives under:
+Per-user runtime state normally lives under `%LOCALAPPDATA%\Macro Clicker and Icon Watcher`.
+
+## Architecture
 
 ```text
-%LOCALAPPDATA%\Macro Clicker and Icon Watcher
+Bot UI -> BotConfig -> services/adapters -> MacroEngine -> Detection/OCR/Safety
 ```
 
-## Architecture overview
-
-```text
-                          Bot UI
-                            │
-                        BotConfig
-                            │
-          ┌─────────────────┼─────────────────┐
-          ▼                 ▼                 ▼
-   Feature adapters    BotController    Team-state services
-          │                 │                 │
-          │                 │          Continuous Gather
-          └──────────┬──────┴───────────────┬─┘
-                     ▼                      ▼
-                MacroEngine          read-only monitoring
-                     │
-             Scenarios / Steps
-                     │
-          Detection / OCR / Safety
-```
-
-The Bot UI is a control layer, not a replacement for the working automation engine.
-
-For development details, read `AGENTS.md` and the living documents under `docs/`.
-
-## Bot configuration
-
-Normal-user settings are stored separately from bundled Scenario JSON in `bot_config.json`. Saving normal Bot settings does **not** rewrite tuned files under `scenarios/`; runtime adapters clone the proven scenario and apply supported values in memory.
+Normal Bot saves do not rewrite tuned Scenario JSON.
 
 ## Input ownership
 
-Only one active clicking automation may own the target application at a time.
-
-- Development and Science are finite tasks.
-- Rally is continuous.
-- Continuous Auto Gather is persistent and driven by actual Team 1/2/3 state.
-- Auto Gather waits while another controller/engine task owns input.
-- Continuous Rally and continuous Auto Gather are currently blocked from running together until a safe cooperative handoff exists.
-- Passive Alerts may observe alongside the active input owner.
+Only one active clicking automation owns input. Development/Science are finite, Rally is continuous, Auto Gather is a persistent state-driven service, and Alerts are passive. Rally + continuous Gather are still blocked together until safe cooperative handoff is implemented.
 
 ## Continuous Auto Gather
 
-User-facing controls include:
+Users choose Gold start level and which Team 1/2/3 may gather. Auto Gather watches actual march availability, sends one exact free team, then keeps monitoring until another configured team is visually free.
 
-- enable/disable Auto Gather;
-- resource (currently Gold);
-- starting resource level;
-- which of Team 1/2/3 may gather.
+The normal world map is verified with `GatherSearchIcon.jpg`. The left deployment queue shows busy marches only, so a trusted map with no busy count/status means real `0/3` and all teams are Idle candidates.
 
-The normal flow is:
+### Dynamic sidebar rows
 
-```text
-confirm trusted normal world-map view
-        ↓
-read busy-march count/identities
-        ↓
-configured team visually Idle?
-   ┌────┴────┐
-   No       Yes
-   │          │
- wait      search Gold
-              ↓
-      lower level until found
-              ↓
-        open dispatch panel
-              ↓
- re-verify exact selected team is idle
-              ↓
-      click that exact team card
-              ↓
-           Dispatch
-              ↓
-      watch team state again
-```
-
-### Important map-side behavior
-
-The game’s left march-status/deployment queue shows **busy marches only**. A blank status list on a confirmed normal world map is therefore the real **0/3 busy** state, so Team 1/2/3 are Idle candidates.
-
-To avoid treating an unrelated blank screen as all-free, the monitor first verifies the normal world map using the existing `templates/GatherSearchIcon.jpg` control in the bottom-left map UI. A supervised 1920×1080 game screenshot matched this template at about **0.99**. The previous gate incorrectly used `templates/RallyIcon.png`; that template scored only about **0.39** on the same normal-map screenshot because the Rally workflow icon is not present there, causing Auto Gather to wait forever.
-
-After the map gate passes, the monitor reuses the proven 1/3, 2/3, 3/3 squad-count assets and Team 1/Team 3 busy portraits. Team 2 is inferred from the count.
-
-The broken prototype dependency on `templates/TeamStatusSidebarHeader.png` remains removed; that file never existed in the repository.
-
-Current map-side monitoring intentionally reports reliable `Idle`, `Busy`, or `Unknown`. The shared tracker can still model `Travelling`, `Gathering`, and `Returning` when future real visual evidence is added.
-
-Important safety behavior remains:
-
-- there is no normal-user `3 -> 2 -> 1` replacement priority;
-- busy teams are not intentionally overwritten;
-- contradictory map evidence becomes `Unknown`;
-- stale/untrusted map observations cannot dispatch;
-- before Dispatch, the exact requested team is re-verified via its blue idle indicator and explicitly clicked;
-- if that team became busy, or the game reports no free march, the attempt closes/stops;
-- resource-taken Cancel/retry remains part of the proven Gather backend;
-- an unconfirmed attempt pauses Auto Gather fail-closed.
-
-When the normal-map anchor cannot be read, the UI/log now says it is **waiting for a readable world-map team view** rather than incorrectly implying that a sidebar itself must be present.
-
-Legacy `march_count` and `replacement_order` remain for backward compatibility only.
-
-## Team-state tracking
-
-The tracker supports:
+Sidebar rows are compressed, not fixed:
 
 ```text
-Idle
-Travelling
-Gathering
-Returning
-Busy
-Unknown
+busy 3       -> [3]
+busy 1 + 3   -> [1, 3]
+busy 1+2+3   -> [1, 2, 3]
+2 becomes free -> [1, 3]
 ```
 
-For the current live map detector, `Idle/Busy/Unknown` are the authoritative observed states. A timer or predicted completion time never makes a team free by itself.
+Rows stay ordered by team number among the busy teams. Hero portraits also change whenever that team's lead hero changes, so the bot does not treat a particular hero face as a permanent Team number.
 
-## Rally, Positions, and Alerts
+The detector learns current portraits only after identity is unambiguous and stores them in per-user runtime data. Legacy Team 1/Team 3 portrait templates are positive bootstrap hints only; failure to match them never means Team 2.
 
-Rally remains mature backend behavior with normal-user level/team-cap controls. `RallyIcon.png` remains a Rally workflow asset; it is not the generic normal-world-map gate. Development/Science remain finite Position workflows. Icon Alerts remain passive observers.
+### Team status and timers
 
-## Shared detection and safety
+Live screenshots confirmed:
 
-Active input preserves target-window geometry checks, foreground-window requirements, out-of-window rejection, live geometry rechecks, `pyautogui.FAILSAFE`, stop/kill-switch handling, and fail-closed unreadable visual state.
+- Gathering (`採集中`)
+- Returning (`返回`)
+- Travelling (`去 X:... Y:...`)
+- Rallying (`集結中`)
 
-The Gather dispatch-panel exact-team idle check remains the final safety gate before Dispatch.
+The Dashboard can show these states with countdowns. Timers reduce unnecessary polling, but reaching `00:00:00` never makes a team Idle automatically; fresh visual evidence is required.
+
+If a cold start at `1/3` or `2/3` cannot safely identify the busy subset yet, state remains Unknown and Gather waits instead of guessing.
+
+## Fixed dispatch positions remain final authority
+
+On the dispatch panel Team 1, Team 2 and Team 3 have permanent card locations even when hero portraits change. Before Dispatch, the runtime must still verify the chosen team's exact blue idle indicator, click that exact fixed card, then use the proven Dispatch path. A stale/incorrect map-side guess therefore cannot intentionally overwrite another busy team.
+
+Legacy `march_count` and `replacement_order` remain compatibility-only.
 
 ## Development checks
 
@@ -157,10 +72,4 @@ python -m mypy macro_clicker tools
 python -m tools.validate_scenarios
 ```
 
-Blocking CI checks are pytest, Ruff lint, and scenario/template validation. Ruff formatting and mypy are informational.
-
-## AI-assisted development rule
-
-Every meaningful commit must include a descriptive subject/body explaining what changed, why, runtime impact, preserved safety/compatibility, tests/checks, and remaining live verification.
-
-When behavior, architecture, UI, configuration, safety policy, test contracts, or roadmap status changes, update **all affected living Markdown files in the same work**.
+See `AGENTS.md` for mandatory AI commit and Markdown-sync rules.

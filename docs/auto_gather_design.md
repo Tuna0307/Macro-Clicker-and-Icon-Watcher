@@ -1,99 +1,46 @@
 # Auto Gather design notes
 
-## Current design — continuous team-state Auto Gather
+## Current design
 
-The original MVP used a finite “send several marches” model with fixed busy-march replacement. That design is superseded for the normal Bot UI.
-
-Current normal Bot behavior:
+Normal Bot Gather is continuous and team-state driven:
 
 ```text
-confirm normal world-map view
-        ↓
-read busy count + busy identities
-        ↓
-any configured team visually Idle?
-   ┌────┴────┐
-   No       Yes
-   │          │
- wait      search Gold
-              ↓
-        re-verify exact team
-              ↓
-        click exact team card
-              ↓
-           Dispatch
-              ↓
-       mark non-idle locally
-              ↓
-       resume monitoring
+trusted world map
+ -> read busy count
+ -> interpret compressed ordered busy rows
+ -> attach status + timer to resolved teams
+ -> choose fresh configured Idle team
+ -> search Gold
+ -> fixed dispatch-panel exact-team recheck/click
+ -> Dispatch
+ -> resume monitoring
 ```
 
-## World-map availability design
+## Sidebar design learned from live game
 
-The left deployment queue contains **busy marches only**.
+The queue contains busy teams only. It compresses upward, but preserves team-number ordering among busy teams. Therefore visual row position alone is never permanent identity.
 
-Therefore:
+Examples:
 
 ```text
-trusted normal world map + no busy status = 0/3 busy = all teams free
+{3} -> [3]
+{1,3} -> [1,3]
+{1,2,3} -> [1,2,3]
+Team 2 frees -> {1,3} -> [1,3]
 ```
 
-This is not equivalent to “blank screen means free.” The detector first requires the normal-map Gather search control:
+Hero portraits change whenever the team's lead hero changes. The sidebar and fixed dispatch card show the same current hero. Static hero faces therefore cannot define Team number.
 
-- template: `GatherSearchIcon.jpg`
-- reference region: `(0, 780, 110, 150)` at 1920×1080
-- threshold: `0.90`
+The detector learns current portraits only from unambiguous assignments (for example 3/3 or other resolved state) and may use them later to recognize compressed rows. Legacy Team 1/Team 3 portrait assets are bootstrap hints only; a non-match is not evidence for Team 2.
 
-A supervised real-game screenshot matched the existing Gather search icon at about **0.99**. The previous gate used `RallyIcon.png`, which scored only about **0.39** on that normal map because it is a Rally workflow icon rather than a universal map control. That incorrect assumption caused Auto Gather to remain stuck in its waiting state.
+## Activity/timing design
 
-The real map-gate behavior is locked by `tests/fixtures/team_status/world_map_search_anchor.jpg`.
+Confirmed states are Gathering, Returning, Travelling, and Rallying, with row countdowns. Timers are for scheduling the next visual check, never for declaring Idle.
 
-After map confirmation, current evidence sources are all committed/proven:
+## Fixed dispatch geometry
 
-- `1_3Squad.png`
-- `2_3Squad.png`
-- `FullSquad3_3.png`
-- `Team1Busy.png` (Murphy)
-- `Team3Busy.png` (Stetmann)
+Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale or ambiguous.
 
-Team 2 (Carlie) is inferred from the busy count because there is intentionally no Team 2 identity template.
+## Historical MVP
 
-The previous prototype expected `TeamStatusSidebarHeader.png` plus new march/status templates that were never committed. That design is superseded and must not be restored without real assets/fixtures.
-
-Current map-side classification is `Idle`, `Busy`, or `Unknown`. The tracker can hold richer states later, but detailed activity/timer recognition is not required to decide whether Gather may start.
-
-Contradictory count/portrait evidence returns `Unknown`, not a guess.
-
-If the normal map cannot be confirmed, the service waits for a **readable world-map team view**. It does not require a visible busy-team sidebar and it does not treat an unrelated blank overlay as all free.
-
-## Second safety gate
-
-Before Dispatch, the selected-team runtime still requires that exact team’s blue idle indicator and clicks that exact card. If it is no longer idle, the attempt exits. This protects against stale map observations and mid-search state changes.
-
-## Other current rules
-
-- Busy teams are never intentionally replaced by normal Auto Gather.
-- There is no user-facing team priority.
-- Existing game state at Bot startup is respected.
-- No-free-march closes/stops rather than replacing.
-- Resource-taken Cancel/retry remains underneath.
-- An unconfirmed attempt pauses fail-closed.
-- Timer expiry, if timers are added later, must never create `Idle` by itself.
-- Workflow-specific templates must not become generic screen gates without real screenshot regression evidence.
-
-See `docs/AUTO_GATHER.md` for the authoritative current contract.
-
-## Historical MVP context
-
-The first implementation target was:
-
-1. open resource search;
-2. select Gold;
-3. search from a preferred level;
-4. lower level while unavailable;
-5. open resource and Gather;
-6. use a free march;
-7. if all occupied, replace one in `3 -> 2 -> 1` order;
-8. repeat until a target count.
-
-That model proved the resource/search/retry paths but is not current normal Bot policy. Legacy replacement state remains only for backward compatibility/Advanced behavior.
+The original finite model searched Gold, sent a target number of marches, and could replace occupied marches in `3 -> 2 -> 1` order. That model is superseded for normal Bot usage. Legacy fields remain compatibility-only.
