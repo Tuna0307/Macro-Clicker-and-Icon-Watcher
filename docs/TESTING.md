@@ -36,32 +36,48 @@ Protect:
 - timer expiry never creates Idle;
 - exact fixed dispatch-card blue-idle verification remains required;
 - no-free-march never replaces;
-- unconfirmed attempt pauses.
+- unconfirmed attempt pauses;
+- OCR diagnostics emit `initialization started` before model construction and ready/failure timing after it;
+- busy-count diagnostics preserve separate 1/3, 2/3, and 3/3 match scores plus the selected count;
+- a rejected world-map frame still retains its match score for troubleshooting.
 
 The committed real status-label crops came from supervised 1920x1080 game screenshots. Keep them as visual regression assets; do not replace them with guessed text rendering. Gathering/Rallying were rebuilt on 2026-08-27 after CI caught unreadable earlier blobs; Returning/Travelling already matched the verified local crops.
+
+## Diagnostic logging expectations
+
+`[team-diag]` is observation-only. During startup-delay investigation, a live log should make the monitor stage visible:
+
+- unreadable map/window heartbeat is rate-limited rather than silent for minutes;
+- readable diagnostics include world-map score, selected busy count, all three busy-count candidate scores, and identity completeness;
+- first real timer OCR logs `OCR initialization started` before any potentially expensive PaddleOCR construction;
+- OCR ready/failure includes elapsed seconds;
+- any complete team-monitor pass taking at least two seconds emits `slow scan ...`.
+
+Do not use diagnostic scores as dispatch authority in tests or production.
 
 ## Live verification matrix
 
 Test deliberately:
 
-1. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
-2. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
-3. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
-4. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
-5. 0/3 all free.
-6. each single busy team where possible.
-7. each two-busy combination.
-8. 3/3 all busy.
-9. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
-10. Gathering (`採集中`).
-11. Returning (`返回`).
-12. Travelling (`去 X/Y`).
-13. Rallying (`集結中`).
-14. long and near-zero timers.
-15. timer reaches zero but row remains busy: no dispatch until visual Idle.
-16. change a team's lead hero and verify no stale portrait misidentification.
-17. exact fixed dispatch card is selected before Dispatch.
-18. resource taken, no-free-march, F12/unconfirmed safety.
+1. Start Bot, Alt+Tab into Last War as normal, and capture the complete `[team-diag]` timeline until the first Gather search click. If there is a pause, identify the last diagnostic before it.
+2. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
+3. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
+4. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
+5. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
+6. 0/3 all free.
+7. each single busy team where possible.
+8. each two-busy combination.
+9. 3/3 all busy.
+10. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
+11. Gathering (`採集中`).
+12. Returning (`返回`).
+13. Travelling (`去 X/Y`).
+14. Rallying (`集結中`).
+15. long and near-zero timers, recording the first-OCR initialization duration.
+16. timer reaches zero but row remains busy: no dispatch until visual Idle.
+17. change a team's lead hero and verify no stale portrait misidentification.
+18. exact fixed dispatch card is selected before Dispatch.
+19. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity
 
