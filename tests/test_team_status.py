@@ -104,6 +104,26 @@ def test_each_real_status_crop_is_recognized_as_its_activity():
         assert score >= 0.99
 
 
+def test_missing_optional_status_templates_degrade_to_busy(monkeypatch):
+    detector = TeamStatusDetector(portrait_cache_dir=None)
+    missing = set(ACTIVITY_TEMPLATES.values())
+
+    def unavailable(path):
+        if path in missing:
+            raise FileNotFoundError(path)
+        raise AssertionError(f"unexpected template request: {path}")
+
+    monkeypatch.setattr(detector, "_template", unavailable)
+
+    activity, score = detector._activity(
+        np.zeros((60, 205, 3), dtype=np.uint8)
+    )
+
+    assert activity == TeamActivity.BUSY
+    assert score == 0.0
+    assert set(detector.missing_activity_templates) == missing
+
+
 def test_real_world_map_search_anchor_matches_the_gate_template():
     fixture = cv2.imread(
         str(FIXTURE_DIR / "world_map_search_anchor.jpg"),
