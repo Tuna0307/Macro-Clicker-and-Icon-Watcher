@@ -1,8 +1,9 @@
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from macro_clicker.app import App
 from macro_clicker.bot.ui import BotFrame
+from macro_clicker.bot.ui_pages import BotPagesMixin
 from macro_clicker.bot_app import BotApp
 
 
@@ -14,9 +15,36 @@ def test_bot_frame_exposes_normal_user_pages():
         "Positions",
         "Alerts",
         "Schedule",
-        "Logs",
         "Settings",
     )
+
+
+def test_runtime_log_panel_is_attached_below_notebook_instead_of_to_a_tab():
+    pages = BotPagesMixin()
+    panel = Mock()
+    log = Mock()
+    scrollbar = Mock()
+
+    with (
+        patch("macro_clicker.bot.ui_pages.ttk.LabelFrame", return_value=panel) as frame,
+        patch("macro_clicker.bot.ui_pages.tk.Text", return_value=log) as text,
+        patch(
+            "macro_clicker.bot.ui_pages.ttk.Scrollbar",
+            return_value=scrollbar,
+        ) as scroll,
+    ):
+        pages._build_runtime_log()
+
+    frame.assert_called_once_with(pages, text="Runtime Log", padding=(10, 8))
+    panel.pack.assert_called_once_with(fill="x", padx=12, pady=(0, 12))
+    text.assert_called_once_with(panel, state="disabled", height=7, wrap="none")
+    scroll.assert_called_once_with(
+        panel,
+        orient="vertical",
+        command=log.yview,
+    )
+    assert pages.runtime_log_panel is panel
+    assert pages.bot_log is log
 
 
 def test_bot_app_keeps_advanced_backends_behind_explicit_hooks():
