@@ -161,6 +161,7 @@ def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replac
     dispatch = next(step for step in scenario.steps if step.name == "Gather - Dispatch Ready")
     no_free = next(step for step in scenario.steps if step.name == "Gather - No Free March")
     busy = next(step for step in scenario.steps if step.name == "Gather - Selected Team Busy")
+    success = next(step for step in scenario.steps if step.name == "Gather - Success")
 
     step_names = [step.name for step in scenario.steps]
     assert step_names.index("Gather - Dispatch Ready") < step_names.index(
@@ -191,6 +192,18 @@ def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replac
     assert busy.conditions[1].negate is True
     assert busy.conditions[1].template_path == "templates/Team2Idle.png"
     assert [action.type for action in busy.actions] == ["key", "wait", "stop"]
+
+    # Restore the normal deployment sidebar before the finite one-team worker
+    # records success and stops. The outer continuous service then observes the
+    # real busy rows instead of treating the selected bottom card strip as 0/3.
+    dismiss, settle, record = success.actions[:3]
+    assert dismiss.type == "click"
+    assert dismiss.on_condition_index == 0
+    assert (dismiss.offset_x, dismiss.offset_y) == (500, -250)
+    assert settle.type == "wait"
+    assert settle.seconds == 0.35
+    assert record.type == "gather_control"
+    assert record.gather_command == "record_success"
 
 
 def test_each_selected_team_gather_idle_template_decodes_and_validates():
