@@ -2,7 +2,7 @@
 
 The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings. Scenario/Step internals remain under Advanced.
 
-The Settings target-window title is the normal multi-monitor binding. Users may place Last War on either monitor; they should not need to choose an Advanced Scenario monitor index. Foreground safety still requires the game to be active when a click is due.
+The Settings target-window title is the normal multi-monitor binding. Users may place Last War on either monitor; they should not need to choose an Advanced Scenario monitor index or manually activate the game. When input is due, the runtime brings the exact selected target forward and revalidates its identity and rectangle before acting.
 
 ## Gather page/service contract
 

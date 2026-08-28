@@ -19,7 +19,7 @@ trusted world map
  -> resume monitoring
 ```
 
-Both the observer and selected-team scenario resolve this flow against the Last War window on either monitor. The target rectangle may use negative desktop coordinates on a left-hand secondary display; geometry remains window-relative before capture and click translation.
+Both the observer and selected-team scenario resolve this flow against the Last War window on either monitor. The target rectangle may use negative desktop coordinates on a left-hand secondary display; geometry remains window-relative before capture and click translation. When another app is in front at input time, the exact selected Last War window is activated and then revalidated before the action commits.
 
 ## Search-popup design learned from live game
 

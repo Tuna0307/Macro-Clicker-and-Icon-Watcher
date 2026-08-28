@@ -14,7 +14,7 @@ python -m tools.validate_scenarios
 
 Blocking CI: pytest, Ruff lint, scenario/template validation.
 
-Multi-monitor regressions must preserve negative desktop coordinates for a left-hand display and resolve window-relative regions against the target window rather than Scenario monitor index. Live checks should run the 1920x1080 game once on each physical monitor and confirm foreground safety on both.
+Multi-monitor regressions must preserve negative desktop coordinates for a left-hand display and resolve window-relative regions against the target window rather than Scenario monitor index. Automated checks must prove that the same exact/shortest-title target is activated and revalidated before input, while activation failure remains fail-closed. Live checks should run the 1920x1080 game once on each physical monitor with another app initially in front.
 
 ## Continuous Gather regressions
 
@@ -64,7 +64,7 @@ Do not use diagnostic scores as dispatch authority in tests or production.
 
 Test deliberately:
 
-1. Start Bot, Alt+Tab into Last War as normal, and capture the complete `[team-diag]` timeline until the first Gather search click. If there is a pause, identify the last diagnostic before it.
+1. Start Bot while another app is active and capture the complete `[team-diag]` timeline until the first Gather search click. Last War should come forward automatically; if there is a pause, identify the last diagnostic before it.
 2. Run the same target-window flow with Last War on each monitor; for a left-hand display, confirm capture/click coordinates remain valid when the window rectangle has negative X.
 3. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
 4. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.

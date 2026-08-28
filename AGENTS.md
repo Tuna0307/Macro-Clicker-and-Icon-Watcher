@@ -34,7 +34,7 @@ Normal startup is `macro_clicker/bot_app.py`. The original editor remains hidden
 
 ## Multi-monitor target binding
 
-Normal Bot perception and clicks follow the visible Last War target-window rectangle, not a hard-coded physical monitor. The game must work on either monitor, including a left-hand monitor whose Windows desktop coordinates are negative. Preserve window-relative capture/scaling and fresh foreground/window checks; do not rebind normal Bot features to Scenario `monitor_index` when a target window is configured.
+Normal Bot perception and clicks follow the visible Last War target-window rectangle, not a hard-coded physical monitor. The game must work on either monitor, including a left-hand monitor whose Windows desktop coordinates are negative. Before input, the runtime automatically brings the exact selected target window forward and then revalidates its identity and rectangle; the user does not need to foreground the game manually. Preserve window-relative capture/scaling and fresh activation/window checks; do not rebind normal Bot features to Scenario `monitor_index` when a target window is configured.
 
 ## Input ownership
 

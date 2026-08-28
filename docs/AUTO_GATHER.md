@@ -15,7 +15,7 @@ TeamStatusMonitor
 
 Normal Gather is persistent and state-driven. It does not use the legacy `3 -> 2 -> 1` replacement policy.
 
-Team monitoring and the one-team scenario both follow the Last War target-window rectangle on either physical monitor. Signed desktop coordinates are valid when the 1920x1080 game is on a left-hand secondary display; exact-team and foreground gates remain unchanged.
+Team monitoring and the one-team scenario both follow the Last War target-window rectangle on either physical monitor. Signed desktop coordinates are valid when the 1920x1080 game is on a left-hand secondary display. Before a due input, the exact selected game window is automatically activated and its identity/rectangle are revalidated; exact-team dispatch gates remain unchanged.
 
 ## Resource-search popup normalization
 

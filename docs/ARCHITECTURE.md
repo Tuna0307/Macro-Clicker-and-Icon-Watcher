@@ -12,7 +12,7 @@ Bot UI
 
 `bot/team_status.py` is a read-only observer; `bot/team_state.py` stores shared state/freshness; `bot/continuous_gather.py` coordinates availability; `bot/adapters.py` owns exact-team one-attempt Scenario adaptation. Keep these boundaries separate.
 
-Normal Bot target capture is window-relative and monitor-agnostic. `find_window_rect()` may return negative `left`/`top` desktop coordinates for a secondary display; MSS capture regions and MacroEngine click coordinates must preserve those signed values. A configured target window remains authoritative over legacy Scenario monitor selection.
+Normal Bot target capture is window-relative and monitor-agnostic. `find_window_rect()` may return negative `left`/`top` desktop coordinates for a secondary display; MSS capture regions and MacroEngine click coordinates must preserve those signed values. A configured target window remains authoritative over legacy Scenario monitor selection. If that exact selected window is behind another app when input becomes due, MacroEngine activates it and then revalidates both foreground identity and geometry before committing the input.
 
 ## Resource-search popup normalization
 
@@ -54,4 +54,4 @@ Map perception only authorizes a candidate attempt. On the dispatch panel, Team 
 
 ## Input ownership and protected behavior
 
-Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve target-window/foreground safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, optional-status fallback, binary-template validation, diagnostic-only observability, and fail-closed ambiguity.
+Only one clicking workflow owns input. Rally and continuous Gather remain mutually excluded. Preserve exact target-window activation/revalidation safety, kill switch, mature Rally behavior, Gather resource-taken recovery, search-tab normalization, stale-state rejection, optional-status fallback, binary-template validation, diagnostic-only observability, and fail-closed ambiguity.

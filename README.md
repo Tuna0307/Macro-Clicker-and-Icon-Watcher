@@ -18,7 +18,7 @@ Bot UI -> BotConfig -> services/adapters -> MacroEngine -> Detection/OCR/Safety
 
 Normal Bot saves do not rewrite tuned Scenario JSON.
 
-The Bot follows the Last War window on either physical monitor. Window-relative capture and clicking support negative desktop coordinates, such as a 1920x1080 secondary display positioned to the left of the primary monitor. The game still has to be the foreground target for automated clicks.
+The Bot follows the Last War window on either physical monitor. Window-relative capture and clicking support negative desktop coordinates, such as a 1920x1080 secondary display positioned to the left of the primary monitor. When an input is due, the Bot brings the exact detected game window forward automatically and rechecks it before clicking or typing, so no manual Alt+Tab is required.
 
 ## Input ownership
 

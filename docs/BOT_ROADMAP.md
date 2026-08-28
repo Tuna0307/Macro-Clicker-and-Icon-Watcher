@@ -13,7 +13,7 @@
 | Scheduling | Basic complete | Live proof pending. |
 | Testing | Ongoing | CI plus supervised game fixtures required. |
 
-Multi-monitor target-window operation is supported. A 2026-08-28 supervised run detected and clicked the 1920x1080 game on the left secondary monitor at desktop rectangle `(-1920, 0, 1920, 1080)`; retain automated negative-coordinate coverage and repeat live verification after capture/input changes.
+Multi-monitor target-window operation is supported. A 2026-08-28 supervised run detected and clicked the 1920x1080 game on the left secondary monitor at desktop rectangle `(-1920, 0, 1920, 1080)`. Input now activates the exact selected target automatically before revalidating it; retain automated negative-coordinate coverage and repeat live activation verification after capture/input changes.
 
 ## Current next work
 
@@ -28,8 +28,9 @@ Multi-monitor target-window operation is supported. A 2026-08-28 supervised run 
 9. Change a lead hero and verify learned/static identity logic does not mislabel the team.
 10. Verify a timer reaching zero only triggers visual refresh, never Idle by itself.
 11. Verify exact intended fixed dispatch card is rechecked/clicked and busy teams are untouched. The missing Team 2 idle crop has been restored and automated validation now covers all three cards; supervised Team 1 -> Team 2 -> Team 3 progression remains pending.
-12. Verify resource-taken retry, F12/unconfirmed pause, and no-free-march no-replacement.
-13. Design safe Rally/Gather cooperative handoff only if simultaneous continuous operation is required.
+12. Verify an input due while another app is active automatically foregrounds the exact Last War target on either monitor, while activation failure remains fail-closed.
+13. Verify resource-taken retry, F12/unconfirmed pause, and no-free-march no-replacement.
+14. Design safe Rally/Gather cooperative handoff only if simultaneous continuous operation is required.
 
 ## Known safe limitations
 
