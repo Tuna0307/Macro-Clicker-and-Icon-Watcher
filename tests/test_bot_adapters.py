@@ -162,6 +162,11 @@ def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replac
     no_free = next(step for step in scenario.steps if step.name == "Gather - No Free March")
     busy = next(step for step in scenario.steps if step.name == "Gather - Selected Team Busy")
 
+    step_names = [step.name for step in scenario.steps]
+    assert step_names.index("Gather - Dispatch Ready") < step_names.index(
+        "Gather - No Free March"
+    )
+
     assert dispatch.condition_operator == "AND"
     assert len(dispatch.conditions) == 2
     assert dispatch.conditions[1].template_path == "templates/Team2Idle.png"
