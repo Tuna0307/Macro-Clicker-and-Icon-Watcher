@@ -21,6 +21,7 @@ def test_bot_frame_exposes_normal_user_pages():
 
 def test_runtime_log_panel_is_attached_below_notebook_instead_of_to_a_tab():
     pages = BotPagesMixin()
+    pages.tabs = Mock()
     panel = Mock()
     log = Mock()
     scrollbar = Mock()
@@ -36,7 +37,13 @@ def test_runtime_log_panel_is_attached_below_notebook_instead_of_to_a_tab():
         pages._build_runtime_log()
 
     frame.assert_called_once_with(pages, text="Runtime Log", padding=(10, 8))
-    panel.pack.assert_called_once_with(fill="x", padx=12, pady=(0, 12))
+    panel.pack.assert_called_once_with(
+        side="bottom",
+        fill="x",
+        padx=12,
+        pady=(0, 12),
+        before=pages.tabs,
+    )
     text.assert_called_once_with(panel, state="disabled", height=7, wrap="none")
     scroll.assert_called_once_with(
         panel,
