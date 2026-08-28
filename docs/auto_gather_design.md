@@ -64,7 +64,9 @@ The current supervised build wraps the perception loop with `[team-diag]` eviden
 
 Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale, ambiguous, or only generic Busy.
 
-Each card uses its own supervised crop: `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png`. The Team 2 crop cannot be substituted with a neighboring card's template at the current confidence gate. Release validation therefore builds all three selected-team scenarios and verifies OpenCV can decode every idle asset.
+Each card uses its own supervised crop: `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png`. The Team 2 crop cannot be substituted with a neighboring card's template at the current confidence gate. Team 3's crop was refreshed from its current 1920x1080 card after the prior asset scored `0.812`; a 40x36 supervised fixture now guards the unchanged `0.85` gate. Release validation therefore builds all three selected-team scenarios and verifies OpenCV can decode every idle asset.
+
+At panel entry, runtime step order gives Dispatch-button + exact selected-team Idle precedence over the broad no-free banner. The valid dispatch path disables no-free within the same cycle. When all marches are genuinely occupied, the exact idle proof cannot pass and the no-free step retains its close/stop behavior.
 
 ## Historical MVP
 

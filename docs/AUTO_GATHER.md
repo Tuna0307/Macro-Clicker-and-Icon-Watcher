@@ -114,7 +114,9 @@ The dispatch panel is different from the sidebar: Team 1/2/3 card positions are 
 
 If the selected team is no longer idle, the attempt exits. No-free-march never replaces another busy team.
 
-`Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` are separate required safety assets. Team 2's live card background differs enough that a Team 1/3 crop cannot safely replace it at the existing `0.85` gate. Automated validation must build all three selected-team scenarios and decode each crop before release.
+`Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` are separate required safety assets. Team 2's live card background differs enough that a Team 1/3 crop cannot safely replace it at the existing `0.85` gate. The current Team 3 crop was captured from the supervised 2026-08-28 panel after its previous crop scored only `0.812`; its 40x36 live-region fixture must continue clearing `0.85`. Automated validation must build all three selected-team scenarios and decode each crop before release.
+
+When the resource-to-panel transition enables both possible outcomes, the selected-team scenario evaluates Dispatch-button + exact idle-card before the broad no-free banner. A valid exact-team dispatch disables no-free in that cycle. A genuinely full queue has no exact idle proof and still closes/stops without replacement.
 
 ## Safety invariants
 

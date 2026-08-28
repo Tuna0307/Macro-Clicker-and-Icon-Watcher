@@ -48,6 +48,8 @@ During the current supervised delay investigation, the persistent Runtime Log ma
 
 Unlike the sidebar, Team 1/2/3 dispatch cards have fixed positions. Exact-team blue-idle verification and fixed-card clicking remain the final safety gate regardless of hero portrait.
 
+The 2026-08-28 supervised Team 3 run refreshed its live idle-card crop and preserved the `0.85` gate. During dispatch-panel entry the stronger exact-team proof is evaluated before the generic no-free banner, so the UI does not report a valid Team 3 attempt as no-free while genuine full queues still pause safely.
+
 All three cards have separate live-captured idle assets. In particular, Team 2 must use `Team2Idle.png`; neighboring Team 1/3 crops score below the required live threshold in Team 2's region. Required-file validation should reject a missing card asset before that attempt starts.
 
 ## Input ownership

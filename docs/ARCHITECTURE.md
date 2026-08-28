@@ -40,7 +40,7 @@ Detailed status-label templates are optional perception detail, not an availabil
 
 A template path existing on disk does not prove OpenCV can use it. Windows CI on 2026-08-27 caught earlier Gathering/Rallying blobs that existed but were not reliably decodable. Those two assets were rebuilt from verified supervised crops. Tests for visual assets should call `cv2.imread()` and assert a non-empty image; do not rely only on `Path.is_file()`.
 
-This also applies to dispatch safety assets. `Team2Idle.png` was added from a supervised 1920x1080 dispatch panel after runtime validation stopped the second Gather attempt because only Team 1/3 crops existed. All three exact-team scenarios must validate their required files and decode their own idle crop.
+This also applies to dispatch safety assets. `Team2Idle.png` was added from a supervised 1920x1080 dispatch panel after runtime validation stopped the second Gather attempt because only Team 1/3 crops existed. `Team3Idle.png` was refreshed on 2026-08-28 when the older crop scored `0.812` against the current live card, below the unchanged `0.85` gate. All three exact-team scenarios must validate their required files and decode their own idle crop; Team 3 additionally has a supervised live-region match regression.
 
 A `3/3` sidebar is inherently unambiguous: rows are Team 1, Team 2, Team 3. A cold ambiguous `1/3` or `2/3` without current identity evidence remains Unknown rather than guessing.
 
@@ -57,6 +57,8 @@ Countdown values are used only to choose the next screen-check interval. Long ti
 ## Dispatch safety
 
 Map perception only authorizes a candidate attempt. On the dispatch panel, Team 1/2/3 card positions are fixed independently of hero image. `bot/adapters.py` still requires the exact team's blue idle indicator and clicks that exact card before Dispatch. No-free-march stops/closes rather than replacing a busy march.
+
+The configured selected-team scenario orders the strong Dispatch-button + exact idle-card step before the broad no-free banner step. This prevents a transient notification during panel entry from winning the cycle; a genuine full queue cannot satisfy the exact idle condition and therefore still reaches the fail-closed no-free path.
 
 ## Input ownership and protected behavior
 

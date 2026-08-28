@@ -120,8 +120,10 @@ Preserve:
 - fresh visual Idle required;
 - exact selected team must still show its blue idle indicator at its fixed dispatch-panel position;
 - `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` must all exist and decode; Team 2 cannot reuse a neighboring card's crop because the live card backgrounds do not meet the `0.85` gate;
+- `Team3Idle.png` is the supervised 2026-08-28 crop from the current Team 3 card and must clear the unchanged `0.85` gate against `tests/fixtures/gather_team3_idle_region_20260828.png`;
 - dispatch-panel positions are permanently Team 1 / Team 2 / Team 3 even when heroes change;
 - busy teams are never intentionally overwritten;
+- when both panel outcomes are enabled, evaluate Dispatch-button + exact-team Idle before the broader no-free banner; a genuinely full queue still falls through to no-free close/stop because it cannot satisfy the exact-team Idle condition;
 - no-free-march closes/stops instead of replacing;
 - confirmed dispatch immediately marks that exact team non-idle;
 - unconfirmed/aborted attempts pause fail-closed;

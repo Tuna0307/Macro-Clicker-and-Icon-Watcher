@@ -78,6 +78,8 @@ During the current supervised startup-delay investigation, the bottom Runtime Lo
 
 On the dispatch panel Team 1, Team 2 and Team 3 have permanent card locations even when hero portraits change. Before Dispatch, the runtime must still verify the chosen team's exact blue idle indicator, click that exact fixed card, then use the proven Dispatch path. A stale/incorrect map-side guess therefore cannot intentionally overwrite another busy team.
 
+The current Team 3 idle crop was refreshed from a supervised 1920x1080 panel after the older crop scored `0.812`, below the unchanged `0.85` Gather gate. The selected-team runtime also checks the stronger Dispatch-button + exact idle-card outcome before the broad no-free banner during panel transition; a real full queue still closes and stops because no exact idle card can pass.
+
 Each fixed card has its own live-captured idle template, including `Team2Idle.png`. Scenario validation and regression tests require all three templates to exist and decode with OpenCV so a later-team attempt cannot fail only after an earlier team was sent.
 
 Legacy `march_count` and `replacement_order` remain compatibility-only.

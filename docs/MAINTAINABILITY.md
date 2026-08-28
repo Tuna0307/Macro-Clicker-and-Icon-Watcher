@@ -49,11 +49,13 @@ Never use a diagnostic score, heartbeat, elapsed time, or OCR-init event to mark
 
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.
 
-Keep separate decodable `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` assets. A 2026-08-28 supervised run exposed that the Team 2 path was configured but missing, so Team 1 succeeded and the service paused before Team 2. Tests must validate required files for every selected team, not merely assert the configured path string.
+Keep separate decodable `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` assets. A 2026-08-28 supervised run exposed that the Team 2 path was configured but missing, so Team 1 succeeded and the service paused before Team 2. A later run measured the old Team 3 crop at `0.812` against the current card and refreshed it from the live 1920x1080 panel. Tests must validate required files for every selected team and retain the Team 3 live-region `0.85` regression, not merely assert configured path strings.
 
 A later 2026-08-28 run confirmed Team 1 and Team 2 dispatches, then captured a map-anchor/blank-queue transition that reset both to Idle and restarted Team 1. Preserve the post-dispatch stabilization regression that keeps prior busy evidence long enough for Team 3 to remain the next candidate.
 
 Final supervised diagnosis also showed Team 1 can genuinely return during the roughly 30-second first PaddleOCR initialization. Lowest-number-first selection then restarts Team 1 after Team 2 even without a false frame. Preserve the fair Team 1 -> Team 2 -> Team 3 rotation regression independently of the stabilization guard.
+
+Preserve selected-team scenario precedence: Dispatch-button + exact idle-card must be evaluated before the broad no-free banner once the panel opens. This ordering cannot authorize a busy card because the exact idle condition remains mandatory; it only prevents a transient notification from stopping a valid attempt before the stronger proof is checked.
 
 ## AI-assisted commit policy
 
