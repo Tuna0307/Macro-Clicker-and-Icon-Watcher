@@ -15,6 +15,8 @@ TeamStatusMonitor
 
 Normal Gather is persistent and state-driven. It does not use the legacy `3 -> 2 -> 1` replacement policy.
 
+Team monitoring and the one-team scenario both follow the Last War target-window rectangle on either physical monitor. Signed desktop coordinates are valid when the 1920x1080 game is on a left-hand secondary display; exact-team and foreground gates remain unchanged.
+
 ## Resource-search popup normalization
 
 The search popup has three tabs and remembers the last selected one. Therefore every Gather Prepare pass must explicitly normalize the popup before choosing Gold:

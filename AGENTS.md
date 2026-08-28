@@ -32,6 +32,10 @@ Bot UI
 
 Normal startup is `macro_clicker/bot_app.py`. The original editor remains hidden Advanced tooling.
 
+## Multi-monitor target binding
+
+Normal Bot perception and clicks follow the visible Last War target-window rectangle, not a hard-coded physical monitor. The game must work on either monitor, including a left-hand monitor whose Windows desktop coordinates are negative. Preserve window-relative capture/scaling and fresh foreground/window checks; do not rebind normal Bot features to Scenario `monitor_index` when a target window is configured.
+
 ## Input ownership
 
 Only one clicking automation owns mouse/keyboard input at a time. Development/Science are finite, Rally is continuous, continuous Auto Gather is a separate persistent service, and passive Alerts may observe in parallel. Rally and continuous Gather remain blocked from simultaneous clicking until a tested cooperative handoff exists.

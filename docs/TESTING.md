@@ -14,6 +14,8 @@ python -m tools.validate_scenarios
 
 Blocking CI: pytest, Ruff lint, scenario/template validation.
 
+Multi-monitor regressions must preserve negative desktop coordinates for a left-hand display and resolve window-relative regions against the target window rather than Scenario monitor index. Live checks should run the 1920x1080 game once on each physical monitor and confirm foreground safety on both.
+
 ## Continuous Gather regressions
 
 Protect:
@@ -63,25 +65,26 @@ Do not use diagnostic scores as dispatch authority in tests or production.
 Test deliberately:
 
 1. Start Bot, Alt+Tab into Last War as normal, and capture the complete `[team-diag]` timeline until the first Gather search click. If there is a pause, identify the last diagnostic before it.
-2. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
-3. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
-4. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
-5. Leave Gold at Lv9/Lv12, configure Lv3, and confirm the first automated search is Lv3 followed by Lv2/Lv1 only when unavailable.
-6. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
-7. 0/3 all free.
-8. each single busy team where possible.
-9. each two-busy combination.
-10. 3/3 all busy.
-11. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
-12. Gathering (`採集中`).
-13. Returning (`返回`).
-14. Travelling (`去 X/Y`).
-15. Rallying (`集結中`).
-16. long and near-zero timers, recording the first-OCR initialization duration.
-17. timer reaches zero but row remains busy: no dispatch until visual Idle.
-18. change a team's lead hero and verify no stale portrait misidentification.
-19. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
-20. resource taken, no-free-march, F12/unconfirmed safety.
+2. Run the same target-window flow with Last War on each monitor; for a left-hand display, confirm capture/click coordinates remain valid when the window rectangle has negative X.
+3. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
+4. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
+5. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
+6. Leave Gold at Lv9/Lv12, configure Lv3, and confirm the first automated search is Lv3 followed by Lv2/Lv1 only when unavailable.
+7. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
+8. 0/3 all free.
+9. each single busy team where possible.
+10. each two-busy combination.
+11. 3/3 all busy.
+12. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
+13. Gathering (`採集中`).
+14. Returning (`返回`).
+15. Travelling (`去 X/Y`).
+16. Rallying (`集結中`).
+17. long and near-zero timers, recording the first-OCR initialization duration.
+18. timer reaches zero but row remains busy: no dispatch until visual Idle.
+19. change a team's lead hero and verify no stale portrait misidentification.
+20. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
+21. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity
 

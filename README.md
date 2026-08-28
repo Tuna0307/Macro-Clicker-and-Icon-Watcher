@@ -18,6 +18,8 @@ Bot UI -> BotConfig -> services/adapters -> MacroEngine -> Detection/OCR/Safety
 
 Normal Bot saves do not rewrite tuned Scenario JSON.
 
+The Bot follows the Last War window on either physical monitor. Window-relative capture and clicking support negative desktop coordinates, such as a 1920x1080 secondary display positioned to the left of the primary monitor. The game still has to be the foreground target for automated clicks.
+
 ## Input ownership
 
 Only one active clicking automation owns input. Development/Science are finite, Rally is continuous, Auto Gather is a persistent state-driven service, and Alerts are passive. Rally + continuous Gather are still blocked together until safe cooperative handoff is implemented.

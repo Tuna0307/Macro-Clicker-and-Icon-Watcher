@@ -19,6 +19,8 @@ trusted world map
  -> resume monitoring
 ```
 
+Both the observer and selected-team scenario resolve this flow against the Last War window on either monitor. The target rectangle may use negative desktop coordinates on a left-hand secondary display; geometry remains window-relative before capture and click translation.
+
 ## Search-popup design learned from live game
 
 The resource-search popup has three tabs and remembers whichever tab was previously selected. The Gather flow must therefore normalize it every time before selecting Gold. At 1920x1080, the existing Search-button anchor is used for the middle Gather tab `(0, -480)` and then Gold `(+196, -348)`. This ordering is intentional and regression-tested.

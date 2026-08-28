@@ -2,6 +2,8 @@
 
 Reliability first: do not rewrite proven behavior merely for cleaner abstractions.
 
+Normal Bot automation is target-window-relative across multiple monitors. Preserve signed absolute coordinates returned for left/top secondary displays and keep foreground identity checks tied to the same selected window. Do not introduce a hidden assumption that the target begins at `(0, 0)` or lives on physical Monitor 1.
+
 ## Protected behavior
 
 Protect mature Rally, target-window/foreground safety, kill switch, proven Gather search/resource-taken flow, three-tab search-popup normalization, continuous Gather fresh-visual-Idle requirement, exact-team fixed-position dispatch verification, busy-team protection, and passive Alerts.

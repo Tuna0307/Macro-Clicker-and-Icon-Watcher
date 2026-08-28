@@ -13,6 +13,8 @@
 | Scheduling | Basic complete | Live proof pending. |
 | Testing | Ongoing | CI plus supervised game fixtures required. |
 
+Multi-monitor target-window operation is supported. A 2026-08-28 supervised run detected and clicked the 1920x1080 game on the left secondary monitor at desktop rectangle `(-1920, 0, 1920, 1080)`; retain automated negative-coordinate coverage and repeat live verification after capture/input changes.
+
 ## Current next work
 
 1. Reproduce the startup-to-first-Gather flow with the new `[team-diag]` telemetry and determine whether the observed long pause is world-map gating, busy-count matching, PaddleOCR initialization, or another slow scan stage before changing behavior.

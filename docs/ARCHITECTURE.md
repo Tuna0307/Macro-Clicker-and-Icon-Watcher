@@ -12,6 +12,8 @@ Bot UI
 
 `bot/team_status.py` is a read-only observer; `bot/team_state.py` stores shared state/freshness; `bot/continuous_gather.py` coordinates availability; `bot/adapters.py` owns exact-team one-attempt Scenario adaptation. Keep these boundaries separate.
 
+Normal Bot target capture is window-relative and monitor-agnostic. `find_window_rect()` may return negative `left`/`top` desktop coordinates for a secondary display; MSS capture regions and MacroEngine click coordinates must preserve those signed values. A configured target window remains authoritative over legacy Scenario monitor selection.
+
 ## Resource-search popup normalization
 
 `scenarios/Gather Gold.json` must normalize the three-tab search popup before choosing Gold. The popup remembers its last selected tab, so the Prepare step first clicks the fixed middle `採集` / Gather tab using the Search-button anchor `(0, -480)`, then clicks Gold at `(+196, -348)`, then applies level/search. This behavior belongs to the proven scenario layer, not team-state perception.
