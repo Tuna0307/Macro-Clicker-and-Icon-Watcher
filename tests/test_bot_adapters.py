@@ -2,6 +2,8 @@ import sys
 import types
 from copy import deepcopy
 
+import cv2
+
 try:
     import keyboard  # noqa: F401
 except ImportError:
@@ -15,7 +17,7 @@ from macro_clicker.bot.adapters import (
 )
 from macro_clicker.bot.config import BotConfig, GatherConfig, PositionsConfig, RallyConfig
 from macro_clicker.bot.controller import FEATURE_GATHER
-from macro_clicker.models import Action, Scenario, Step
+from macro_clicker.models import Action, Scenario, Step, project_path, validate_scenario
 
 
 def _rally_scenario():
@@ -154,6 +156,24 @@ def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replac
     assert busy.conditions[1].negate is True
     assert busy.conditions[1].template_path == "templates/Team2Idle.png"
     assert [action.type for action in busy.actions] == ["key", "wait", "stop"]
+
+
+def test_each_selected_team_gather_idle_template_decodes_and_validates():
+    config = BotConfig()
+    config.gather.enabled = True
+    config.gather.teams_enabled = [1, 2, 3]
+
+    for team in config.gather.teams_enabled:
+        scenario = configured_scenario(FEATURE_GATHER, config, gather_team=team)
+        validate_scenario(scenario, require_files=True)
+        dispatch = next(
+            step for step in scenario.steps if step.name == "Gather - Dispatch Ready"
+        )
+        idle_path = dispatch.conditions[1].template_path
+        idle_image = cv2.imread(project_path(idle_path), cv2.IMREAD_COLOR)
+
+        assert idle_image is not None, idle_path
+        assert idle_image.size > 0, idle_path
 
 
 def _position_scenario():
