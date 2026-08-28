@@ -165,6 +165,52 @@ def test_transient_blank_queue_after_dispatch_keeps_prior_busy_teams_and_chooses
     assert tracker.available_teams(now=now + 6.0) == (1, 2, 3)
 
 
+def test_returned_team1_does_not_starve_idle_team3_after_team2_dispatch():
+    now = time.monotonic()
+    tracker = TeamStateTracker()
+    all_idle = tuple(
+        TeamObservation(team, TeamActivity.IDLE) for team in (1, 2, 3)
+    )
+    tracker.update(
+        all_idle,
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=now,
+    )
+    started = []
+    service = ContinuousGatherService(
+        lambda: _config(),
+        tracker,
+        lambda team: started.append(team) or True,
+    )
+    service.start()
+
+    assert service.try_start_next(input_engine_busy=False) is True
+    service.complete_attempt(success=True)
+    tracker.update(
+        all_idle,
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=(
+            now + TeamStateTracker.POST_DISPATCH_STABILIZATION_SECONDS + 1.0
+        ),
+    )
+
+    assert service.try_start_next(input_engine_busy=False) is True
+    service.complete_attempt(success=True)
+    tracker.update(
+        all_idle,
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=(
+            now + TeamStateTracker.POST_DISPATCH_STABILIZATION_SECONDS + 2.0
+        ),
+    )
+
+    assert service.try_start_next(input_engine_busy=False) is True
+    assert started == [1, 2, 3]
+
+
 def test_unconfirmed_attempt_pauses_fail_closed_instead_of_retrying():
     tracker = TeamStateTracker()
     tracker.update(
