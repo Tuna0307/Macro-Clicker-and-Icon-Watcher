@@ -38,6 +38,7 @@ class ContinuousGatherService:
         self.tracker = tracker
         self._start_team = start_team
         self.status = ContinuousGatherStatus()
+        self._last_dispatched_team: int | None = None
 
     def start(self) -> bool:
         if self.status.active:
@@ -45,6 +46,7 @@ class ContinuousGatherService:
             return True
         self.status.active = True
         self.status.in_flight_team = None
+        self._last_dispatched_team = None
         self.status.last_message = "Watching team status for an available team"
         return True
 
@@ -63,10 +65,13 @@ class ContinuousGatherService:
 
         if not self.tracker.sidebar_visible:
             return None
-        configured = set(self._configured_teams())
-        for snapshot in self.tracker.snapshots():
-            if snapshot.team not in configured:
-                continue
+        configured = tuple(sorted(set(self._configured_teams())))
+        if self._last_dispatched_team in configured:
+            pivot = configured.index(self._last_dispatched_team) + 1
+            configured = configured[pivot:] + configured[:pivot]
+        snapshots = {snapshot.team: snapshot for snapshot in self.tracker.snapshots()}
+        for team in configured:
+            snapshot = snapshots[team]
             if snapshot.activity != TeamActivity.IDLE:
                 continue
             if snapshot.last_seen_age is None:
@@ -124,6 +129,7 @@ class ContinuousGatherService:
             return
 
         self.tracker.mark_dispatched(team)
+        self._last_dispatched_team = team
         self.status.successful_dispatches += 1
         self.status.last_message = (
             f"Team {team} dispatched; watching for the next available team"
