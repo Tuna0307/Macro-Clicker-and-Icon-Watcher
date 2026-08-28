@@ -26,6 +26,7 @@ It also remembers the resource level. Preserve minimum-level clamping followed b
 - Missing portrait evidence must never be converted into Team 2.
 - Current portraits may be learned only after identity is unambiguous and cached only in per-user runtime storage.
 - Ambiguous identity stays Unknown.
+- For five seconds after a confirmed exact dispatch, a transient Idle/Unknown observation must not replace any previously non-idle team. This is a bounded render-stabilization guard, not permission to infer activity or make timers authoritative.
 
 ### Status/timer rules
 
@@ -46,6 +47,8 @@ Never use a diagnostic score, heartbeat, elapsed time, or OCR-init event to mark
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.
 
 Keep separate decodable `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` assets. A 2026-08-28 supervised run exposed that the Team 2 path was configured but missing, so Team 1 succeeded and the service paused before Team 2. Tests must validate required files for every selected team, not merely assert the configured path string.
+
+A later 2026-08-28 run confirmed Team 1 and Team 2 dispatches, then captured a map-anchor/blank-queue transition that reset both to Idle and restarted Team 1. Preserve the post-dispatch stabilization regression that keeps prior busy evidence long enough for Team 3 to remain the next candidate.
 
 ## AI-assisted commit policy
 

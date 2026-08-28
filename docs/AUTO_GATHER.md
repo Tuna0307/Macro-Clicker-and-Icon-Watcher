@@ -67,6 +67,10 @@ Current strategy:
 
 `3/3` is unambiguous and teaches all three current portraits. A just-confirmed exact bot dispatch can also provide useful identity history. A cold ambiguous `1/3` or `2/3` with no usable identity evidence remains Unknown and waits.
 
+### Post-dispatch stabilization
+
+The normal map anchor can reappear before the compressed deployment queue finishes repopulating after Dispatch closes. For five seconds after a confirmed exact-team dispatch, the tracker therefore refuses to replace any previously non-idle team with Idle/Unknown from a transitional frame. Teams that were already Idle remain eligible, so after Team 1 and Team 2 are confirmed the service can select Team 3 even if one frame briefly reports a blank queue. This bounded hold can only delay availability; it cannot create Idle authority.
+
 ## Detailed status and timer
 
 Confirmed game labels:

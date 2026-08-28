@@ -106,11 +106,13 @@ Timers are scheduling hints. Countdown zero never promotes a team to Idle; a fre
 
 If the bot starts cold at ambiguous `1/3` or `2/3` and current portraits are not learned/recognized, affected teams remain `UNKNOWN`; the bot waits rather than guessing. This is intentional fail-closed behavior.
 
+After an exact dispatch is confirmed, keep previously non-idle team state through a five-second world-map/sidebar stabilization window. Last War can render the trusted map anchor before its compressed deployment queue repopulates; a transient blank queue during that bounded window must not erase exact dispatch history and restart Team 1 ahead of an available Team 3. The hold may delay a newly free team, but it never makes a team Idle.
+
 ### Dispatch safety invariants
 
 Preserve:
 
-- trusted world-map gate before blank queue means `0/3`;
+- trusted world-map gate before blank queue means `0/3`, except that the bounded post-dispatch stabilization hold may conservatively retain prior non-idle state;
 - fresh visual Idle required;
 - exact selected team must still show its blue idle indicator at its fixed dispatch-panel position;
 - `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` must all exist and decode; Team 2 cannot reuse a neighboring card's crop because the live card backgrounds do not meet the `0.85` gate;

@@ -40,6 +40,7 @@ Protect:
 - timer expiry never creates Idle;
 - exact fixed dispatch-card blue-idle verification remains required;
 - selected-team scenarios for Teams 1, 2, and 3 all pass required-file validation and their separate `TeamNIdle.png` crops decode successfully with OpenCV;
+- a transitional blank queue immediately after confirmed Team 2 dispatch preserves prior Team 1/2 busy state and leaves Team 3 as the next candidate; a later observation after the five-second stabilization window can report them Idle normally;
 - no-free-march never replaces;
 - unconfirmed attempt pauses;
 - OCR diagnostics emit `initialization started` before model construction and ready/failure timing after it;
@@ -84,7 +85,8 @@ Test deliberately:
 18. timer reaches zero but row remains busy: no dispatch until visual Idle.
 19. change a team's lead hero and verify no stale portrait misidentification.
 20. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
-21. resource taken, no-free-march, F12/unconfirmed safety.
+21. after Team 2 dispatch closes, watch for a briefly blank sidebar and confirm it does not cause Team 1 to be selected again; Team 3 should be next.
+22. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity
 

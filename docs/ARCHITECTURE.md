@@ -40,6 +40,8 @@ This also applies to dispatch safety assets. `Team2Idle.png` was added from a su
 
 A `3/3` sidebar is inherently unambiguous: rows are Team 1, Team 2, Team 3. A cold ambiguous `1/3` or `2/3` without current identity evidence remains Unknown rather than guessing.
 
+An exact confirmed dispatch opens a five-second tracker stabilization window. During it, an Idle/Unknown replacement cannot erase any previously non-idle team state, because the map anchor can become readable before the compressed queue repopulates. Already-idle teams remain eligible, allowing Team 3 to follow confirmed Team 1/2 dispatches without waiting for a guessed identity. After the window, fresh visuals are authoritative again.
+
 ### Perception diagnostics
 
 The team-status observer now exposes read-only `[team-diag]` telemetry during supervised delay investigation. It retains the latest world-map score, the three busy-count candidate scores and selected count, and identity completeness; the monitor rate-limits readable/unreadable heartbeat lines, emits an OCR-start line before PaddleOCR construction plus ready/failure duration afterward, and reports any scan taking at least two seconds. These diagnostics belong to observability only and must not feed availability or dispatch decisions.

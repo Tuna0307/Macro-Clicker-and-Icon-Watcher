@@ -44,6 +44,8 @@ Hero portraits change whenever the team's lead hero changes. The sidebar and fix
 
 The detector learns current portraits only from unambiguous assignments (for example 3/3 or other resolved state) and may use them later to recognize compressed rows. Legacy Team 1/Team 3 portrait assets are bootstrap hints only; a non-match is not evidence for Team 2.
 
+After an exact dispatch completes, the map background and deployment queue may not render atomically. The tracker keeps every existing non-idle state for a bounded five-second stabilization window when a frame tries to replace it with Idle/Unknown. This retains confirmed Team 1/2 activity through a blank transitional queue while leaving an already-idle Team 3 selectable; it does not promote or guess any team state.
+
 ## Activity/timing design
 
 Confirmed detailed states are Gathering, Returning, Travelling, and Rallying, with row countdowns. Their real `TeamStatus*.png` crops improve display and polling but are optional detail assets. A missing or unreadable detailed status template must degrade the row to generic Busy rather than aborting the whole sidebar observation. Generic Busy is still non-dispatchable.

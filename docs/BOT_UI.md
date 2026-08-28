@@ -36,6 +36,8 @@ If identity at a partial-busy cold start is ambiguous, the UI should show Unknow
 
 Timers are useful scheduling/display hints, never authority for Idle.
 
+After the UI reports a confirmed dispatch, the Dashboard may retain prior Travelling/Gathering/Busy states for up to five seconds while the game sidebar stabilizes. This conservative delay prevents a transitional blank queue from displaying all teams Idle and restarting an earlier team instead of the next available one.
+
 ### Logs diagnostics
 
 During the current supervised delay investigation, the Logs tab may show `[team-diag]` lines containing the world-map match score, all three busy-count candidate scores, identity completeness, unreadable-view heartbeats, OCR initialization timing, and `slow scan` duration. These are read-only troubleshooting messages. They do not change Dashboard state, choose a team, or authorize a click.

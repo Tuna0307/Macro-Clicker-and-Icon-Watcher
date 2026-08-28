@@ -66,6 +66,8 @@ The Dashboard can show detailed states with countdowns when the assets are avail
 
 If a cold start at `1/3` or `2/3` cannot safely identify the busy subset yet, state remains Unknown and Gather waits instead of guessing.
 
+After a confirmed dispatch, the tracker briefly preserves existing non-idle states while the world map and compressed sidebar finish rendering. This prevents one blank transitional queue frame from resetting Team 1/2 to Idle and skipping the still-available Team 3.
+
 ### Delay diagnostics
 
 During the current supervised startup-delay investigation, the Logs tab emits `[team-diag]` evidence without changing automation behavior. It reports the world-map match score, separate `1/3` / `2/3` / `3/3` busy-count scores, whether team identity is complete, rate-limited unreadable-view messages, PaddleOCR initialization start/ready/failure duration, and any team-monitor scan that takes at least two seconds. These lines are intended to show exactly where a pause occurs; they are not dispatch authority.
