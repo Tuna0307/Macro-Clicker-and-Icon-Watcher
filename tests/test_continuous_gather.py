@@ -165,6 +165,48 @@ def test_transient_blank_queue_after_dispatch_keeps_prior_busy_teams_and_chooses
     assert tracker.available_teams(now=now + 6.0) == (1, 2, 3)
 
 
+def test_slow_scan_captured_before_dispatch_cannot_overwrite_newer_team_state():
+    tracker = TeamStateTracker()
+    all_idle = tuple(
+        TeamObservation(team, TeamActivity.IDLE) for team in (1, 2, 3)
+    )
+    tracker.update(
+        all_idle,
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=100.0,
+    )
+    tracker.mark_dispatched(1, observed_at=102.0)
+
+    changed = tracker.update(
+        all_idle,
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=101.0,
+    )
+
+    assert changed is False
+    assert tracker.snapshot(1, now=102.5).activity == TeamActivity.TRAVELLING
+
+    tracker.update(
+        (
+            TeamObservation(
+                1,
+                TeamActivity.GATHERING,
+                remaining_seconds=3600,
+            ),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.IDLE),
+        ),
+        sidebar_visible=True,
+        busy_count=1,
+        observed_at=103.0,
+    )
+    snapshot = tracker.snapshot(1, now=103.0)
+    assert snapshot.activity == TeamActivity.GATHERING
+    assert snapshot.remaining_seconds == 3600
+
+
 def test_returned_team1_does_not_starve_idle_team3_after_team2_dispatch():
     now = time.monotonic()
     tracker = TeamStateTracker()
