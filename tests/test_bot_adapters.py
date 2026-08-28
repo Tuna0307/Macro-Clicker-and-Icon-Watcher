@@ -90,7 +90,7 @@ def _gather_scenario():
     )
 
 
-def test_gather_adapter_changes_start_level_count_and_target_marches():
+def test_gather_adapter_normalizes_level_and_changes_target_marches():
     scenario = _gather_scenario()
     config = GatherConfig(
         start_level=8,
@@ -100,6 +100,13 @@ def test_gather_adapter_changes_start_level_count_and_target_marches():
 
     configured = apply_gather_config(scenario, config)
     prepare = configured.steps[0]
+    minus_clicks = [
+        action
+        for action in prepare.actions
+        if action.type == "click"
+        and action.offset_x == -183
+        and action.offset_y == -74
+    ]
     plus_clicks = [
         action
         for action in prepare.actions
@@ -107,7 +114,8 @@ def test_gather_adapter_changes_start_level_count_and_target_marches():
         and action.offset_x == 182
         and action.offset_y == -74
     ]
-    assert len(plus_clicks) == 8
+    assert len(minus_clicks) == 15
+    assert len(plus_clicks) == 7
 
     controls = [
         action
@@ -120,6 +128,28 @@ def test_gather_adapter_changes_start_level_count_and_target_marches():
         action for action in controls if action.gather_command == "record_success"
     )
     assert success.gather_target_count == 2
+
+
+def test_selected_team_gather_starts_lv3_after_remembered_level_reset():
+    config = BotConfig()
+    config.gather.enabled = True
+    config.gather.start_level = 3
+
+    scenario = configured_scenario(FEATURE_GATHER, config, gather_team=1)
+    prepare = next(
+        step for step in scenario.steps if step.name == "Gather - Prepare Gold Lv12"
+    )
+    clicks = [action for action in prepare.actions if action.type == "click"]
+    level_offsets = [
+        (action.offset_x, action.offset_y)
+        for action in clicks
+        if action.offset_y == -74
+    ]
+
+    assert (clicks[0].offset_x, clicks[0].offset_y) == (0, -480)
+    assert (clicks[1].offset_x, clicks[1].offset_y) == (196, -348)
+    assert level_offsets == [(-183, -74)] * 15 + [(182, -74)] * 2
+    assert clicks[-1].on_condition_index == 0
 
 
 def test_selected_team_gather_clicks_exact_team_before_dispatch_and_never_replaces_busy():
