@@ -1,6 +1,6 @@
 # Dedicated Bot UI architecture
 
-The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings. Scenario/Step internals remain under Advanced. Runtime Log is a seven-line scrollable panel below the notebook rather than a tab, so it remains visible while users configure or inspect any page.
+The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings. Scenario/Step internals remain under Advanced. Runtime Log is a seven-line scrollable panel below the notebook rather than a tab. Bottom-first packing reserves its full height before the notebook expands, so it remains visible while users configure or inspect any page.
 
 The Settings target-window title is the normal multi-monitor binding. Users may place Last War on either monitor; they should not need to choose an Advanced Scenario monitor index or manually activate the game. When input is due, the runtime brings the exact selected target forward and revalidates its identity and rectangle before acting.
 

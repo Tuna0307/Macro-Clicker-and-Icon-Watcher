@@ -10,7 +10,7 @@
 | Alerts | Core complete | Passive observation. |
 | Positions | Core complete | Finite workflows. |
 | Dashboard | In progress | Detailed Team Idle/Travelling/Gathering/Returning/Rallying/Busy/Unknown + timers now supported. |
-| Persistent Runtime Log | Implemented | Shared seven-line bottom panel remains visible on every normal tab. |
+| Persistent Runtime Log | Implemented | Shared seven-line bottom-first panel reserves its height and remains visible on every normal tab. |
 | Scheduling | Basic complete | Live proof pending. |
 | Testing | Ongoing | CI plus supervised game fixtures required. |
 

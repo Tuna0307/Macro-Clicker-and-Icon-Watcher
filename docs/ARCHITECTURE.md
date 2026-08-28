@@ -12,7 +12,7 @@ Bot UI
 
 `bot/team_status.py` is a read-only observer; `bot/team_state.py` stores shared state/freshness; `bot/continuous_gather.py` coordinates availability; `bot/adapters.py` owns exact-team one-attempt Scenario adaptation. Keep these boundaries separate.
 
-`BotFrame` owns one notebook for normal configuration/status pages and one sibling Runtime Log panel packed below it. Log routing continues through `append_runtime_log()` into the shared text widget; the panel is deliberately outside the notebook so switching pages cannot hide diagnostics.
+`BotFrame` owns one notebook for normal configuration/status pages and one sibling Runtime Log panel packed below it. The panel is inserted bottom-first in Tk's pack order before the expanding notebook so the requested seven-line height cannot be consumed by page content. Log routing continues through `append_runtime_log()` into the shared text widget; the panel is deliberately outside the notebook so switching pages cannot hide diagnostics.
 
 Normal Bot target capture is window-relative and monitor-agnostic. `find_window_rect()` may return negative `left`/`top` desktop coordinates for a secondary display; MSS capture regions and MacroEngine click coordinates must preserve those signed values. A configured target window remains authoritative over legacy Scenario monitor selection. If that exact selected window is behind another app when input becomes due, MacroEngine activates it and then revalidates both foreground identity and geometry before committing the input.
 

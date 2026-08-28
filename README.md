@@ -1,6 +1,6 @@
 # PC Automation Bot
 
-A Windows visual-automation and passive-monitoring utility. Normal users configure Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings; low-level Scenario editing remains under Advanced. A shared Runtime Log stays visible at the bottom on every normal tab.
+A Windows visual-automation and passive-monitoring utility. Normal users configure Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings; low-level Scenario editing remains under Advanced. A shared seven-line Runtime Log keeps its reserved space at the bottom on every normal tab.
 
 Run with:
 

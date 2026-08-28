@@ -32,7 +32,7 @@ Bot UI
 
 Normal startup is `macro_clicker/bot_app.py`. The original editor remains hidden Advanced tooling.
 
-Normal Bot runtime logs live in the persistent bottom `Runtime Log` panel below the notebook. Do not restore a separate Logs tab; Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings must all leave the same scrollable log visible.
+Normal Bot runtime logs live in the persistent bottom `Runtime Log` panel below the notebook. The panel is packed bottom-first before the expanding notebook so its seven-line height is reserved. Do not restore a separate Logs tab; Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings must all leave the same scrollable log visible.
 
 ## Multi-monitor target binding
 

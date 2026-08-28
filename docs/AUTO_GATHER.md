@@ -96,7 +96,7 @@ Each busy row may provide an `HH:MM:SS` countdown. OCR tolerates common digit co
 
 ## Team-monitor delay diagnostics
 
-The current supervised build emits `[team-diag]` lines in the persistent bottom Runtime Log to make long waits explainable without altering behavior. A readable/state-change diagnostic records the world-map score, chosen busy count, all `1/3` / `2/3` / `3/3` candidate scores, and whether identity is complete. Unreadable map/window messages are rate-limited. The first timer OCR use logs `OCR initialization started` before PaddleOCR model construction and then logs ready/failure duration. Any complete monitor pass lasting at least two seconds logs `slow scan ...` with map/count context.
+The current supervised build emits `[team-diag]` lines in the persistent, full-height bottom Runtime Log to make long waits explainable without altering behavior. A readable/state-change diagnostic records the world-map score, chosen busy count, all `1/3` / `2/3` / `3/3` candidate scores, and whether identity is complete. Unreadable map/window messages are rate-limited. The first timer OCR use logs `OCR initialization started` before PaddleOCR model construction and then logs ready/failure duration. Any complete monitor pass lasting at least two seconds logs `slow scan ...` with map/count context.
 
 These values are evidence only. A high score, a timer, or a diagnostic line cannot by itself make a team Idle or authorize Dispatch.
 

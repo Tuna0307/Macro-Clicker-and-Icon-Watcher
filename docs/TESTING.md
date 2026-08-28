@@ -14,7 +14,7 @@ python -m tools.validate_scenarios
 
 Blocking CI: pytest, Ruff lint, scenario/template validation.
 
-Bot UI regressions must keep `Logs` out of `BotFrame.TAB_NAMES` and verify the Runtime Log panel is parented to the Bot frame below the notebook. This allows the existing `append_runtime_log()` path and auto-scroll behavior to remain visible across every normal page.
+Bot UI regressions must keep `Logs` out of `BotFrame.TAB_NAMES` and verify the Runtime Log panel is parented to the Bot frame, packed on the bottom side before the expanding notebook. This reserves the requested seven-line height and allows the existing `append_runtime_log()` path and auto-scroll behavior to remain visible across every normal page.
 
 Multi-monitor regressions must preserve negative desktop coordinates for a left-hand display and resolve window-relative regions against the target window rather than Scenario monitor index. Automated checks must prove that the same exact/shortest-title target is activated and revalidated before input, while activation failure remains fail-closed. Live checks should run the 1920x1080 game once on each physical monitor with another app initially in front.
 
