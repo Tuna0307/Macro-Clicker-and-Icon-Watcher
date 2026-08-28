@@ -24,6 +24,7 @@ _GATHER_CARD_CLICK_OFFSET = (40, 21)
 _GATHER_SELECTED_BUSY_STEP = "Gather - Selected Team Busy"
 _GATHER_LEVEL_RESET_CLICKS = 15
 _GATHER_LEVEL_DECREMENT_OFFSET = (-183, -74)
+_GATHER_POST_DISPATCH_DISMISS_OFFSET = (500, -250)
 
 
 def _actions_of_type(scenario: Scenario, action_type: str) -> list:
@@ -164,6 +165,7 @@ def _apply_selected_team_gather(scenario: Scenario, config: GatherConfig, team: 
     resource_found = _step_named(scenario, "Gather - Resource Found")
     no_free = _step_named(scenario, "Gather - No Free March")
     dispatch = _step_named(scenario, "Gather - Dispatch Ready")
+    success = _step_named(scenario, "Gather - Success")
     if len(dispatch.conditions) != 1:
         raise ValueError("Gather dispatch backend expected exactly one Dispatch condition.")
 
@@ -259,6 +261,29 @@ def _apply_selected_team_gather(scenario: Scenario, config: GatherConfig, team: 
     for action in _actions_of_type(scenario, "gather_control"):
         if getattr(action, "gather_command", "") == "record_success":
             action.gather_target_count = 1
+
+    record_success_index = next(
+        index
+        for index, action in enumerate(success.actions)
+        if action.type == "gather_control"
+        and getattr(action, "gather_command", "") == "record_success"
+    )
+    # A confirmed dispatch leaves Last War's bottom team-card strip selected.
+    # While that strip is open the normal deployment sidebar is hidden, so a
+    # trusted world-map anchor plus blank sidebar can look like 0/3 and schedule
+    # an incorrect fourth attempt. One neutral ground click dismisses the strip
+    # before record_success stops this finite worker and hands control back to
+    # the continuous coordinator. Anchor the point to the verified map Search
+    # icon so scaling and signed multi-monitor coordinates remain window-relative.
+    success.actions[record_success_index:record_success_index] = [
+        Action(
+            type="click",
+            on_condition_index=0,
+            offset_x=_GATHER_POST_DISPATCH_DISMISS_OFFSET[0],
+            offset_y=_GATHER_POST_DISPATCH_DISMISS_OFFSET[1],
+        ),
+        Action(type="wait", seconds=0.35),
+    ]
     scenario.name = f"{scenario.name} — Team {team}"
     return scenario
 
