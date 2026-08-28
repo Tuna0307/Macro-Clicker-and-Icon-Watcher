@@ -56,12 +56,15 @@ class _StoredTeamState:
 class TeamStateTracker:
     """Thread-safe team state shared by monitoring, scheduling, and the Dashboard."""
 
+    POST_DISPATCH_STABILIZATION_SECONDS = 5.0
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._states = {team: _StoredTeamState() for team in TEAM_NUMBERS}
         self._sidebar_visible = False
         self._last_sidebar_seen_at: float | None = None
         self._busy_count: int | None = None
+        self._post_dispatch_stabilize_until = 0.0
 
     @property
     def sidebar_visible(self) -> bool:
@@ -122,6 +125,17 @@ class TeamStateTracker:
                 if item is None:
                     item = TeamObservation(team=team, activity=TeamActivity.UNKNOWN)
                 prior = self._states[team]
+                if (
+                    now < self._post_dispatch_stabilize_until
+                    and prior.activity
+                    not in {TeamActivity.IDLE, TeamActivity.UNKNOWN}
+                    and item.activity in {TeamActivity.IDLE, TeamActivity.UNKNOWN}
+                ):
+                    # The world map and its compressed deployment queue render
+                    # independently after Dispatch closes. A briefly blank
+                    # queue must not erase exact dispatch history or another
+                    # team's recent busy state and immediately resend Team 1.
+                    continue
                 remaining = (
                     None
                     if item.remaining_seconds is None
@@ -155,6 +169,10 @@ class TeamStateTracker:
             raise ValueError(f"unsupported team: {team!r}")
         now = time.monotonic() if observed_at is None else float(observed_at)
         with self._lock:
+            self._post_dispatch_stabilize_until = max(
+                self._post_dispatch_stabilize_until,
+                now + self.POST_DISPATCH_STABILIZATION_SECONDS,
+            )
             self._states[team] = _StoredTeamState(
                 activity=TeamActivity.TRAVELLING,
                 remaining_seconds=(
