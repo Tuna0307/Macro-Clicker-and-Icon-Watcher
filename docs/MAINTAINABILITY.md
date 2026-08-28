@@ -2,6 +2,8 @@
 
 Reliability first: do not rewrite proven behavior merely for cleaner abstractions.
 
+Keep the normal Runtime Log as a sibling below the tab notebook, not as another page. Preserve the single `bot_log` sink and `append_runtime_log()` routing so UI layout changes do not fork or lose automation diagnostics.
+
 Normal Bot automation is target-window-relative across multiple monitors. Preserve signed absolute coordinates returned for left/top secondary displays and keep automatic activation plus foreground identity checks tied to the same selected window. Do not introduce a hidden assumption that the target begins at `(0, 0)` or lives on physical Monitor 1.
 
 ## Protected behavior

@@ -56,7 +56,7 @@ Timers are for scheduling the next visual check, never for declaring Idle. Timer
 
 ## Diagnostic observability
 
-The current supervised build wraps the perception loop with `[team-diag]` evidence rather than changing its decisions. It records the trusted-world-map match score, all three busy-count candidate scores and selected count, identity completeness, rate-limited unreadable-view/window state, PaddleOCR initialization start and elapsed ready/failure time, and monitor passes taking at least two seconds. This is specifically intended to diagnose the reported startup-to-first-click delay. Diagnostic values must never be promoted into team-state or dispatch authority.
+The current supervised build wraps the perception loop with `[team-diag]` evidence rather than changing its decisions. It records the trusted-world-map match score, all three busy-count candidate scores and selected count, identity completeness, rate-limited unreadable-view/window state, PaddleOCR initialization start and elapsed ready/failure time, and monitor passes taking at least two seconds. These lines flow to the persistent Runtime Log below every normal tab, so diagnosis does not require leaving Gather or Dashboard. Diagnostic values must never be promoted into team-state or dispatch authority.
 
 ## Fixed dispatch geometry
 

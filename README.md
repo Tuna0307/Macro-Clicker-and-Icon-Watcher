@@ -1,6 +1,6 @@
 # PC Automation Bot
 
-A Windows visual-automation and passive-monitoring utility. Normal users configure Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings; low-level Scenario editing remains under Advanced.
+A Windows visual-automation and passive-monitoring utility. Normal users configure Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings; low-level Scenario editing remains under Advanced. A shared Runtime Log stays visible at the bottom on every normal tab.
 
 Run with:
 
@@ -70,7 +70,7 @@ After a confirmed dispatch, the tracker briefly preserves existing non-idle stat
 
 ### Delay diagnostics
 
-During the current supervised startup-delay investigation, the Logs tab emits `[team-diag]` evidence without changing automation behavior. It reports the world-map match score, separate `1/3` / `2/3` / `3/3` busy-count scores, whether team identity is complete, rate-limited unreadable-view messages, PaddleOCR initialization start/ready/failure duration, and any team-monitor scan that takes at least two seconds. These lines are intended to show exactly where a pause occurs; they are not dispatch authority.
+During the current supervised startup-delay investigation, the bottom Runtime Log emits `[team-diag]` evidence without changing automation behavior. It reports the world-map match score, separate `1/3` / `2/3` / `3/3` busy-count scores, whether team identity is complete, rate-limited unreadable-view messages, PaddleOCR initialization start/ready/failure duration, and any team-monitor scan that takes at least two seconds. These lines are intended to show exactly where a pause occurs; they are not dispatch authority.
 
 ## Fixed dispatch positions remain final authority
 

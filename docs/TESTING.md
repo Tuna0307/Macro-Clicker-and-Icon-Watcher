@@ -14,6 +14,8 @@ python -m tools.validate_scenarios
 
 Blocking CI: pytest, Ruff lint, scenario/template validation.
 
+Bot UI regressions must keep `Logs` out of `BotFrame.TAB_NAMES` and verify the Runtime Log panel is parented to the Bot frame below the notebook. This allows the existing `append_runtime_log()` path and auto-scroll behavior to remain visible across every normal page.
+
 Multi-monitor regressions must preserve negative desktop coordinates for a left-hand display and resolve window-relative regions against the target window rather than Scenario monitor index. Automated checks must prove that the same exact/shortest-title target is activated and revalidated before input, while activation failure remains fail-closed. Live checks should run the 1920x1080 game once on each physical monitor with another app initially in front.
 
 ## Continuous Gather regressions
@@ -51,7 +53,7 @@ The committed real status-label crops came from supervised 1920x1080 game screen
 
 ## Diagnostic logging expectations
 
-`[team-diag]` is observation-only. During startup-delay investigation, a live log should make the monitor stage visible:
+`[team-diag]` is observation-only. During startup-delay investigation, the persistent bottom Runtime Log should make the monitor stage visible:
 
 - unreadable map/window heartbeat is rate-limited rather than silent for minutes;
 - readable diagnostics include world-map score, selected busy count, all three busy-count candidate scores, and identity completeness;

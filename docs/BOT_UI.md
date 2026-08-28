@@ -1,6 +1,6 @@
 # Dedicated Bot UI architecture
 
-The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule, Logs, and Settings. Scenario/Step internals remain under Advanced.
+The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule, and Settings. Scenario/Step internals remain under Advanced. Runtime Log is a seven-line scrollable panel below the notebook rather than a tab, so it remains visible while users configure or inspect any page.
 
 The Settings target-window title is the normal multi-monitor binding. Users may place Last War on either monitor; they should not need to choose an Advanced Scenario monitor index or manually activate the game. When input is due, the runtime brings the exact selected target forward and revalidates its identity and rectangle before acting.
 
@@ -40,7 +40,7 @@ After the UI reports a confirmed dispatch, the Dashboard may retain prior Travel
 
 ### Logs diagnostics
 
-During the current supervised delay investigation, the Logs tab may show `[team-diag]` lines containing the world-map match score, all three busy-count candidate scores, identity completeness, unreadable-view heartbeats, OCR initialization timing, and `slow scan` duration. These are read-only troubleshooting messages. They do not change Dashboard state, choose a team, or authorize a click.
+During the current supervised delay investigation, the persistent Runtime Log may show `[team-diag]` lines containing the world-map match score, all three busy-count candidate scores, identity completeness, unreadable-view heartbeats, OCR initialization timing, and `slow scan` duration. These are read-only troubleshooting messages. They do not change Dashboard state, choose a team, or authorize a click.
 
 ## Dispatch panel
 

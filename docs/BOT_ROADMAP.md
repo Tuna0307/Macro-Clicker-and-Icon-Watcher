@@ -10,6 +10,7 @@
 | Alerts | Core complete | Passive observation. |
 | Positions | Core complete | Finite workflows. |
 | Dashboard | In progress | Detailed Team Idle/Travelling/Gathering/Returning/Rallying/Busy/Unknown + timers now supported. |
+| Persistent Runtime Log | Implemented | Shared seven-line bottom panel remains visible on every normal tab. |
 | Scheduling | Basic complete | Live proof pending. |
 | Testing | Ongoing | CI plus supervised game fixtures required. |
 
@@ -31,6 +32,8 @@ Multi-monitor target-window operation is supported. A 2026-08-28 supervised run 
 12. Verify an input due while another app is active automatically foregrounds the exact Last War target on either monitor, while activation failure remains fail-closed.
 13. Verify resource-taken retry, F12/unconfirmed pause, and no-free-march no-replacement.
 14. Design safe Rally/Gather cooperative handoff only if simultaneous continuous operation is required.
+
+Normal Bot diagnostics no longer require switching to a Logs tab. Live verification should confirm the bottom Runtime Log remains readable on each page without obscuring its primary controls at the standard application size.
 
 ## Known safe limitations
 
