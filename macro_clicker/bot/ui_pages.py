@@ -319,7 +319,13 @@ class BotPagesMixin:
 
     def _build_runtime_log(self):
         panel = ttk.LabelFrame(self, text="Runtime Log", padding=(10, 8))
-        panel.pack(fill="x", padx=12, pady=(0, 12))
+        panel.pack(
+            side="bottom",
+            fill="x",
+            padx=12,
+            pady=(0, 12),
+            before=self.tabs,
+        )
         panel.columnconfigure(0, weight=1)
         self.runtime_log_panel = panel
         self.bot_log = tk.Text(panel, state="disabled", height=7, wrap="none")
