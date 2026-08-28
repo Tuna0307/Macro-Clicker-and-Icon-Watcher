@@ -226,6 +226,33 @@ def is_window_foreground(
     )
 
 
+def activate_window(
+    title_contains: str,
+    window_provider: Optional[Callable] = None,
+) -> bool:
+    """Bring the exact selected target window to the foreground."""
+
+    title_contains = title_contains.strip().casefold()
+    if not title_contains:
+        return False
+    if window_provider is None:
+        try:
+            import pygetwindow as gw
+        except ImportError as exc:
+            raise RuntimeError(
+                "pygetwindow is required for target-window mode. "
+                "Install requirements.txt again."
+            ) from exc
+        window_provider = gw.getAllWindows
+
+    selected = _select_matching_window(title_contains, window_provider)
+    if selected is None:
+        return False
+    selected_window = selected[0]
+    selected_window.activate()
+    return True
+
+
 def visible_window_titles(window_provider: Optional[Callable] = None):
     if window_provider is None:
         try:

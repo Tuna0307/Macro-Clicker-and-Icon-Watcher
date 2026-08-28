@@ -56,6 +56,7 @@ from .rally_matching import (
 )
 from .resource_gathering import GatherController, replacement_click_offset
 from .window_locator import (
+    activate_window,
     find_window_rect,
     is_window_foreground,
     resolve_saved_capture_region,
@@ -127,6 +128,7 @@ class MacroEngine(RallyMatchingMixin):
         self._monitor_bounds_validation_failed = False
         self._window_rect_provider = find_window_rect
         self._foreground_window_provider = is_window_foreground
+        self._window_activation_provider = activate_window
         self._window_rect_lookup_cache: Optional[dict] = None
         self.sct = mss.MSS()
         self._sct_closed = False
@@ -1876,27 +1878,9 @@ class MacroEngine(RallyMatchingMixin):
 
         elif action.type == "key":
             title = self.scenario.target_window_title.strip()
-            foreground_provider = getattr(
-                self,
-                "_foreground_window_provider",
-                is_window_foreground,
-            )
-            if title:
-                try:
-                    target_is_foreground = bool(foreground_provider(title))
-                except Exception as exc:
-                    self.log(
-                        "  [safety] key skipped because foreground-window "
-                        f"validation failed ({type(exc).__name__}: {exc})"
-                    )
-                    target_is_foreground = False
-                if not target_is_foreground:
-                    self.log(
-                        f"  [safety] key '{action.key}' skipped because the "
-                        "target window is not in the foreground"
-                    )
-                    self._retry_current_step = True
-                    return False
+            if title and not self._target_is_foreground_for_input(title):
+                self._retry_current_step = True
+                return False
             if action.hold > 0:
                 try:
                     if self._stop_requested():
@@ -2360,7 +2344,7 @@ class MacroEngine(RallyMatchingMixin):
             if not getattr(self, "_monitor_bounds_validation_failed", False):
                 self.log(f"  [skip] click point ({x}, {y}) is outside every monitor")
             return False
-        if target_title and not self._target_is_foreground_for_click(target_title):
+        if target_title and not self._target_is_foreground_for_input(target_title):
             return False
         if target_title:
             final_rect = self._get_fresh_target_window_rect()
@@ -2377,7 +2361,7 @@ class MacroEngine(RallyMatchingMixin):
                 return False
             # Focus can change while the pointer is moving. Validate again at
             # the final input boundary instead of trusting the earlier check.
-            if target_title and not self._target_is_foreground_for_click(target_title):
+            if target_title and not self._target_is_foreground_for_input(target_title):
                 return False
             if target_title:
                 final_rect = self._get_fresh_target_window_rect()
@@ -2394,7 +2378,7 @@ class MacroEngine(RallyMatchingMixin):
             pyautogui.click(x=x, y=y, button=button)
         return True
 
-    def _target_is_foreground_for_click(self, target_title):
+    def _target_is_foreground_for_input(self, target_title):
         foreground_provider = getattr(
             self,
             "_foreground_window_provider",
@@ -2406,18 +2390,46 @@ class MacroEngine(RallyMatchingMixin):
             self._foreground_click_blocked = True
             self._log_foreground_click_warning(
                 ("validation", type(exc).__name__, str(exc)),
-                "  [safety] click skipped because foreground-window "
+                "  [safety] input skipped because foreground-window "
                 f"validation failed ({type(exc).__name__}: {exc})",
             )
             return False
         if not target_is_foreground:
-            self._foreground_click_blocked = True
-            self._log_foreground_click_warning(
-                ("not-foreground", target_title.casefold()),
-                "  [safety] click skipped because the target window is not "
-                "in the foreground",
+            activation_provider = getattr(
+                self,
+                "_window_activation_provider",
+                activate_window,
             )
-            return False
+            try:
+                activated = bool(activation_provider(target_title))
+            except Exception as exc:
+                self._foreground_click_blocked = True
+                self._log_foreground_click_warning(
+                    ("activation", type(exc).__name__, str(exc)),
+                    "  [safety] input skipped because target-window activation "
+                    f"failed ({type(exc).__name__}: {exc})",
+                )
+                return False
+            if activated:
+                try:
+                    target_is_foreground = bool(foreground_provider(target_title))
+                except Exception as exc:
+                    self._foreground_click_blocked = True
+                    self._log_foreground_click_warning(
+                        ("post-activation-validation", type(exc).__name__, str(exc)),
+                        "  [safety] input skipped because foreground-window "
+                        "validation after activation failed "
+                        f"({type(exc).__name__}: {exc})",
+                    )
+                    return False
+            if not target_is_foreground:
+                self._foreground_click_blocked = True
+                self._log_foreground_click_warning(
+                    ("not-foreground", target_title.casefold()),
+                    "  [safety] input skipped because the target window is not "
+                    "in the foreground and could not be activated",
+                )
+                return False
         self._last_foreground_click_warning = None
         return True
 
