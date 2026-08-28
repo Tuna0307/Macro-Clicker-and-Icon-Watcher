@@ -317,12 +317,14 @@ class BotPagesMixin:
             )
         self._button_row(card, 4, ("Save", self._save_from_ui))
 
-    def _build_logs(self):
-        page = self.pages["Logs"]
-        page.rowconfigure(0, weight=1)
-        self.bot_log = tk.Text(page, state="disabled", height=20, wrap="none")
-        self.bot_log.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(page, orient="vertical", command=self.bot_log.yview)
+    def _build_runtime_log(self):
+        panel = ttk.LabelFrame(self, text="Runtime Log", padding=(10, 8))
+        panel.pack(fill="x", padx=12, pady=(0, 12))
+        panel.columnconfigure(0, weight=1)
+        self.runtime_log_panel = panel
+        self.bot_log = tk.Text(panel, state="disabled", height=7, wrap="none")
+        self.bot_log.grid(row=0, column=0, sticky="ew")
+        scroll = ttk.Scrollbar(panel, orient="vertical", command=self.bot_log.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.bot_log.configure(yscrollcommand=scroll.set)
 

@@ -24,7 +24,6 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
         "Positions",
         "Alerts",
         "Schedule",
-        "Logs",
         "Settings",
     )
 
@@ -102,8 +101,8 @@ class BotFrame(BotPagesMixin, BotRuntimeMixin, ttk.Frame):
         self._build_positions()
         self._build_alerts()
         self._build_schedule()
-        self._build_logs()
         self._build_settings()
+        self._build_runtime_log()
 
     def _card(self, page_name, title, row=0):
         card = ttk.LabelFrame(self.pages[page_name], text=title, padding=(20, 16))
