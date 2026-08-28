@@ -206,6 +206,22 @@ def test_each_selected_team_gather_idle_template_decodes_and_validates():
         assert idle_image.size > 0, idle_path
 
 
+def test_team3_gather_idle_template_passes_supervised_live_region():
+    live_region = cv2.imread(
+        project_path("tests/fixtures/gather_team3_idle_region_20260828.png"),
+        cv2.IMREAD_COLOR,
+    )
+    template = cv2.imread(project_path("templates/Team3Idle.png"), cv2.IMREAD_COLOR)
+
+    assert live_region is not None
+    assert template is not None
+    score = cv2.minMaxLoc(
+        cv2.matchTemplate(live_region, template, cv2.TM_CCOEFF_NORMED)
+    )[1]
+
+    assert score >= 0.85
+
+
 def _position_scenario():
     retry = Step(
         name="Retry - Apply Unavailable",

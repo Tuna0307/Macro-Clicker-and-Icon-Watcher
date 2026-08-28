@@ -187,7 +187,7 @@ class RallyTeamSelectionTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(clicked, [(1025, 976, "left")])
-        self.assertIn("Team 3=1.00", "\n".join(logs))
+        self.assertIn("select idle Team 3", "\n".join(logs))
 
     def test_team_selector_resizes_idle_template_on_each_anchor_axis(self):
         rng = np.random.default_rng(79)
