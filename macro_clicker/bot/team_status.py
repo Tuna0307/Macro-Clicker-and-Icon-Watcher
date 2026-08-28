@@ -771,6 +771,7 @@ class TeamStatusMonitor:
                             capture,
                             region_for_capture((left, top, width, height)),
                         )
+                        captured_at = time.monotonic()
                         visible, observations = self.detector.detect(
                             frame,
                             known_busy_teams=self._known_busy(),
@@ -783,6 +784,7 @@ class TeamStatusMonitor:
                                 if visible
                                 else None
                             ),
+                            observed_at=captured_at,
                         )
                         if changed and visible:
                             self.log(f"[team] {self._summary(observations)}")

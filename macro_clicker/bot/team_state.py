@@ -65,6 +65,7 @@ class TeamStateTracker:
         self._last_sidebar_seen_at: float | None = None
         self._busy_count: int | None = None
         self._post_dispatch_stabilize_until = 0.0
+        self._latest_update_at: float | None = None
 
     @property
     def sidebar_visible(self) -> bool:
@@ -101,6 +102,12 @@ class TeamStateTracker:
 
         now = time.monotonic() if observed_at is None else float(observed_at)
         with self._lock:
+            if self._latest_update_at is not None and now < self._latest_update_at:
+                # OCR can make a monitor pass finish several seconds after its
+                # pixels were captured. Never let that older frame overwrite a
+                # newer exact dispatch or a newer completed visual observation.
+                return False
+            self._latest_update_at = now
             visible = bool(sidebar_visible)
             normalized_count = None
             if visible and busy_count is not None:
@@ -169,6 +176,7 @@ class TeamStateTracker:
             raise ValueError(f"unsupported team: {team!r}")
         now = time.monotonic() if observed_at is None else float(observed_at)
         with self._lock:
+            self._latest_update_at = max(self._latest_update_at or now, now)
             self._post_dispatch_stabilize_until = max(
                 self._post_dispatch_stabilize_until,
                 now + self.POST_DISPATCH_STABILIZATION_SECONDS,
