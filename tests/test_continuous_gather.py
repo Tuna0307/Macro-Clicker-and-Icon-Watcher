@@ -117,6 +117,54 @@ def test_successful_attempt_immediately_marks_exact_team_non_idle():
     assert service.next_idle_team() is None
 
 
+def test_transient_blank_queue_after_dispatch_keeps_prior_busy_teams_and_chooses_team3():
+    now = time.monotonic()
+    tracker = TeamStateTracker()
+    tracker.update(
+        (
+            TeamObservation(1, TeamActivity.TRAVELLING, remaining_seconds=3),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.IDLE),
+        ),
+        sidebar_visible=True,
+        busy_count=1,
+        observed_at=now,
+    )
+    tracker.mark_dispatched(2, observed_at=now + 0.1)
+
+    tracker.update(
+        (
+            TeamObservation(1, TeamActivity.IDLE),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.IDLE),
+        ),
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=now + 0.2,
+    )
+
+    assert tracker.snapshot(1, now=now + 0.2).activity == TeamActivity.TRAVELLING
+    assert tracker.snapshot(2, now=now + 0.2).activity == TeamActivity.TRAVELLING
+    assert tracker.snapshot(3, now=now + 0.2).activity == TeamActivity.IDLE
+    service = ContinuousGatherService(lambda: _config(), tracker, lambda _team: True)
+    service.start()
+    assert service.next_idle_team() == 3
+
+    tracker.update(
+        (
+            TeamObservation(1, TeamActivity.IDLE),
+            TeamObservation(2, TeamActivity.IDLE),
+            TeamObservation(3, TeamActivity.IDLE),
+        ),
+        sidebar_visible=True,
+        busy_count=0,
+        observed_at=(
+            now + TeamStateTracker.POST_DISPATCH_STABILIZATION_SECONDS + 0.2
+        ),
+    )
+    assert tracker.available_teams(now=now + 6.0) == (1, 2, 3)
+
+
 def test_unconfirmed_attempt_pauses_fail_closed_instead_of_retrying():
     tracker = TeamStateTracker()
     tracker.update(
