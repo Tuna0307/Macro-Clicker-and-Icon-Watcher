@@ -203,6 +203,15 @@ def _apply_selected_team_gather(scenario: Scenario, config: GatherConfig, team: 
         Action(type="stop"),
     ]
 
+    # The base scenario checks the broad no-free banner before the Dispatch
+    # button. During the resource-to-panel transition that banner template can
+    # briefly resemble another brown notification and stop a valid attempt.
+    # Prefer the stronger exact-team Dispatch AND idle-card proof whenever both
+    # steps are enabled in the same cycle. A genuinely full queue still has no
+    # Dispatch+idle match and therefore falls through to the fail-closed step.
+    scenario.steps.remove(dispatch)
+    scenario.steps.insert(scenario.steps.index(no_free), dispatch)
+
     # A stale world-map observation can say a team was idle just before it
     # becomes busy. Add a runtime-only guard that recognizes Dispatch + absence
     # of this exact team's idle icon, returns to the world map, and stops the
