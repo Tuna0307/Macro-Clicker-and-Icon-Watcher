@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from macro_clicker.app import resolve_condition_preview_box
 from macro_clicker.engine import _WINDOW_UNAVAILABLE, MacroEngine
@@ -6,6 +7,7 @@ from macro_clicker.models import ImageCondition, Scenario
 from macro_clicker.window_locator import (
     absolute_region_from_window,
     absolute_region_from_window_ratio,
+    activate_window,
     find_window_rect,
     is_window_foreground,
     proportional_region_from_window,
@@ -15,6 +17,45 @@ from macro_clicker.window_locator import (
 
 
 class WindowRegionTests(unittest.TestCase):
+    def test_activate_window_uses_the_same_exact_shortest_title_selection(self):
+        target = type(
+            "Window",
+            (),
+            {
+                "title": "Last War-Survival Game",
+                "left": -1920,
+                "top": 0,
+                "width": 1920,
+                "height": 1080,
+                "isVisible": True,
+                "isMinimized": False,
+                "activate": Mock(),
+            },
+        )()
+        unrelated = type(
+            "Window",
+            (),
+            {
+                "title": "Guide — Last War-Survival Game",
+                "left": 0,
+                "top": 0,
+                "width": 800,
+                "height": 600,
+                "isVisible": True,
+                "isMinimized": False,
+                "activate": Mock(),
+            },
+        )()
+
+        self.assertTrue(
+            activate_window(
+                "Last War-Survival Game",
+                window_provider=lambda: [unrelated, target],
+            )
+        )
+        target.activate.assert_called_once_with()
+        unrelated.activate.assert_not_called()
+
     def test_foreground_window_uses_the_same_case_insensitive_title_rule(self):
         active = type(
             "Window",

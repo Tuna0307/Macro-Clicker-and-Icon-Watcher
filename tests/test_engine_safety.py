@@ -178,7 +178,7 @@ class EngineSafetyTests(unittest.TestCase):
         self.assertFalse(result)
         click.assert_not_called()
 
-    def test_click_point_is_skipped_when_target_window_is_not_foreground(self):
+    def test_click_point_is_skipped_when_target_window_cannot_be_activated(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(
             name="target safety",
@@ -187,6 +187,7 @@ class EngineSafetyTests(unittest.TestCase):
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
         engine._point_is_on_a_monitor = lambda _x, _y: True
         engine._foreground_window_provider = lambda _title: False
+        engine._window_activation_provider = lambda _title: False
         engine.click_move_duration = 0.0
         logs = []
         engine.log = logs.append
@@ -198,7 +199,7 @@ class EngineSafetyTests(unittest.TestCase):
         click.assert_not_called()
         self.assertTrue(any("not in the foreground" in message for message in logs))
 
-    def test_foreground_blocked_click_uses_normal_poll_then_fast_poll_on_success(self):
+    def test_background_target_is_activated_and_clicked_in_the_same_cycle(self):
         engine = self._bare_engine()
         step = Step(
             name="foreground retry",
@@ -221,14 +222,14 @@ class EngineSafetyTests(unittest.TestCase):
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
         engine._point_is_on_a_monitor = lambda _x, _y: True
         engine._foreground_window_provider = Mock(side_effect=[False, True])
+        engine._window_activation_provider = Mock(return_value=True)
         engine.click_move_duration = 0.0
         engine._cleanup_runtime = Mock()
         delays = []
 
         def record_delay(seconds):
             delays.append(seconds)
-            if len(delays) == 2:
-                engine._stop_event.set()
+            engine._stop_event.set()
             return False
 
         engine._sleep_until_stop = record_delay
@@ -236,8 +237,10 @@ class EngineSafetyTests(unittest.TestCase):
         with patch.object(engine_module.pyautogui, "click") as click:
             engine._run_loop()
 
-        self.assertEqual(delays, [0.25, 0.03])
+        self.assertEqual(delays, [0.03])
         click.assert_called_once_with(x=600, y=500, button="left")
+        engine._window_activation_provider.assert_called_once_with("Game")
+        self.assertEqual(engine._foreground_window_provider.call_count, 2)
         self.assertNotEqual(engine._last_fired[step.name], 0.0)
         engine._cleanup_runtime.assert_called_once_with()
 
@@ -250,6 +253,7 @@ class EngineSafetyTests(unittest.TestCase):
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
         engine._point_is_on_a_monitor = lambda _x, _y: True
         engine._foreground_window_provider = lambda _title: False
+        engine._window_activation_provider = lambda _title: False
         engine.foreground_warning_interval = 5.0
         engine.click_move_duration = 0.0
         logs = []
@@ -296,7 +300,7 @@ class EngineSafetyTests(unittest.TestCase):
         click.assert_not_called()
         self.assertTrue(any("validation failed" in message for message in logs))
 
-    def test_click_point_rechecks_foreground_after_mouse_move(self):
+    def test_click_point_reactivates_target_if_focus_changes_during_mouse_move(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(
             name="target safety",
@@ -304,7 +308,8 @@ class EngineSafetyTests(unittest.TestCase):
         )
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
         engine._point_is_on_a_monitor = lambda _x, _y: True
-        engine._foreground_window_provider = Mock(side_effect=[True, False])
+        engine._foreground_window_provider = Mock(side_effect=[True, False, True])
+        engine._window_activation_provider = Mock(return_value=True)
         engine.click_move_duration = 0.2
 
         with (
@@ -313,10 +318,11 @@ class EngineSafetyTests(unittest.TestCase):
         ):
             result = engine._click_point(600, 500, "left")
 
-        self.assertFalse(result)
+        self.assertTrue(result)
         move.assert_called_once_with(600, 500, duration=0.2)
-        click.assert_not_called()
-        self.assertEqual(engine._foreground_window_provider.call_count, 2)
+        click.assert_called_once_with(button="left")
+        engine._window_activation_provider.assert_called_once_with("Game")
+        self.assertEqual(engine._foreground_window_provider.call_count, 3)
 
     def test_targetless_click_preserves_monitor_only_behavior(self):
         engine = self._bare_engine()
@@ -334,23 +340,25 @@ class EngineSafetyTests(unittest.TestCase):
         click.assert_called_once_with(x=600, y=500, button="left")
         engine._foreground_window_provider.assert_not_called()
 
-    def test_key_action_is_skipped_when_target_window_is_not_foreground(self):
+    def test_key_action_activates_background_target_before_input(self):
         engine = self._bare_engine()
         engine.scenario = Scenario(
             name="target safety",
             target_window_title="Game",
         )
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
-        engine._foreground_window_provider = lambda _title: False
+        engine._foreground_window_provider = Mock(side_effect=[False, True])
+        engine._window_activation_provider = Mock(return_value=True)
         engine._retry_current_step = False
         step = Step(name="Key", actions=[Action(type="key", key="escape")])
 
         with patch.object(engine_module.keyboard, "send") as send:
             result = engine._run_action(step, step.actions[0], {}, {})
 
-        self.assertFalse(result)
-        self.assertTrue(engine._retry_current_step)
-        send.assert_not_called()
+        self.assertTrue(result)
+        self.assertFalse(engine._retry_current_step)
+        send.assert_called_once_with("escape")
+        engine._window_activation_provider.assert_called_once_with("Game")
 
     def test_click_point_fails_closed_when_monitor_bounds_are_unavailable(self):
         engine = self._bare_engine()
