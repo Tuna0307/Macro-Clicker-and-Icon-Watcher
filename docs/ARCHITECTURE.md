@@ -16,6 +16,8 @@ Bot UI
 
 `scenarios/Gather Gold.json` must normalize the three-tab search popup before choosing Gold. The popup remembers its last selected tab, so the Prepare step first clicks the fixed middle `採集` / Gather tab using the Search-button anchor `(0, -480)`, then clicks Gold at `(+196, -348)`, then applies level/search. This behavior belongs to the proven scenario layer, not team-state perception.
 
+Last War also remembers the previous level. The normal Bot adapter replaces the raw level-up sequence with a deterministic clamp-to-minimum sequence followed by `start_level - 1` increments. The existing Search-unavailable step then descends one level per retry. Thus `start_level` is the first/highest attempted level, not an exact-level-only constraint.
+
 ## Continuous Gather perception
 
 The trusted map gate is `templates/GatherSearchIcon.jpg`. After that, busy-count templates determine 0/3 through 3/3.

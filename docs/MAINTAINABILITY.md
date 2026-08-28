@@ -8,6 +8,8 @@ Protect mature Rally, target-window/foreground safety, kill switch, proven Gathe
 
 The Gather search popup remembers its selected tab. Preserve the explicit middle `採集` / Gather click before Gold; do not simplify the Prepare step back to a direct Gold click just because a local test happened to begin on the correct tab.
 
+It also remembers the resource level. Preserve minimum-level clamping followed by `start_level - 1` increments before the first Search. Do not revert to adding the configured value onto whatever level the game remembered. The subsequent decrement loop intentionally searches lower levels until found.
+
 ## Continuous Gather perception boundary
 
 `team_status.py` observes; `team_state.py` stores state/freshness; `continuous_gather.py` decides when to request an attempt; `adapters.py` performs exact-team dispatch-panel verification through the existing scenario.

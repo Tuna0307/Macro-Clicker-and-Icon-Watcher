@@ -56,6 +56,8 @@ Core modules:
 
 The search popup has three tabs and remembers the previously selected tab. Every Gather prepare pass must explicitly click the fixed middle `採集` / Gather tab before clicking Gold. At the 1920x1080 reference geometry, both clicks are anchored to the existing Search button: Gather tab `(0, -480)`, then Gold `(+196, -348)`. Do not remove or reorder this normalization just because a recording happens to start with Gather already selected.
 
+The popup also remembers the previous resource level. Normal Bot Gather must clamp the level to the minimum, then raise it to `start_level` before the first Search. A configured Lv3 means try Lv3 first, then preserve the proven decrement-and-retry behavior for Lv2 and Lv1; it is not an exact-Lv3-only filter.
+
 ### Confirmed game semantics
 
 The left deployment queue contains busy marches only and compresses upward. Rows are **not fixed team slots**. Busy rows remain ordered by team number among the busy subset:

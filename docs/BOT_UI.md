@@ -6,6 +6,8 @@ The normal product exposes Dashboard, Rally, Gather, Positions, Alerts, Schedule
 
 Users configure enable/disable, Gold start level, and the Team 1/2/3 subset allowed to gather. Do not expose legacy replacement order as a normal control.
 
+The Gold value is the first/highest level attempted. For example, Lv3 means try Lv3, then Lv2 and Lv1 if unavailable; it does not mean search only Lv3. The backend must reset the popup's remembered level before applying this value so the control is deterministic.
+
 The backend resource-search popup has three remembered tabs. Normal users should not need to manage this: the Gather scenario always selects the fixed middle `採集` / Gather tab before selecting Gold.
 
 Dashboard team labels may show:

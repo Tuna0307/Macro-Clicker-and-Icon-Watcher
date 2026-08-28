@@ -20,6 +20,8 @@ Protect:
 
 - resource-search Prepare explicitly clicks middle `採集` / Gather before Gold;
 - Gather-tab click is Search-button offset `(0, -480)` and precedes Gold `(+196, -348)`;
+- remembered resource level is clamped down before `start_level - 1` increments, so configured Lv3 first searches Lv3 regardless of prior popup state;
+- unavailable search continues downward one level at a time; configured Lv3 is not an exact-Lv3-only filter;
 - trusted `0/3` -> all Idle candidates;
 - 1/3, 2/3, 3/3 busy-count handling;
 - compressed ordered-subset mapping rather than fixed row slots;
@@ -64,21 +66,22 @@ Test deliberately:
 2. Open resource search with `打野` selected; automation must switch to middle `採集`, then Gold.
 3. Open resource search with `採集` selected; the normalization click must remain harmless, then Gold.
 4. Open resource search with `末日精英` selected; automation must switch to middle `採集`, then Gold.
-5. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
-6. 0/3 all free.
-7. each single busy team where possible.
-8. each two-busy combination.
-9. 3/3 all busy.
-10. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
-11. Gathering (`採集中`).
-12. Returning (`返回`).
-13. Travelling (`去 X/Y`).
-14. Rallying (`集結中`).
-15. long and near-zero timers, recording the first-OCR initialization duration.
-16. timer reaches zero but row remains busy: no dispatch until visual Idle.
-17. change a team's lead hero and verify no stale portrait misidentification.
-18. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
-19. resource taken, no-free-march, F12/unconfirmed safety.
+5. Leave Gold at Lv9/Lv12, configure Lv3, and confirm the first automated search is Lv3 followed by Lv2/Lv1 only when unavailable.
+6. Confirm the four current status assets load; if one is deliberately unavailable, the monitor must continue and show generic Busy rather than FileNotFoundError/unreadable team view.
+7. 0/3 all free.
+8. each single busy team where possible.
+9. each two-busy combination.
+10. 3/3 all busy.
+11. all three busy, then Team 2 becomes free: visible rows must become Team 1 then Team 3.
+12. Gathering (`採集中`).
+13. Returning (`返回`).
+14. Travelling (`去 X/Y`).
+15. Rallying (`集結中`).
+16. long and near-zero timers, recording the first-OCR initialization duration.
+17. timer reaches zero but row remains busy: no dispatch until visual Idle.
+18. change a team's lead hero and verify no stale portrait misidentification.
+19. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
+20. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity
 

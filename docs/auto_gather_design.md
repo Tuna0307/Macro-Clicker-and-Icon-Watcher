@@ -23,6 +23,8 @@ trusted world map
 
 The resource-search popup has three tabs and remembers whichever tab was previously selected. The Gather flow must therefore normalize it every time before selecting Gold. At 1920x1080, the existing Search-button anchor is used for the middle Gather tab `(0, -480)` and then Gold `(+196, -348)`. This ordering is intentional and regression-tested.
 
+The popup also remembers its previous level. Normal Bot adaptation clamps to the minimum with 15 level-down clicks, then raises with `start_level - 1` clicks. The configured value is the first/highest search level: Lv3 tries 3, then the proven unavailable path tries 2 and 1. This normalization occurs on every one-team attempt.
+
 ## Sidebar design learned from live game
 
 The queue contains busy teams only. It compresses upward, but preserves team-number ordering among busy teams. Therefore visual row position alone is never permanent identity.

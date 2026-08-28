@@ -23,11 +23,14 @@ The search popup has three tabs and remembers the last selected one. Therefore e
 open resource search
  -> click middle 採集 / Gather tab
  -> click Gold
- -> apply configured start level
+ -> clamp remembered level to the minimum
+ -> raise to the configured start/maximum level
  -> Search
 ```
 
 At the 1920x1080 reference geometry, both clicks use the existing Search-button anchor: Gather tab `(0, -480)`, then Gold `(+196, -348)`. This must happen even when Gather already appears selected; relying on remembered UI state is not safe.
+
+Level state is remembered too. The normal Bot adapter performs 15 safe level-down clicks to reach the clamped minimum, then `start_level - 1` level-up clicks. A configured Lv3 therefore searches Lv3 first and uses the existing one-level decrement retry for Lv2/Lv1 when unavailable. Exact-Lv3-only search is not the current product contract.
 
 ## Trusted world map and busy count
 

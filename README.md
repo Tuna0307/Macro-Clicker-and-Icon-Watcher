@@ -30,6 +30,8 @@ The normal world map is verified with `GatherSearchIcon.jpg`. The left deploymen
 
 The resource-search popup contains three remembered tabs. Auto Gather explicitly selects the fixed middle `採集` / Gather tab before selecting Gold, so it works even when the popup was previously left on `打野` or `末日精英`.
 
+The popup remembers its last level too. Before the first search, normal Bot Gather clamps that remembered value to the minimum and raises it to the configured starting/maximum level. Setting Lv3 therefore searches Lv3 first, then Lv2 and Lv1 only if higher levels are unavailable; it does not restrict searches to exactly Lv3.
+
 ### Dynamic sidebar rows
 
 Sidebar rows are compressed, not fixed:

@@ -16,7 +16,7 @@
 ## Current next work
 
 1. Reproduce the startup-to-first-Gather flow with the new `[team-diag]` telemetry and determine whether the observed long pause is world-map gating, busy-count matching, PaddleOCR initialization, or another slow scan stage before changing behavior.
-2. Verify the three-tab resource-search popup always normalizes to middle `採集` before Gold, regardless of the previously selected tab.
+2. Verify the resource-search popup always normalizes to middle `採集` before Gold and resets a remembered higher level before applying the configured start/maximum level; test Lv3 from a popup left at Lv9/Lv12, then confirm Lv2/Lv1 fallback.
 3. Confirm repaired Gathering/Rallying status PNGs decode and classify correctly on the user's live installation.
 4. Verify a runtime missing one or more detailed TeamStatus*.png assets degrades affected rows to generic Busy instead of breaking the whole team monitor.
 5. Re-run Auto Gather on normal world map and confirm it passes the map gate.
