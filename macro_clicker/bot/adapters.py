@@ -22,6 +22,8 @@ _GATHER_TEAM_IDLE = {
 _GATHER_REFERENCE_SIZE = [1920, 1080]
 _GATHER_CARD_CLICK_OFFSET = (40, 21)
 _GATHER_SELECTED_BUSY_STEP = "Gather - Selected Team Busy"
+_GATHER_LEVEL_RESET_CLICKS = 15
+_GATHER_LEVEL_DECREMENT_OFFSET = (-183, -74)
 
 
 def _actions_of_type(scenario: Scenario, action_type: str) -> list:
@@ -85,7 +87,7 @@ def _is_short_level_wait(action) -> bool:
 
 
 def _replace_start_level_clicks(actions: Iterable, start_level: int) -> list:
-    """Replace the repeated '+' click/wait pairs used by the proven Gather flow."""
+    """Normalize remembered search level, then select the configured start."""
 
     actions = list(actions)
     increment_indices = [
@@ -101,12 +103,22 @@ def _replace_start_level_clicks(actions: Iterable, start_level: int) -> list:
         end += 1
 
     plus_template = copy.deepcopy(actions[first])
+    minus_template = copy.deepcopy(plus_template)
+    minus_template.offset_x = _GATHER_LEVEL_DECREMENT_OFFSET[0]
+    minus_template.offset_y = _GATHER_LEVEL_DECREMENT_OFFSET[1]
     wait_template = None
     if first + 1 < len(actions) and _is_short_level_wait(actions[first + 1]):
         wait_template = copy.deepcopy(actions[first + 1])
 
     replacement = []
-    for _ in range(int(start_level)):
+    # Last War remembers the previous resource-search level. Clamp it to the
+    # minimum before raising it so a configured Lv3 always starts at Lv3 even
+    # when the popup was previously left at Lv9 or Lv12.
+    for _ in range(_GATHER_LEVEL_RESET_CLICKS):
+        replacement.append(copy.deepcopy(minus_template))
+        if wait_template is not None:
+            replacement.append(copy.deepcopy(wait_template))
+    for _ in range(max(0, int(start_level) - 1)):
         replacement.append(copy.deepcopy(plus_template))
         if wait_template is not None:
             replacement.append(copy.deepcopy(wait_template))
