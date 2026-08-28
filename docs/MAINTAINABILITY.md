@@ -29,6 +29,7 @@ It also remembers the resource level. Preserve minimum-level clamping followed b
 - Current portraits may be learned only after identity is unambiguous and cached only in per-user runtime storage.
 - Ambiguous identity stays Unknown.
 - For five seconds after a confirmed exact dispatch, a transient Idle/Unknown observation must not replace any previously non-idle team. This is a bounded render-stabilization guard, not permission to infer activity or make timers authoritative.
+- Multiple fresh Idle candidates rotate forward after the last successful configured team. Preserve this coordination-layer fairness rule so a quickly returned low-numbered team cannot starve Team 3; never use the rotation cursor to make a stale/busy team eligible.
 
 ### Status/timer rules
 
@@ -51,6 +52,8 @@ Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact
 Keep separate decodable `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` assets. A 2026-08-28 supervised run exposed that the Team 2 path was configured but missing, so Team 1 succeeded and the service paused before Team 2. Tests must validate required files for every selected team, not merely assert the configured path string.
 
 A later 2026-08-28 run confirmed Team 1 and Team 2 dispatches, then captured a map-anchor/blank-queue transition that reset both to Idle and restarted Team 1. Preserve the post-dispatch stabilization regression that keeps prior busy evidence long enough for Team 3 to remain the next candidate.
+
+Final supervised diagnosis also showed Team 1 can genuinely return during the roughly 30-second first PaddleOCR initialization. Lowest-number-first selection then restarts Team 1 after Team 2 even without a false frame. Preserve the fair Team 1 -> Team 2 -> Team 3 rotation regression independently of the stabilization guard.
 
 ## AI-assisted commit policy
 

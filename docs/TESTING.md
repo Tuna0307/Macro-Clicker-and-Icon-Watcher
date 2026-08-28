@@ -43,6 +43,7 @@ Protect:
 - exact fixed dispatch-card blue-idle verification remains required;
 - selected-team scenarios for Teams 1, 2, and 3 all pass required-file validation and their separate `TeamNIdle.png` crops decode successfully with OpenCV;
 - a transitional blank queue immediately after confirmed Team 2 dispatch preserves prior Team 1/2 busy state and leaves Team 3 as the next candidate; a later observation after the five-second stabilization window can report them Idle normally;
+- when all three teams are freshly Idle again between attempts, confirmed dispatch order rotates Team 1 -> Team 2 -> Team 3 instead of letting a quickly returned Team 1 starve Team 3;
 - no-free-march never replaces;
 - unconfirmed attempt pauses;
 - OCR diagnostics emit `initialization started` before model construction and ready/failure timing after it;

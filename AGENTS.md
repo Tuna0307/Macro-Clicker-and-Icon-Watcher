@@ -110,6 +110,8 @@ If the bot starts cold at ambiguous `1/3` or `2/3` and current portraits are not
 
 After an exact dispatch is confirmed, keep previously non-idle team state through a five-second world-map/sidebar stabilization window. Last War can render the trusted map anchor before its compressed deployment queue repopulates; a transient blank queue during that bounded window must not erase exact dispatch history and restart Team 1 ahead of an available Team 3. The hold may delay a newly free team, but it never makes a team Idle.
 
+Idle-team selection is fair round-robin across the configured Team set, beginning after the last successfully dispatched team and skipping teams that are not freshly visual Idle. Do not revert to always choosing the lowest-numbered Idle team: a short Team 1 trip or slow first OCR initialization can otherwise make Team 1 available again before Team 3 is attempted and starve Team 3 indefinitely.
+
 ### Dispatch safety invariants
 
 Preserve:

@@ -28,6 +28,8 @@ Only one active clicking automation owns input. Development/Science are finite, 
 
 Users choose Gold start level and which Team 1/2/3 may gather. Auto Gather watches actual march availability, sends one exact free team, then keeps monitoring until another configured team is visually free.
 
+When more than one configured team is freshly Idle, selection rotates fairly after the last confirmed dispatch. An all-idle cycle therefore prefers Team 1, then Team 2, then Team 3, while skipping any team that is currently busy; a quickly returned Team 1 cannot continually jump ahead of Team 3.
+
 The normal world map is verified with `GatherSearchIcon.jpg`. The left deployment queue shows busy marches only, so a trusted map with no busy count/status means real `0/3` and all teams are Idle candidates.
 
 The resource-search popup contains three remembered tabs. Auto Gather explicitly selects the fixed middle `採集` / Gather tab before selecting Gold, so it works even when the popup was previously left on `打野` or `末日精英`.

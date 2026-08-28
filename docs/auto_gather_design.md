@@ -19,6 +19,8 @@ trusted world map
  -> resume monitoring
 ```
 
+When several configured teams are freshly Idle, coordination rotates forward from the last confirmed dispatch and wraps across the configured set. This is selection fairness only: it skips unavailable teams and does not change what perception considers Idle. It prevents a quickly returned Team 1 from repeatedly winning the scan before Team 3.
+
 Both the observer and selected-team scenario resolve this flow against the Last War window on either monitor. The target rectangle may use negative desktop coordinates on a left-hand secondary display; geometry remains window-relative before capture and click translation. When another app is in front at input time, the exact selected Last War window is activated and then revalidated before the action commits.
 
 ## Search-popup design learned from live game
