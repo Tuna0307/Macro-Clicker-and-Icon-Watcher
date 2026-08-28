@@ -25,7 +25,7 @@
 8. Verify Gathering, Returning, Travelling, Rallying recognition and timer OCR, including the logged first-OCR initialization duration.
 9. Change a lead hero and verify learned/static identity logic does not mislabel the team.
 10. Verify a timer reaching zero only triggers visual refresh, never Idle by itself.
-11. Verify exact intended fixed dispatch card is rechecked/clicked and busy teams are untouched.
+11. Verify exact intended fixed dispatch card is rechecked/clicked and busy teams are untouched. The missing Team 2 idle crop has been restored and automated validation now covers all three cards; supervised Team 1 -> Team 2 -> Team 3 progression remains pending.
 12. Verify resource-taken retry, F12/unconfirmed pause, and no-free-march no-replacement.
 13. Design safe Rally/Gather cooperative handoff only if simultaneous continuous operation is required.
 

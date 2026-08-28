@@ -40,6 +40,8 @@ During the current supervised delay investigation, the Logs tab may show `[team-
 
 Unlike the sidebar, Team 1/2/3 dispatch cards have fixed positions. Exact-team blue-idle verification and fixed-card clicking remain the final safety gate regardless of hero portrait.
 
+All three cards have separate live-captured idle assets. In particular, Team 2 must use `Team2Idle.png`; neighboring Team 1/3 crops score below the required live threshold in Team 2's region. Required-file validation should reject a missing card asset before that attempt starts.
+
 ## Input ownership
 
 Finite Position jobs and continuous workflows must not compete for input. Rally + continuous Gather remain blocked together; Alerts remain passive.

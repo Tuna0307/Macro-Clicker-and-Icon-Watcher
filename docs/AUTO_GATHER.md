@@ -103,6 +103,8 @@ The dispatch panel is different from the sidebar: Team 1/2/3 card positions are 
 
 If the selected team is no longer idle, the attempt exits. No-free-march never replaces another busy team.
 
+`Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` are separate required safety assets. Team 2's live card background differs enough that a Team 1/3 crop cannot safely replace it at the existing `0.85` gate. Automated validation must build all three selected-team scenarios and decode each crop before release.
+
 ## Safety invariants
 
 Preserve search-tab normalization, trusted-map gating, fresh Idle, fail-closed Unknown, generic-Busy fallback for optional status assets, no timer-to-Idle promotion, no busy-team replacement, exact-team fixed-position verification, resource-taken Cancel/retry, kill switch, target-window safety, and diagnostic-only observability.

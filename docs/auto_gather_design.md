@@ -56,6 +56,8 @@ The current supervised build wraps the perception loop with `[team-diag]` eviden
 
 Unlike sidebar rows, dispatch-card Team 1/2/3 positions are permanent. The exact team blue-idle indicator at that fixed location remains the final authority before Dispatch even if map-side state was stale, ambiguous, or only generic Busy.
 
+Each card uses its own supervised crop: `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png`. The Team 2 crop cannot be substituted with a neighboring card's template at the current confidence gate. Release validation therefore builds all three selected-team scenarios and verifies OpenCV can decode every idle asset.
+
 ## Historical MVP
 
 The original finite model searched Gold, sent a target number of marches, and could replace occupied marches in `3 -> 2 -> 1` order. That model is superseded for normal Bot usage. Legacy fields remain compatibility-only.

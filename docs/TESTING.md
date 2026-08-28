@@ -35,6 +35,7 @@ Protect:
 - stale/untrusted/Unknown state cannot authorize Gather;
 - timer expiry never creates Idle;
 - exact fixed dispatch-card blue-idle verification remains required;
+- selected-team scenarios for Teams 1, 2, and 3 all pass required-file validation and their separate `TeamNIdle.png` crops decode successfully with OpenCV;
 - no-free-march never replaces;
 - unconfirmed attempt pauses;
 - OCR diagnostics emit `initialization started` before model construction and ready/failure timing after it;
@@ -76,7 +77,7 @@ Test deliberately:
 15. long and near-zero timers, recording the first-OCR initialization duration.
 16. timer reaches zero but row remains busy: no dispatch until visual Idle.
 17. change a team's lead hero and verify no stale portrait misidentification.
-18. exact fixed dispatch card is selected before Dispatch.
+18. exact fixed dispatch card is selected before Dispatch, including continuous Team 1 -> Team 2 -> Team 3 progression with the separate live Team 2 idle crop.
 19. resource taken, no-free-march, F12/unconfirmed safety.
 
 ## Cold-start ambiguity

@@ -70,6 +70,8 @@ During the current supervised startup-delay investigation, the Logs tab emits `[
 
 On the dispatch panel Team 1, Team 2 and Team 3 have permanent card locations even when hero portraits change. Before Dispatch, the runtime must still verify the chosen team's exact blue idle indicator, click that exact fixed card, then use the proven Dispatch path. A stale/incorrect map-side guess therefore cannot intentionally overwrite another busy team.
 
+Each fixed card has its own live-captured idle template, including `Team2Idle.png`. Scenario validation and regression tests require all three templates to exist and decode with OpenCV so a later-team attempt cannot fail only after an earlier team was sent.
+
 Legacy `march_count` and `replacement_order` remain compatibility-only.
 
 ## Development checks

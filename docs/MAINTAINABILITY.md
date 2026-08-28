@@ -41,6 +41,8 @@ Never use a diagnostic score, heartbeat, elapsed time, or OCR-init event to mark
 
 Dispatch cards have fixed Team 1/2/3 positions even when portraits change. Exact selected-team blue-idle verification/click remains the final gate. Do not weaken this because map-side tracking becomes richer.
 
+Keep separate decodable `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` assets. A 2026-08-28 supervised run exposed that the Team 2 path was configured but missing, so Team 1 succeeded and the service paused before Team 2. Tests must validate required files for every selected team, not merely assert the configured path string.
+
 ## AI-assisted commit policy
 
 Every meaningful commit needs a descriptive subject/body covering what, why, runtime impact, preserved safety/compatibility, tests/checks, and remaining live verification.

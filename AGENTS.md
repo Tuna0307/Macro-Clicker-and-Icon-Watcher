@@ -107,6 +107,7 @@ Preserve:
 - trusted world-map gate before blank queue means `0/3`;
 - fresh visual Idle required;
 - exact selected team must still show its blue idle indicator at its fixed dispatch-panel position;
+- `Team1Idle.png`, `Team2Idle.png`, and `Team3Idle.png` must all exist and decode; Team 2 cannot reuse a neighboring card's crop because the live card backgrounds do not meet the `0.85` gate;
 - dispatch-panel positions are permanently Team 1 / Team 2 / Team 3 even when heroes change;
 - busy teams are never intentionally overwritten;
 - no-free-march closes/stops instead of replacing;
