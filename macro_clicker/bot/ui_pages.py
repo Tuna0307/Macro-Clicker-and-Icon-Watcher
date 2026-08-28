@@ -12,6 +12,13 @@ from .controller import (
     FEATURE_SCIENCE,
 )
 
+GATHER_CONTINUOUS_HELP_TEXT = (
+    "Auto Gather loops until you press Stop: it sends a visually idle selected "
+    "team, then waits while all selected teams are busy. Each 'Scenario "
+    "completed/stopped' log is only one dispatch attempt; busy teams are never "
+    "recalled or replaced."
+)
+
 
 class BotPagesMixin:
     def _build_dashboard(self):
@@ -165,11 +172,7 @@ class BotPagesMixin:
 
         ttk.Label(
             card,
-            text=(
-                "Auto Gather uses whichever selected team is visually idle. "
-                "If every selected team is travelling, gathering, returning, or otherwise busy, "
-                "the Bot waits. It never recalls or replaces a busy team."
-            ),
+            text=GATHER_CONTINUOUS_HELP_TEXT,
             style="Muted.TLabel",
             wraplength=760,
             justify="left",
