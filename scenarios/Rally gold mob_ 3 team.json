@@ -32,38 +32,6 @@
             1080
           ],
           "negate": false
-        },
-        {
-          "condition_type": "template",
-          "template_path": "templates/AddSquad.png",
-          "confidence": 0.95,
-          "comparison_template_path": "",
-          "comparison_margin": 0.03,
-          "comparison_template_reference_size": null,
-          "match_mode": "static_picture",
-          "use_grayscale": false,
-          "template_reference_size": [
-            1920,
-            1080
-          ],
-          "region": [
-            650,
-            880,
-            630,
-            200
-          ],
-          "region_mode": "window",
-          "region_ratio": [
-            0.3385416666666667,
-            0.8148148148148148,
-            0.328125,
-            0.18518518518518517
-          ],
-          "region_window_size": [
-            1920,
-            1080
-          ],
-          "negate": false
         }
       ],
       "actions": [
@@ -338,12 +306,12 @@
           "hold": 0.0,
           "seconds": 0.5,
           "step_name": "Enter Rally after team probe",
-          "set_enabled": false
+          "set_enabled": true
         }
       ],
       "condition_operator": "AND",
-      "enabled": false,
-      "cooldown": 0.1,
+      "enabled": true,
+      "cooldown": 0.3,
       "repeatable": true
     },
     {
@@ -572,7 +540,7 @@
         }
       ],
       "condition_operator": "AND",
-      "enabled": true,
+      "enabled": false,
       "cooldown": 0.3,
       "repeatable": true
     },
@@ -676,7 +644,7 @@
           "row_mode": "first",
           "target_choice": "rightmost",
           "pre_click_delay": 0.0,
-          "min_level": null,
+          "min_level": 0,
           "max_level": null,
           "level_roi": [
             -65,
@@ -701,18 +669,10 @@
           "team3_idle_region": null,
           "team3_click_offset": null,
           "team3_max_level": null,
-          "team_status_region": [
-            0,
-            265,
-            220,
-            215
-          ],
-          "team_status_reference_size": [
-            1920,
-            1080
-          ],
-          "team1_busy_template_path": "templates/Team1Busy.png",
-          "team3_busy_template_path": "templates/Team3Busy.png",
+          "team_status_region": null,
+          "team_status_reference_size": null,
+          "team1_busy_template_path": "",
+          "team3_busy_template_path": "",
           "team_busy_confidence": 0.85,
           "x": null,
           "y": null,
@@ -1407,17 +1367,6 @@
           "team1_idle_template_path": "",
           "team3_idle_template_path": "",
           "team_idle_confidence": 0.85,
-          "team1_idle_region": null,
-          "team1_click_offset": null,
-          "team1_max_level": 65,
-          "team3_idle_region": null,
-          "team3_click_offset": null,
-          "team3_max_level": 45,
-          "team_status_region": null,
-          "team_status_reference_size": null,
-          "team1_busy_template_path": "",
-          "team3_busy_template_path": "",
-          "team_busy_confidence": 0.85,
           "x": null,
           "y": null,
           "offset_x": 0,

@@ -2,7 +2,6 @@ import copy
 import hashlib
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from macro_clicker.engine import MacroEngine
 from macro_clicker.models import Action, load_scenario, project_path, validate_scenario
@@ -33,6 +32,9 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
             step
             for step in self.scenario.steps
             if step.name == "Enter Rally after team probe"
+        )
+        self.joining_step = next(
+            step for step in self.scenario.steps if step.name == "Joining"
         )
 
     @staticmethod
@@ -91,7 +93,7 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
         result = engine._run_select_rally_team_action(selector, points, matches)
         return engine, clicks, result
 
-    def test_scenario_is_valid_background_safe_and_dry_run_by_default(self):
+    def test_scenario_enters_rally_first_and_stays_dry_run_by_default(self):
         validate_scenario(self.scenario, require_files=True)
         self.assertFalse(self.scenario.require_target_foreground)
         self.assertEqual(self.selector.team_priority, [3, 2, 1])
@@ -104,17 +106,38 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
             (65, 45, 45),
         )
         self.assertTrue(self.selector.rally_team_dry_run)
+
+        self.assertTrue(self.entry_step.enabled)
+        self.assertEqual(len(self.entry_step.conditions), 1)
+        self.assertEqual(
+            self.entry_step.conditions[0].template_path,
+            "templates/RallyIcon.png",
+        )
+        self.assertFalse(
+            any(
+                condition.template_path == "templates/AddSquad.png"
+                for condition in self.entry_step.conditions
+            )
+        )
+
         probe_step = next(
             step
             for step in self.scenario.steps
             if step.name == "Probe fixed three-team status"
         )
-        add_squad = probe_step.conditions[1]
-        self.assertEqual(add_squad.template_path, "templates/AddSquad.png")
-        self.assertEqual(add_squad.region, [650, 880, 630, 200])
-        self.assertEqual(add_squad.region_mode, "window")
-        self.assertEqual(add_squad.region_window_size, [1920, 1080])
-        self.assertLess(add_squad.region[2] * add_squad.region[3], 1920 * 1080)
+        self.assertFalse(probe_step.enabled)
+
+        row_action = next(
+            action
+            for action in self.joining_step.actions
+            if action.type == "click_matching_row"
+        )
+        self.assertEqual(row_action.min_level, 0)
+        self.assertIsNone(row_action.max_level)
+        self.assertIsNone(row_action.team_status_region)
+        self.assertFalse(row_action.team1_busy_template_path)
+        self.assertFalse(row_action.team3_busy_template_path)
+
         for step_name in ("Back if wrong mob", "Back if no slot"):
             step = next(step for step in self.scenario.steps if step.name == step_name)
             self.assertTrue(
@@ -173,29 +196,13 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
             )
         )
 
-    def test_probe_saves_and_entry_consumes_one_short_lived_snapshot(self):
-        states = {1: RALLY_TEAM_IDLE, 2: RALLY_TEAM_BUSY, 3: RALLY_TEAM_IDLE}
-        engine, clicks = self._engine(self._result(states))
-        with patch("macro_clicker.rally_matching.time.monotonic", return_value=100.0):
-            self.assertTrue(
-                engine._run_capture_rally_team_status_action(self.probe_action)
-            )
-        self.assertEqual(engine._three_team_rally_snapshot["level_cap"], 65)
-        self.assertEqual(clicks, [(965, 152, "left")])
+    def test_entry_no_longer_requires_preentry_fixed_team_snapshot(self):
+        engine, _clicks = self._engine(self._result({}))
+        self.assertIsNone(engine._three_team_rally_snapshot)
+        self.assertTrue(engine._prepare_rally_team_availability_for_entry(self.entry_step))
+        self.assertIsNone(engine._pending_rally_team_availability)
 
-        with patch("macro_clicker.rally_matching.time.monotonic", return_value=100.8):
-            self.assertTrue(
-                engine._prepare_rally_team_availability_for_entry(self.entry_step)
-            )
-        self.assertEqual(engine._pending_rally_team_availability["level_cap"], 65)
-        self.assertTrue(engine._three_team_rally_snapshot["consumed"])
-
-        with patch("macro_clicker.rally_matching.time.monotonic", return_value=100.9):
-            self.assertFalse(
-                engine._prepare_rally_team_availability_for_entry(self.entry_step)
-            )
-
-    def test_all_busy_or_unknown_probe_never_allows_entry(self):
+    def test_isolated_probe_still_fails_closed_for_all_busy_or_unknown(self):
         all_busy = {1: RALLY_TEAM_BUSY, 2: RALLY_TEAM_BUSY, 3: RALLY_TEAM_BUSY}
         engine, _clicks = self._engine(self._result(all_busy))
         engine._run_capture_rally_team_status_action(self.probe_action)
@@ -205,23 +212,6 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
         engine, _clicks = self._engine(self._result(unknown))
         engine._run_capture_rally_team_status_action(self.probe_action)
         self.assertIsNone(engine._three_team_rally_snapshot)
-
-    def test_expired_or_previous_generation_snapshot_cannot_enter(self):
-        states = {1: RALLY_TEAM_IDLE, 2: RALLY_TEAM_IDLE, 3: RALLY_TEAM_IDLE}
-        engine, _clicks = self._engine(self._result(states))
-        with patch("macro_clicker.rally_matching.time.monotonic", return_value=100.0):
-            engine._run_capture_rally_team_status_action(self.probe_action)
-        with patch("macro_clicker.rally_matching.time.monotonic", return_value=103.1):
-            self.assertFalse(
-                engine._prepare_rally_team_availability_for_entry(self.entry_step)
-            )
-
-        engine, _clicks = self._engine(self._result(states))
-        engine._run_capture_rally_team_status_action(self.probe_action)
-        engine._three_team_probe_generation += 1
-        self.assertFalse(
-            engine._prepare_rally_team_availability_for_entry(self.entry_step)
-        )
 
     def test_standard_limits_choose_team3_team2_then_team1(self):
         idle = {1: RALLY_TEAM_IDLE, 2: RALLY_TEAM_IDLE, 3: RALLY_TEAM_IDLE}
