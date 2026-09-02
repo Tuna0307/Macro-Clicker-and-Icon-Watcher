@@ -278,6 +278,105 @@ class RallyMatchingMixin:
         result["capture_origin"] = (int(off_x), int(off_y))
         return result
 
+    def _reset_three_team_rally_state(self, reason=None):
+        self._three_team_rally_snapshot = None
+        self._pending_rally_team_availability = None
+        if reason:
+            self.log(f"  [team3] cleared transient status ({reason})")
+
+    def _dismiss_fixed_rally_team_panel(self, result, button="left"):
+        """Use the existing selector recovery geometry, never the dispatch button."""
+
+        capture_region = result.get("capture_region")
+        anchor_region = result.get("anchor_region")
+        frame_size = result.get("frame_size")
+        if not capture_region or not anchor_region or not frame_size:
+            return False
+        origin_x, origin_y = capture_region[:2]
+        left, top, width, height = anchor_region
+        scale_y = frame_size[1] / RALLY_FIXED_TEAM_REFERENCE_SIZE[1]
+        recovery_x = round(origin_x + left + width / 2)
+        recovery_y = round(origin_y + top + height / 2 - 400 * scale_y)
+        clicked = bool(self._click_point(recovery_x, recovery_y, button))
+        if clicked:
+            self.log(
+                "  [team3] dismissed fixed team panel safely above its "
+                f"validated anchor at ({recovery_x}, {recovery_y})"
+            )
+        return clicked
+
+    def _run_capture_rally_team_status_action(self, action):
+        if action.rally_team_status_mode == "clear":
+            self._reset_three_team_rally_state("scenario recovery")
+            return False
+
+        self._three_team_probe_generation = (
+            getattr(self, "_three_team_probe_generation", 0) + 1
+        )
+        generation = self._three_team_probe_generation
+        self._reset_three_team_rally_state("new probe")
+        result = self._capture_fixed_rally_team_status()
+        captured_at = time.monotonic()
+        states = result.get("states", {})
+        proven = bool(result.get("screen_valid")) and all(
+            states.get(team_number) in {RALLY_TEAM_IDLE, RALLY_TEAM_BUSY}
+            for team_number in (1, 2, 3)
+        )
+
+        level_cap = None
+        limits = {}
+        priority: tuple[int, ...] = ()
+        if proven:
+            limits, _source, _selector = self._resolve_rally_team_level_limits(action)
+            priority = tuple(limits)
+            proven = 2 in priority
+            if proven:
+                level_cap = available_rally_team_level_cap(
+                    states, limits, list(priority)
+                )
+
+        state_text = " ".join(
+            f"T{team_number}={states.get(team_number, RALLY_TEAM_UNKNOWN)}"
+            for team_number in (1, 2, 3)
+        )
+        if proven:
+            limit_text = " ".join(
+                f"T{team_number}max="
+                f"{limits[team_number] if limits[team_number] is not None else 'Unlimited'}"
+                for team_number in priority
+            )
+            self.log(
+                f"  [team3] probe {state_text}; {limit_text}; "
+                f"cap={level_cap if level_cap is not None else 'none'}"
+            )
+        else:
+            self.log(
+                "  [team3] probe rejected: fixed status screen or all three "
+                f"states were not proven ({result.get('error') or 'invalid mode'}); "
+                f"{state_text}"
+            )
+
+        dismissed = self._dismiss_fixed_rally_team_panel(result, action.button)
+        if not proven or level_cap is None or not dismissed:
+            self._reset_three_team_rally_state("probe failed")
+            self._abort_current_step = True
+            self._retry_current_step = False
+            return dismissed
+
+        self._three_team_rally_snapshot = {
+            "states": dict(states),
+            "captured_at": captured_at,
+            "source": "fixed_team_probe",
+            "scenario_name": self.scenario.name,
+            "generation": generation,
+            "consumed": False,
+            "level_cap": level_cap,
+            "level_limits": dict(limits),
+            "priority": tuple(priority),
+            "ttl": float(action.rally_team_snapshot_ttl),
+        }
+        return True
+
     def _prepare_rally_team_availability_for_entry(self, step):
         """Capture squad availability before an entry click hides the queue."""
         enabled_step_names = {
@@ -299,6 +398,55 @@ class RallyMatchingMixin:
             None,
         )
         if row_action is None:
+            return True
+
+        selector = next(
+            (
+                candidate
+                for candidate_step in self.scenario.steps
+                for candidate in candidate_step.actions
+                if candidate.type == "select_rally_team"
+            ),
+            None,
+        )
+        if selector is not None and 2 in effective_rally_team_priority(
+            selector.team_priority
+        ):
+            snapshot = getattr(self, "_three_team_rally_snapshot", None)
+            if not isinstance(snapshot, dict):
+                self.log("  [team3] snapshot missing; reprobe required")
+                return False
+            age = time.monotonic() - float(snapshot.get("captured_at", 0.0))
+            valid = (
+                snapshot.get("scenario_name") == self.scenario.name
+                and snapshot.get("generation")
+                == getattr(self, "_three_team_probe_generation", None)
+                and not snapshot.get("consumed")
+                and age <= float(snapshot.get("ttl", 0.0))
+                and snapshot.get("level_cap") is not None
+            )
+            if not valid:
+                self.log(
+                    f"  [team3] status snapshot stale ({age:.1f}s); reprobe required"
+                )
+                self._reset_three_team_rally_state("stale or consumed snapshot")
+                return False
+            snapshot["consumed"] = True
+            pending = {
+                "states": dict(snapshot["states"]),
+                "captured_at": snapshot["captured_at"],
+                "source": snapshot["source"],
+                "generation": snapshot["generation"],
+                "level_cap": snapshot["level_cap"],
+                "level_limits": dict(snapshot["level_limits"]),
+                "priority": tuple(snapshot["priority"]),
+            }
+            self._pending_rally_team_availability = pending
+            self._last_rally_team_availability = pending
+            self.log(
+                f"  [team3] carried snapshot age={age:.1f}s; "
+                f"pre-entry cap={pending['level_cap']}"
+            )
             return True
 
         self._pending_rally_team_availability = None

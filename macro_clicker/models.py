@@ -40,6 +40,7 @@ ACTION_TYPES = frozenset(
     {
         "click",
         "click_matching_row",
+        "capture_rally_team_status",
         "select_rally_team",
         "gather_control",
         "key",
@@ -485,6 +486,7 @@ class Action:
     team1_click_offset: Optional[List[int]] = None
     team1_max_level: Optional[int] = None
     team2_max_level: Optional[int] = None
+    team2_click_offset: Optional[List[int]] = None
     team3_idle_region: Optional[List[int]] = None
     team3_click_offset: Optional[List[int]] = None
     team3_max_level: Optional[int] = None
@@ -495,6 +497,11 @@ class Action:
     team1_busy_template_path: str = ""
     team3_busy_template_path: str = ""
     team_busy_confidence: float = 0.85
+    rally_team_dry_run: bool = False
+
+    # capture_rally_team_status -- a short-lived fixed-slot pre-entry snapshot
+    rally_team_status_mode: str = "capture"  # "capture" or "clear"
+    rally_team_snapshot_ttl: float = 3.0
     x: Optional[int] = None  # or a fixed point instead
     y: Optional[int] = None
     offset_x: int = 0
@@ -529,8 +536,14 @@ class Action:
             data.pop("gather_command", None)
             data.pop("gather_target_count", None)
             data.pop("gather_replacement_order", None)
+        if self.type != "capture_rally_team_status":
+            data.pop("rally_team_status_mode", None)
+            data.pop("rally_team_snapshot_ttl", None)
+        if self.type != "select_rally_team":
+            data.pop("rally_team_dry_run", None)
         if self.team_priority is None:
             data.pop("team_priority", None)
+            data.pop("team2_click_offset", None)
             if self.team2_max_level is None:
                 # Do not add new keys merely by opening/saving an old action.
                 data.pop("team2_max_level", None)
@@ -628,11 +641,15 @@ class Action:
         a.team1_click_offset = _optional_int_list_field(
             d, "team1_click_offset", "team1_click_offset"
         )
+        a.team2_click_offset = _optional_int_list_field(
+            d, "team2_click_offset", "team2_click_offset"
+        )
         a.team3_click_offset = _optional_int_list_field(
             d, "team3_click_offset", "team3_click_offset"
         )
         for label, value in (
             ("team1_click_offset", a.team1_click_offset),
+            ("team2_click_offset", a.team2_click_offset),
             ("team3_click_offset", a.team3_click_offset),
         ):
             if value is not None and len(value) != 2:
@@ -648,6 +665,23 @@ class Action:
             if value is not None and value < 0:
                 raise ValueError(f"{label} cannot be negative")
         a.team_priority = validate_rally_team_priority(d.get("team_priority"))
+        a.rally_team_dry_run = _bool_value(
+            d.get("rally_team_dry_run"), a.rally_team_dry_run
+        )
+        a.rally_team_status_mode = str(
+            d.get("rally_team_status_mode", a.rally_team_status_mode)
+            or a.rally_team_status_mode
+        )
+        if a.rally_team_status_mode not in {"capture", "clear"}:
+            raise ValueError("rally_team_status_mode must be 'capture' or 'clear'")
+        a.rally_team_snapshot_ttl = _float_value(
+            d.get("rally_team_snapshot_ttl"), a.rally_team_snapshot_ttl
+        )
+        if (
+            not math.isfinite(a.rally_team_snapshot_ttl)
+            or a.rally_team_snapshot_ttl <= 0
+        ):
+            raise ValueError("rally_team_snapshot_ttl must be a positive finite number")
         a.team_status_region = _validate_region(
             _optional_int_list_field(d, "team_status_region", "team_status_region"),
             "team_status_region",
@@ -802,6 +836,10 @@ class Action:
                 limit = "unlimited" if maximum is None else f"max level {maximum}"
                 teams.append(f"Team {team_number} ({limit})")
             return "Select idle " + ", then ".join(teams)
+        if self.type == "capture_rally_team_status":
+            if self.rally_team_status_mode == "clear":
+                return "Clear three-team Rally status snapshot"
+            return f"Capture three-team Rally status ({self.rally_team_snapshot_ttl:g}s TTL)"
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
@@ -1361,7 +1399,11 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     getattr(action, field_name),
                     f"{prefix} {field_name.replace('_', ' ')}",
                 )
-            for field_name in ("team1_click_offset", "team3_click_offset"):
+            for field_name in (
+                "team1_click_offset",
+                "team2_click_offset",
+                "team3_click_offset",
+            ):
                 value = getattr(action, field_name)
                 if value is not None and (
                     not isinstance(value, list)
@@ -1383,6 +1425,19 @@ def validate_scenario(scenario: Scenario, require_files=False):
                 ):
                     raise ValueError(f"{prefix} {field_name} cannot be negative")
             validate_rally_team_priority(action.team_priority)
+            if not isinstance(action.rally_team_dry_run, bool):
+                raise ValueError(f"{prefix} rally_team_dry_run must be a boolean")
+            if action.rally_team_status_mode not in {"capture", "clear"}:
+                raise ValueError(f"{prefix} has invalid rally team status mode")
+            if (
+                isinstance(action.rally_team_snapshot_ttl, bool)
+                or not isinstance(action.rally_team_snapshot_ttl, (int, float))
+                or not math.isfinite(float(action.rally_team_snapshot_ttl))
+                or action.rally_team_snapshot_ttl <= 0.0
+            ):
+                raise ValueError(
+                    f"{prefix} snapshot TTL must be a positive finite number"
+                )
             _validate_region(action.team_status_region, f"{prefix} team status region")
             _validate_window_size(
                 action.team_status_reference_size,
@@ -1473,36 +1528,43 @@ def validate_scenario(scenario: Scenario, require_files=False):
             if action.type == "select_rally_team":
                 if action.on_condition_index is None:
                     raise ValueError(f"{prefix} requires an anchor condition")
-                effective_idle_paths = {
-                    "Team 1": (
-                        action.team1_idle_template_path
-                        or action.team_idle_template_path
-                    ),
-                    "Team 3": (
-                        action.team3_idle_template_path
-                        or action.team_idle_template_path
-                    ),
-                }
-                for team_label, raw_path in effective_idle_paths.items():
-                    if not isinstance(raw_path, str) or not raw_path.strip():
-                        raise ValueError(
-                            f"{prefix} requires a {team_label} idle-team template"
-                        )
-                for field_name in (
-                    "team1_idle_region",
-                    "team1_click_offset",
-                    "team3_idle_region",
-                    "team3_click_offset",
-                ):
-                    if getattr(action, field_name) is None:
-                        raise ValueError(f"{prefix} requires {field_name}")
-                if require_files:
+                priority = effective_rally_team_priority(action.team_priority)
+                if 2 in priority:
+                    for team_number in priority:
+                        field_name = f"team{team_number}_click_offset"
+                        if getattr(action, field_name) is None:
+                            raise ValueError(f"{prefix} requires {field_name}")
+                else:
+                    effective_idle_paths = {
+                        "Team 1": (
+                            action.team1_idle_template_path
+                            or action.team_idle_template_path
+                        ),
+                        "Team 3": (
+                            action.team3_idle_template_path
+                            or action.team_idle_template_path
+                        ),
+                    }
                     for team_label, raw_path in effective_idle_paths.items():
-                        if not os.path.isfile(project_path(raw_path)):
+                        if not isinstance(raw_path, str) or not raw_path.strip():
                             raise ValueError(
-                                f"{prefix} {team_label} idle-team template does "
-                                f"not exist: {raw_path}"
+                                f"{prefix} requires a {team_label} idle-team template"
                             )
+                    for field_name in (
+                        "team1_idle_region",
+                        "team1_click_offset",
+                        "team3_idle_region",
+                        "team3_click_offset",
+                    ):
+                        if getattr(action, field_name) is None:
+                            raise ValueError(f"{prefix} requires {field_name}")
+                    if require_files:
+                        for team_label, raw_path in effective_idle_paths.items():
+                            if not os.path.isfile(project_path(raw_path)):
+                                raise ValueError(
+                                    f"{prefix} {team_label} idle-team template does "
+                                    f"not exist: {raw_path}"
+                                )
             if action.type == "key" and (
                 not isinstance(action.key, str) or not action.key.strip()
             ):

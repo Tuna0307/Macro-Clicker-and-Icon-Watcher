@@ -110,6 +110,7 @@ Current action types include:
 
 - `click`
 - `click_matching_row`
+- `capture_rally_team_status`
 - `select_rally_team`
 - `key`
 - `wait`
@@ -168,16 +169,21 @@ The left world-map expedition list is compressed to teams that are currently out
 
 The fixed-slot detector first validates the expected dispatch panel with `templates/SquadAmount.png` inside a bounded vertical anchor band covering the observed panel positions, then checks one generic glyph-only `templates/TeamIdleZZ.png` inside three fixed window-relative ROIs from the same atomic capture. `ZZ` present means `IDLE`; `ZZ` absent means `BUSY` only after the screen is validated. Capture, template, screen, or ROI uncertainty remains `UNKNOWN`, and `UNKNOWN` must never be treated as available.
 
-This detector is currently a checkpoint/probe and does not replace the working `Rally gold mob_ 2 team` availability path. Preserve that separation until three-team integration is explicitly implemented and validated.
+The separate `Rally gold mob_ 3 team` scenario integrates this detector twice:
+once through `capture_rally_team_status` before Rally entry to obtain a short-lived,
+one-use level cap, and again immediately before fixed-card selection. The pre-entry
+snapshot never authorizes final selection. Missing, stale, consumed,
+wrong-scenario, or `UNKNOWN` evidence fails closed and recovery clears transient
+state.
 
-The follow-up configuration checkpoint adds pure three-team membership and level
-policy without changing that separation. Missing `select_rally_team.team_priority`
-means legacy `[3, 1]`; Team 2 is opt-in through explicit `[3, 2, 1]`. Per-team
-maximums are independent, `None` means unlimited, and only `IDLE` qualifies.
-`BUSY` and `UNKNOWN` remain distinguishable but unavailable. No production Team 2
-selection or three-team Rally scenario exists yet. For known levels, the pure
-policy chooses the capable team with the smallest configured maximum and uses
-configured priority to break equal-limit ties.
+Missing `select_rally_team.team_priority` still means the untouched legacy `[3, 1]`
+path. Team 2 is opt-in through explicit `[3, 2, 1]`; only that path uses fixed-slot
+status and `team2_click_offset`. Per-team maximums are independent, `None` means
+unlimited, and only `IDLE` qualifies. For known levels, the pure policy chooses the
+capable team with the smallest configured maximum and uses configured priority to
+break equal-limit ties. The bundled three-team scenario is dry-run by default. No
+live three-team Rally dispatch has been performed by Codex; supervised calibration
+is required before disabling dry-run.
 
 ## Position application workflows
 

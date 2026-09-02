@@ -122,8 +122,19 @@ python -m pytest -q tests/test_rally_team_policy.py tests/test_rally_team_editor
 
 These tests protect Team 2 opt-in, strict priority validation, legacy `[3, 1]`
 parity, three-team `[3, 2, 1]` ordering, independent per-team limits, unlimited
-caps, and fail-closed `UNKNOWN` handling. They do not prove live three-team
-dispatch, which is intentionally not wired yet.
+caps, and fail-closed `UNKNOWN` handling.
+
+Checkpoint 3 transition and click-geometry coverage is offline:
+
+```powershell
+python -m pytest -q tests/test_rally_three_team_workflow.py
+```
+
+It proves one-use snapshot freshness, stale/previous-cycle rejection, pre-entry
+fail-closed behavior, fresh final-state recomputation, Team 1/2/3 card coordinates,
+resize scaling, negative desktop origins, dry-run suppression, and byte-level
+preservation of the bundled two-team scenario. It does not prove live template
+timing or a real three-team dispatch; Codex has not performed one.
 
 ## 6. Live verification
 
@@ -140,6 +151,8 @@ After a meaningful change to rally/input timing, perform a short supervised run 
 - joins select the intended row;
 - OCR filters the expected levels;
 - Team 1 / Team 3 selection behaves as configured;
+- for `Rally gold mob_ 3 team`, begin with dry-run enabled and verify the probe,
+  carried snapshot age/cap, fresh final states, and intended Team 1/2/3 selection;
 - recovery does not back out after a successful transition;
 - kill switch/stop remains responsive;
 - passive Icon Alerts still notify without triggering macro actions.

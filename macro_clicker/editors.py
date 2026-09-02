@@ -730,6 +730,7 @@ def action_dialog(
     action_type_labels = {
         "click": "Click",
         "click_matching_row": "Click matching row",
+        "capture_rally_team_status": "Capture / clear Rally team status",
         "select_rally_team": "Select rally team",
         "gather_control": "Gather control",
         "key": "Press key",
@@ -757,6 +758,7 @@ def action_dialog(
 
     click_frame = ttk.LabelFrame(body, text="Click")
     row_click_frame = ttk.LabelFrame(body, text="Click matching row")
+    team_status_frame = ttk.LabelFrame(body, text="Fixed Rally team status")
     team_frame = ttk.LabelFrame(body, text="Select rally team")
     gather_frame = ttk.LabelFrame(body, text="Gather control")
     key_frame = ttk.LabelFrame(body, text="Key press")
@@ -766,6 +768,7 @@ def action_dialog(
     frames = {
         "click": click_frame,
         "click_matching_row": row_click_frame,
+        "capture_rally_team_status": team_status_frame,
         "select_rally_team": team_frame,
         "gather_control": gather_frame,
         "key": key_frame,
@@ -1069,10 +1072,12 @@ def action_dialog(
     team_button_var = tk.StringVar(value=a.button)
     team1_region = getattr(a, "team1_idle_region", None) or [-249, 130, 40, 36]
     team1_offset = getattr(a, "team1_click_offset", None) or [-189, 168]
+    team2_offset = getattr(a, "team2_click_offset", None) or [-63, 168]
     team3_region = getattr(a, "team3_idle_region", None) or [3, 130, 40, 36]
     team3_offset = getattr(a, "team3_click_offset", None) or [63, 168]
     team1_region_vars = [tk.IntVar(value=value) for value in team1_region]
     team1_offset_vars = [tk.IntVar(value=value) for value in team1_offset]
+    team2_offset_vars = [tk.IntVar(value=value) for value in team2_offset]
     team3_region_vars = [tk.IntVar(value=value) for value in team3_region]
     team3_offset_vars = [tk.IntVar(value=value) for value in team3_offset]
     team1_max_text, team2_max_text, team3_max_text = rally_team_max_level_editor_values(
@@ -1083,6 +1088,7 @@ def action_dialog(
     team3_max_var = tk.StringVar(value=team3_max_text)
     team_mode_label, team_mode_options = rally_team_editor_modes(a.team_priority)
     team_mode_var = tk.StringVar(value=team_mode_label)
+    team_dry_run_var = tk.BooleanVar(value=getattr(a, "rally_team_dry_run", False))
 
     ttk.Label(team_frame, text="Anchor condition", style="Surface.TLabel").grid(
         row=0, column=0, sticky="w", padx=4, pady=2
@@ -1185,6 +1191,21 @@ def action_dialog(
             row=7, column=grid_column, sticky="w", padx=4
         )
 
+    ttk.Label(team_frame, text="Team 2 click offset x/y", style="Surface.TLabel").grid(
+        row=8, column=0, sticky="w", padx=4, pady=(8, 2)
+    )
+    ttk.Entry(team_frame, textvariable=team2_offset_vars[0], width=7).grid(
+        row=8, column=1, sticky="w"
+    )
+    ttk.Entry(team_frame, textvariable=team2_offset_vars[1], width=7).grid(
+        row=8, column=2, sticky="w"
+    )
+    ttk.Checkbutton(
+        team_frame,
+        text="Three-team dry run (log selection; do not click or dispatch)",
+        variable=team_dry_run_var,
+    ).grid(row=9, column=0, columnspan=5, sticky="w", padx=4, pady=2)
+
     def add_team_row(row, label, region_vars, offset_vars):
         ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
             row=row, column=0, sticky="w", padx=4, pady=(8, 2)
@@ -1207,13 +1228,13 @@ def action_dialog(
         )
 
     add_team_row(
-        8,
+        10,
         "Team 3 visual controls",
         team3_region_vars,
         team3_offset_vars,
     )
     add_team_row(
-        12,
+        14,
         "Team 1 visual controls",
         team1_region_vars,
         team1_offset_vars,
@@ -1222,12 +1243,50 @@ def action_dialog(
         team_frame,
         text=(
             "These max levels also control which OCR levels Joining accepts.\n"
-            "Team 2 policy is stored but is not wired to live dispatch yet.\n"
+            "Three-team mode uses fixed slot identity; hero portraits are ignored.\n"
             "Use the main Save button to keep changes after restart."
         ),
         style="Muted.TLabel",
         justify="left",
-    ).grid(row=16, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
+    ).grid(row=18, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
+
+    # --- fixed Rally team status snapshot fields ---
+    status_mode_labels = {
+        "Capture pre-entry snapshot": "capture",
+        "Clear transient snapshot": "clear",
+    }
+    status_mode_var = tk.StringVar(
+        value=next(
+            (
+                label
+                for label, value in status_mode_labels.items()
+                if value == getattr(a, "rally_team_status_mode", "capture")
+            ),
+            "Capture pre-entry snapshot",
+        )
+    )
+    status_ttl_var = tk.DoubleVar(value=getattr(a, "rally_team_snapshot_ttl", 3.0))
+    ttk.Label(team_status_frame, text="Operation", style="Surface.TLabel").grid(
+        row=0, column=0, sticky="w", padx=4, pady=2
+    )
+    ttk.Combobox(
+        team_status_frame,
+        textvariable=status_mode_var,
+        values=list(status_mode_labels),
+        state="readonly",
+        width=28,
+    ).grid(row=0, column=1, sticky="w", padx=4)
+    ttk.Label(
+        team_status_frame, text="Snapshot TTL (seconds)", style="Surface.TLabel"
+    ).grid(row=1, column=0, sticky="w", padx=4, pady=2)
+    ttk.Spinbox(
+        team_status_frame,
+        textvariable=status_ttl_var,
+        from_=0.1,
+        to=30.0,
+        increment=0.1,
+        width=8,
+    ).grid(row=1, column=1, sticky="w", padx=4)
 
     # --- resource-gathering state fields ---
     gather_command_labels = {
@@ -1473,6 +1532,11 @@ def action_dialog(
                 new_action.team2_max_level = None
                 new_action.team3_max_level = None
                 new_action.team_priority = None
+            elif t == "capture_rally_team_status":
+                new_action.rally_team_status_mode = status_mode_labels[
+                    status_mode_var.get()
+                ]
+                new_action.rally_team_snapshot_ttl = status_ttl_var.get()
             elif t == "select_rally_team":
                 anchor = team_anchor_var.get().strip()
                 if anchor in ("", "Select condition"):
@@ -1480,10 +1544,12 @@ def action_dialog(
                 shared_idle_template = idle_template_var.get().strip()
                 team1_idle_template = team1_idle_template_var.get().strip()
                 team3_idle_template = team3_idle_template_var.get().strip()
-                if not (team1_idle_template or shared_idle_template):
-                    raise ValueError("Choose the Team 1 idle icon template.")
-                if not (team3_idle_template or shared_idle_template):
-                    raise ValueError("Choose the Team 3 idle icon template.")
+                selected_priority = team_mode_options[team_mode_var.get()]
+                if selected_priority is None:
+                    if not (team1_idle_template or shared_idle_template):
+                        raise ValueError("Choose the Team 1 idle icon template.")
+                    if not (team3_idle_template or shared_idle_template):
+                        raise ValueError("Choose the Team 3 idle icon template.")
                 new_action.on_condition_index = condition_index_from_choice(
                     anchor,
                     "Anchor condition",
@@ -1507,6 +1573,9 @@ def action_dialog(
                     team2_max_var.get(),
                     "Team 2 max level",
                 )
+                new_action.team2_click_offset = [
+                    variable.get() for variable in team2_offset_vars
+                ]
                 new_action.team3_idle_region = [
                     variable.get() for variable in team3_region_vars
                 ]
@@ -1517,9 +1586,8 @@ def action_dialog(
                     team3_max_var.get(),
                     "Team 3 max level",
                 )
-                new_action.team_priority = copy.deepcopy(
-                    team_mode_options[team_mode_var.get()]
-                )
+                new_action.team_priority = copy.deepcopy(selected_priority)
+                new_action.rally_team_dry_run = team_dry_run_var.get()
             elif t == "gather_control":
                 new_action.gather_command = gather_command_values[
                     gather_command_var.get()

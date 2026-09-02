@@ -73,6 +73,7 @@ Current action types include:
 
 - `click`
 - `click_matching_row`
+- `capture_rally_team_status`
 - `select_rally_team`
 - `key`
 - `wait`
@@ -150,7 +151,8 @@ The 1920x1080 reference calibration is:
 
 The taller anchor ROI deliberately covers the two observed vertical positions of the dispatch panel while remaining horizontally bounded to the `士兵數量` label. The detector scales these window-relative reference regions with the current target-window size and uses one frame for the anchor plus all three status checks. A valid screen with an idle score at or above the threshold is `IDLE`; a valid screen below threshold is `BUSY`. A missing/wrong screen, capture failure, template failure, or invalid ROI returns `UNKNOWN` rather than inferring busy.
 
-This is not yet production three-team dispatch. `Rally gold mob_ 2 team` remains on its existing Team 1/Team 3 path until a later checkpoint explicitly integrates three-team eligibility and selection.
+`Rally gold mob_ 2 team` remains on its existing Team 1/Team 3 path. The separate
+three-team scenario uses this detector without migrating the legacy selector.
 
 #### Three-team configuration and eligibility policy
 
@@ -171,12 +173,39 @@ selects the capable enabled idle team with the smallest configured maximum so te
 number never implies strength; configured priority breaks ties between equal
 maximums. Unlimited teams rank after finite capable teams.
 
-This policy does not complete three-team Rally support. The Checkpoint 1 fixed-slot
-detector remains isolated, the existing two-team scenario still uses its original
-Team 1/Team 3 visual availability path, and no live Team 2 dispatch or
-`Rally gold mob_ 3 team` scenario exists yet. A later integration checkpoint must
-connect authoritative fixed-slot states and Team 2 dispatch geometry to a new
-workflow without weakening `UNKNOWN` handling.
+#### Integrated three-team Rally workflow
+
+`Rally gold mob_ 3 team` starts from the mature Rally row/OCR/recovery flow but adds
+two fixed-status moments. On the world map, `templates/AddSquad.png` is searched
+only inside the bounded window-relative squad/expedition area `(650, 880, 630,
+200)` at the 1920x1080 reference size. The 26x26 template is a minimal crop from
+the user-supplied `Screenshot 2026-09-02 204523.png`, source pixels `(1155, 1030)`
+through `(1180, 1055)`; the raw screenshot is not project data. The normal
+`_click_point` safety path opens it, the fixed detector reads all three states
+atomically, and the existing selector-recovery point safely above the panel closes
+it without touching the blue dispatch button. Rally icon plus Add Squad are then
+positively revalidated before entry.
+
+The snapshot contains fixed states, monotonic capture time, scenario name, probe
+generation, source, computed cap, TTL, and a consumed flag. Its default TTL is
+three seconds and entry may consume it once. Start/stop/F12, a new probe, stale or
+consumed evidence, transition failure, wrong-mob/no-slot back-out, final failure,
+dry-run, and successful dispatch clear transient state. The carried cap only
+constrains the existing row/OCR selection.
+
+On the final dispatch screen the engine ignores carried statuses and captures Team
+1/2/3 again. It combines fresh fixed states with the carried OCR level and existing
+pure policy. No capable idle team or any `UNKNOWN` state backs out without
+dispatch. Fixed card centers at 1920x1080 are Team 1 `(773, 976)`, Team 2 `(899,
+976)`, and Team 3 `(1025, 976)`, represented relative to the Attack anchor `(962,
+808)` as `(-189, 168)`, `(-63, 168)`, and `(63, 168)`. Both axes scale with the
+anchor match; absolute coordinates may be negative on left/top monitors.
+
+Bundled limits are Team 1 `65`, Team 2 `45`, and Team 3 `45`. Team 2's value is a
+conservative initial default, not a strength claim, and all three remain editable.
+Dry-run is enabled by default: it logs fresh states and selection, then backs out
+without clicking a team card or Attack. No live three-team Rally dispatch has been
+performed by Codex.
 
 ### Position application workflows
 

@@ -55,6 +55,14 @@ from .rally_matching import (
     _REFERENCE_UNSET,
 )
 from .resource_gathering import GatherController, replacement_click_offset
+from .rally_team_policy import (
+    RALLY_TEAM_BUSY,
+    RALLY_TEAM_IDLE,
+    RALLY_TEAM_UNKNOWN,
+    effective_rally_team_priority,
+    eligible_rally_teams_for_level,
+    select_rally_team_for_level,
+)
 from .window_locator import (
     find_window_rect,
     is_window_foreground,
@@ -111,6 +119,8 @@ class MacroEngine(RallyMatchingMixin):
         )
         self._last_rally_team_availability: dict = {}
         self._pending_rally_team_availability = None
+        self._three_team_rally_snapshot = None
+        self._three_team_probe_generation = 0
         self._rally_join_guard_until = 0.0
         self._gather_controller = GatherController()
         self._last_join_diagnostic_log: dict[object, float] = {}
@@ -199,6 +209,8 @@ class MacroEngine(RallyMatchingMixin):
         self._last_rally_team_busy_state = None
         self._last_rally_team_availability = {}
         self._pending_rally_team_availability = None
+        self._three_team_rally_snapshot = None
+        self._three_team_probe_generation = 0
         self._rally_join_guard_until = 0.0
         self._gather_controller.reset()
         self._last_join_diagnostic_log.clear()
@@ -264,6 +276,7 @@ class MacroEngine(RallyMatchingMixin):
             or getattr(self, "_ever_started", False)
         )
         self._stop_event.set()
+        self._reset_three_team_rally_state()
         ready_event = getattr(self, "_ready_event", None)
         if ready_event is not None:
             ready_event.clear()
@@ -435,8 +448,7 @@ class MacroEngine(RallyMatchingMixin):
             y_text = f" y={ys}" if ys else ""
             negated = " (negated)" if getattr(cond, "negate", False) else ""
             parts.append(
-                f"{label}={state}{negated} n={count}{y_text} "
-                f"{record['elapsed']:.3f}s"
+                f"{label}={state}{negated} n={count}{y_text} {record['elapsed']:.3f}s"
             )
             signature_parts.append((index, state, count, tuple(ys)))
 
@@ -1415,7 +1427,11 @@ class MacroEngine(RallyMatchingMixin):
             matches[i] = condition_matches
             if condition_matches:
                 points[i] = condition_matches[0]["center"]
-            if step.condition_operator == "AND" and not ok and not optional_fast_join_back:
+            if (
+                step.condition_operator == "AND"
+                and not ok
+                and not optional_fast_join_back
+            ):
                 self._maybe_record_matching_row_step_miss(
                     step,
                     i,
@@ -1437,7 +1453,6 @@ class MacroEngine(RallyMatchingMixin):
             failed_index=None if met else -1,
         )
         return met, points, matches
-
 
     def _evaluate_matching_row_target_locally(
         self,
@@ -1856,9 +1871,7 @@ class MacroEngine(RallyMatchingMixin):
                     guard_seconds = max(
                         0.0, float(self.RALLY_JOIN_TRANSITION_GUARD_SECONDS)
                     )
-                    self._rally_join_guard_until = (
-                        time.monotonic() + guard_seconds
-                    )
+                    self._rally_join_guard_until = time.monotonic() + guard_seconds
                     self.log(
                         f"  [rally] suppress rally-page checks for {guard_seconds:g}s "
                         "while attack screen opens"
@@ -1878,6 +1891,9 @@ class MacroEngine(RallyMatchingMixin):
 
         elif action.type == "select_rally_team":
             return self._run_select_rally_team_action(action, points, matches)
+
+        elif action.type == "capture_rally_team_status":
+            return self._run_capture_rally_team_status_action(action)
 
         elif action.type == "gather_control":
             return self._run_gather_control_action(action, points, matches)
@@ -2003,8 +2019,7 @@ class MacroEngine(RallyMatchingMixin):
                 return False
             controller.mark_replacement_selected(action.gather_replacement_order)
             self.log(
-                f"  [gather] select replacement March {march} "
-                f"({click_x}, {click_y})"
+                f"  [gather] select replacement March {march} ({click_x}, {click_y})"
             )
             return True
 
@@ -2046,6 +2061,10 @@ class MacroEngine(RallyMatchingMixin):
         )
 
     def _run_select_rally_team_action(self, action, points, matches):
+        if 2 in effective_rally_team_priority(action.team_priority):
+            return self._run_select_rally_team_action_three_team(
+                action, points, matches
+            )
         level = getattr(self, "_pending_rally_level", None)
         if level is None:
             self.log("  [skip] no carried rally level is available for team selection")
@@ -2262,6 +2281,104 @@ class MacroEngine(RallyMatchingMixin):
         )
         return True
 
+    def _abort_three_team_dispatch(self, action, result, reason):
+        self.log(f"  [team3] {reason}; backing out without dispatch")
+        dismissed = self._dismiss_fixed_rally_team_panel(result, action.button)
+        self._pending_rally_level = None
+        self._pending_rally_team_selected = None
+        self._reset_three_team_rally_state(reason)
+        self._retry_current_step = False
+        self._cleanup_after_abort = True
+        self._abort_current_step = True
+        return dismissed
+
+    def _run_select_rally_team_action_three_team(self, action, points, matches):
+        level = getattr(self, "_pending_rally_level", None)
+        if level is None:
+            self.log("  [team3] no carried Rally level; selection deferred")
+            self._retry_current_step = True
+            return False
+        selected_context = getattr(self, "_pending_rally_team_selected", None)
+        if (
+            isinstance(selected_context, dict)
+            and selected_context.get("level") == level
+        ):
+            self.log(
+                f"  [team3] resume previously selected Team "
+                f"{selected_context.get('team')} for Rally Lv{level}"
+            )
+            return False
+
+        anchor_index = action.on_condition_index
+        anchor_matches = (
+            matches.get(anchor_index, []) if anchor_index is not None else []
+        )
+        anchor_match = anchor_matches[0] if anchor_matches else None
+        anchor = points.get(anchor_index) if anchor_index is not None else None
+        if anchor is None or anchor_match is None:
+            self.log("  [team3] dispatch anchor unavailable; selection deferred")
+            self._retry_current_step = True
+            return False
+
+        result = self._capture_fixed_rally_team_status()
+        states = result.get("states", {})
+        state_text = " ".join(
+            f"T{team_number}={states.get(team_number, RALLY_TEAM_UNKNOWN)}"
+            for team_number in (1, 2, 3)
+        )
+        if not result.get("screen_valid") or any(
+            states.get(team_number) not in {RALLY_TEAM_IDLE, RALLY_TEAM_BUSY}
+            for team_number in (1, 2, 3)
+        ):
+            self.log(f"  [team3] Rally Lv{level}; fresh final {state_text}")
+            return self._abort_three_team_dispatch(
+                action, result, "final status UNKNOWN"
+            )
+
+        priority = effective_rally_team_priority(action.team_priority)
+        limits = {
+            team_number: getattr(action, f"team{team_number}_max_level")
+            for team_number in priority
+        }
+        eligible = eligible_rally_teams_for_level(level, states, limits, list(priority))
+        selected = select_rally_team_for_level(level, states, limits, list(priority))
+        eligible_text = (
+            ", ".join(
+                f"T{team_number}(max"
+                f"{limits[team_number] if limits[team_number] is not None else 'Unlimited'})"
+                for team_number in eligible
+            )
+            or "none"
+        )
+        self.log(f"  [team3] Rally Lv{level}; fresh final {state_text}")
+        self.log(
+            f"  [team3] eligible {eligible_text}; "
+            f"selected {'T' + str(selected) if selected is not None else 'none'}"
+        )
+        if selected is None:
+            return self._abort_three_team_dispatch(
+                action, result, "no capable idle Team"
+            )
+        if action.rally_team_dry_run:
+            return self._abort_three_team_dispatch(
+                action,
+                result,
+                f"dry-run selected Team {selected}",
+            )
+
+        click_offset = getattr(action, f"team{selected}_click_offset")
+        scale_x, scale_y = self._match_geometry_scale(anchor_match)
+        click_x = round(anchor[0] + click_offset[0] * scale_x)
+        click_y = round(anchor[1] + click_offset[1] * scale_y)
+        if self._click_point(click_x, click_y, action.button) is False:
+            self._retry_current_step = True
+            return False
+        self._pending_rally_team_selected = {"level": level, "team": selected}
+        self.log(
+            f"  [team3] clicked fixed Team {selected} card at ({click_x}, {click_y})"
+        )
+        return True
+
     def _run_no_match_fallback(self, step: Step, action: Action, points: dict):
         if self._stop_requested():
             return False
@@ -2296,6 +2413,15 @@ class MacroEngine(RallyMatchingMixin):
                 self.log(
                     f"  [no-match] click condition #{action.no_match_condition_index} ({x}, {y})"
                 )
+                if any(
+                    candidate.type == "select_rally_team"
+                    and 2 in effective_rally_team_priority(candidate.team_priority)
+                    for candidate_step in self.scenario.steps
+                    for candidate in candidate_step.actions
+                ):
+                    self._pending_rally_level = None
+                    self._pending_rally_team_selected = None
+                    self._reset_three_team_rally_state("failed Rally transition")
 
         for step_name in action.no_match_disable_steps:
             if self._stop_requested():
@@ -2336,9 +2462,7 @@ class MacroEngine(RallyMatchingMixin):
         target_title = (
             scenario.target_window_title.strip() if scenario is not None else ""
         )
-        require_foreground = bool(
-            getattr(scenario, "require_target_foreground", True)
-        )
+        require_foreground = bool(getattr(scenario, "require_target_foreground", True))
         if target_title:
             detected_rect = self._get_target_window_rect()
             if detected_rect is None:
@@ -2580,7 +2704,13 @@ class MacroEngine(RallyMatchingMixin):
                     and scenario.target_window_title.strip()
                     and any(
                         action.type
-                        in {"click", "click_matching_row", "select_rally_team", "key"}
+                        in {
+                            "click",
+                            "click_matching_row",
+                            "capture_rally_team_status",
+                            "select_rally_team",
+                            "key",
+                        }
                         for action in step.actions
                     )
                     and self._get_target_window_rect() is None
@@ -2692,6 +2822,7 @@ class MacroEngine(RallyMatchingMixin):
                         self._pending_rally_level = None
                         self._pending_rally_team_selected = None
                         self._pending_rally_team_availability = None
+                        self._reset_three_team_rally_state()
                     self._last_fired[step.name] = now
                     if not step.repeatable:
                         step.enabled = False
