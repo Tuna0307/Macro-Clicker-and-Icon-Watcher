@@ -197,7 +197,12 @@ Important safety guarantees include:
 - monitor-relative regions follow the selected physical monitor;
 - a missing required target window does not silently redirect input elsewhere;
 - clicks are rejected outside the configured target window;
-- click/key actions require the correct target window to be foreground;
+- mouse clicks require the correct target window to be foreground when the
+  scenario-level `require_target_foreground` setting is enabled (the default);
+- disabling `require_target_foreground` relaxes only the mouse foreground gate,
+  so target-window containment, fresh geometry checks, monitor validation, and
+  negative desktop coordinates remain enforced;
+- key actions still require the correct target window to be foreground;
 - target-window geometry is rechecked near input dispatch;
 - `pyautogui.FAILSAFE` remains enabled;
 - the scenario kill switch is required;

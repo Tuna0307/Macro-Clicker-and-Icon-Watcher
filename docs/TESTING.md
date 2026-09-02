@@ -104,6 +104,11 @@ Some behavior cannot be proven completely by unit tests because the external UI 
 After a meaningful change to rally/input timing, perform a short supervised run and verify at least:
 
 - the correct target window is used;
+- when `require_target_foreground` is disabled, a click can be dispatched to a
+  visible target on a secondary monitor while another application is foreground,
+  without weakening target-window bounds or fresh-geometry checks;
+- negative absolute desktop coordinates remain valid for monitors positioned
+  left of or above the primary monitor;
 - joins select the intended row;
 - OCR filters the expected levels;
 - Team 1 / Team 3 selection behaves as configured;

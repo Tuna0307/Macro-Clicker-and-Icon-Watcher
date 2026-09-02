@@ -317,6 +317,9 @@ class App:
             value=self.scenario.auto_start_enabled
         )
         self.auto_start_time_var = tk.StringVar(value=self.scenario.auto_start_time)
+        self.require_target_foreground_var = tk.BooleanVar(
+            value=self.scenario.require_target_foreground
+        )
         self.diagnostics_var = tk.BooleanVar(value=self.scenario.diagnostics_enabled)
         self._refresh_window_list()
 
@@ -582,6 +585,8 @@ class App:
         if hasattr(self, "auto_start_time_var"):
             self.auto_start_time_var.set(scenario.auto_start_time)
         self.target_window_var.set(scenario.target_window_title)
+        if hasattr(self, "require_target_foreground_var"):
+            self.require_target_foreground_var.set(scenario.require_target_foreground)
         if hasattr(self, "diagnostics_var"):
             self.diagnostics_var.set(scenario.diagnostics_enabled)
         self._loaded_scenario_name = loaded_name
@@ -666,6 +671,13 @@ class App:
                 auto_start_time_var.get()
             )
         self.scenario.target_window_title = self.target_window_var.get().strip()
+        require_target_foreground_var = getattr(
+            self, "require_target_foreground_var", None
+        )
+        if require_target_foreground_var is not None:
+            self.scenario.require_target_foreground = bool(
+                require_target_foreground_var.get()
+            )
         diagnostics_var = getattr(self, "diagnostics_var", None)
         if diagnostics_var is not None:
             self.scenario.diagnostics_enabled = bool(diagnostics_var.get())
@@ -689,6 +701,9 @@ class App:
         kill_var = tk.StringVar(value=self.kill_var.get())
         auto_start_enabled_var = tk.BooleanVar(value=self.auto_start_enabled_var.get())
         auto_start_time_var = tk.StringVar(value=self.auto_start_time_var.get())
+        require_target_foreground_var = tk.BooleanVar(
+            value=self.require_target_foreground_var.get()
+        )
         diagnostics_var = tk.BooleanVar(value=self.diagnostics_var.get())
         sounds_var = tk.BooleanVar(value=self.ui_preferences.sounds_enabled)
         animations_var = tk.BooleanVar(value=self.ui_preferences.animations_enabled)
@@ -742,29 +757,43 @@ class App:
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 4))
         ttk.Checkbutton(
             body,
+            text="Require target window foreground for mouse clicks",
+            variable=require_target_foreground_var,
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        ttk.Label(
+            body,
+            text=(
+                "When disabled, target-window bounds and fresh geometry checks "
+                "still apply. Keyboard actions still require foreground focus."
+            ),
+            style="Muted.TLabel",
+            wraplength=330,
+        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Checkbutton(
+            body,
             text="Collect bounded diagnostic screenshots",
             variable=diagnostics_var,
-        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
         ttk.Separator(body).grid(
-            row=9, column=0, columnspan=2, sticky="ew", pady=(14, 12)
+            row=11, column=0, columnspan=2, sticky="ew", pady=(14, 12)
         )
         ttk.Label(body, text="Interface", style="Section.TLabel").grid(
-            row=10, column=0, columnspan=2, sticky="w", pady=(0, 5)
+            row=12, column=0, columnspan=2, sticky="w", pady=(0, 5)
         )
         ttk.Checkbutton(
             body,
             text="Play gentle interface sounds",
             variable=sounds_var,
-        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=13, column=0, columnspan=2, sticky="w", pady=2)
         ttk.Checkbutton(
             body,
             text="Use subtle interface animations",
             variable=animations_var,
-        ).grid(row=12, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=14, column=0, columnspan=2, sticky="w", pady=2)
 
         buttons = ttk.Frame(body, style="Surface.TFrame")
-        buttons.grid(row=13, column=0, columnspan=2, sticky="e", pady=(20, 0))
+        buttons.grid(row=15, column=0, columnspan=2, sticky="e", pady=(20, 0))
 
         def save_settings():
             # Recheck in case a non-UI caller started the engine while this
@@ -833,6 +862,9 @@ class App:
             self.kill_var.set(stop_key)
             self.auto_start_enabled_var.set(bool(auto_start_enabled_var.get()))
             self.auto_start_time_var.set(automatic_time)
+            self.require_target_foreground_var.set(
+                bool(require_target_foreground_var.get())
+            )
             self.diagnostics_var.set(bool(diagnostics_var.get()))
             self.ui_preferences = UiPreferences(
                 sounds_enabled=bool(sounds_var.get()),

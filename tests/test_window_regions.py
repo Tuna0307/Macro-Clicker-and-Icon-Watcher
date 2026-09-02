@@ -173,10 +173,15 @@ class WindowRegionTests(unittest.TestCase):
         condition = ImageCondition.from_dict({"template_path": "templates/icon.png"})
 
         self.assertEqual(scenario.target_window_title, "")
+        self.assertTrue(scenario.require_target_foreground)
         self.assertEqual(condition.region_mode, "screen")
 
     def test_models_round_trip_window_target_fields(self):
-        scenario = Scenario(name="game", target_window_title="My Offline Game")
+        scenario = Scenario(
+            name="game",
+            target_window_title="My Offline Game",
+            require_target_foreground=False,
+        )
         condition = ImageCondition(
             template_path="templates/icon.png",
             comparison_template_path="templates/full.png",
@@ -190,6 +195,9 @@ class WindowRegionTests(unittest.TestCase):
         self.assertEqual(
             Scenario.from_dict(scenario.to_dict()).target_window_title,
             "My Offline Game",
+        )
+        self.assertFalse(
+            Scenario.from_dict(scenario.to_dict()).require_target_foreground
         )
         self.assertEqual(
             ImageCondition.from_dict(condition.to_dict()).region_mode,

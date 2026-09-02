@@ -187,9 +187,19 @@ When a target window is configured:
 - Detection follows the physical monitor containing the target window.
 - Missing target windows fail closed instead of silently clicking elsewhere.
 - Macro clicks are rejected when the resolved point is outside the target window.
-- Click and key actions require the selected target window to be in the foreground.
+- Mouse-click foreground validation is controlled per scenario by
+  `require_target_foreground` and defaults to `true` for backward-compatible
+  safety. When disabled, clicks may target a visible window on another monitor
+  while another application is foreground, but target-window containment and
+  geometry checks still apply.
+- Key actions continue to require the selected target window to be in the foreground,
+  regardless of the mouse-click foreground setting.
 - Window geometry is rechecked around input operations so a moved window does not receive stale coordinates.
 - The application does not automatically raise or focus the target window.
+
+Multi-monitor coordinates remain absolute desktop coordinates, including valid
+negative X/Y positions for monitors located left of or above the primary display.
+Coordinates are not clamped to the primary monitor.
 
 When no target window is configured, monitor-relative and legacy absolute-screen behavior remain available.
 

@@ -198,6 +198,136 @@ class EngineSafetyTests(unittest.TestCase):
         click.assert_not_called()
         self.assertTrue(any("not in the foreground" in message for message in logs))
 
+    def test_click_point_allows_target_when_foreground_requirement_is_met(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(return_value=True)
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertTrue(result)
+        click.assert_called_once_with(x=600, y=500, button="left")
+        engine._foreground_window_provider.assert_called_once_with("Game")
+
+    def test_click_point_allows_background_target_when_foreground_not_required(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="background target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock(
+            side_effect=AssertionError("foreground check should be disabled")
+        )
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertTrue(result)
+        click.assert_called_once_with(x=600, y=500, button="left")
+        engine._foreground_window_provider.assert_not_called()
+
+    def test_background_target_still_blocks_click_outside_window(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="background target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock()
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(100, 100, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+        engine._foreground_window_provider.assert_not_called()
+
+    def test_background_target_still_fails_closed_when_window_missing(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="background target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
+        )
+        engine._get_target_window_rect = lambda: None
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock()
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+        engine._foreground_window_provider.assert_not_called()
+
+    def test_background_target_still_rechecks_geometry_before_dispatch(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="background target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
+        )
+        original_rect = (500, 400, 800, 600)
+        moved_rect = (700, 400, 800, 600)
+        engine._get_target_window_rect = Mock(return_value=original_rect)
+        engine._get_fresh_target_window_rect = Mock(
+            side_effect=[original_rect, moved_rect]
+        )
+        engine._point_is_on_a_monitor = lambda _x, _y: True
+        engine._foreground_window_provider = Mock()
+        engine.click_move_duration = 0.0
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(600, 500, "left")
+
+        self.assertFalse(result)
+        click.assert_not_called()
+        engine._foreground_window_provider.assert_not_called()
+
+    def test_background_target_accepts_negative_monitor_coordinates_inside_window(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="left monitor target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
+        )
+        engine._get_target_window_rect = lambda: (-1920, 0, 1920, 1080)
+        engine.click_move_duration = 0.0
+        engine.sct = type(
+            "Capture",
+            (),
+            {
+                "monitors": [
+                    {"left": -1920, "top": 0, "width": 3840, "height": 1080},
+                    {"left": -1920, "top": 0, "width": 1920, "height": 1080},
+                    {"left": 0, "top": 0, "width": 1920, "height": 1080},
+                ]
+            },
+        )()
+        engine._foreground_window_provider = Mock()
+
+        with patch.object(engine_module.pyautogui, "click") as click:
+            result = engine._click_point(-96, 500, "left")
+
+        self.assertTrue(result)
+        click.assert_called_once_with(x=-96, y=500, button="left")
+        engine._foreground_window_provider.assert_not_called()
+
     def test_foreground_blocked_click_uses_normal_poll_then_fast_poll_on_success(self):
         engine = self._bare_engine()
         step = Step(
@@ -339,6 +469,25 @@ class EngineSafetyTests(unittest.TestCase):
         engine.scenario = Scenario(
             name="target safety",
             target_window_title="Game",
+        )
+        engine._get_target_window_rect = lambda: (500, 400, 800, 600)
+        engine._foreground_window_provider = lambda _title: False
+        engine._retry_current_step = False
+        step = Step(name="Key", actions=[Action(type="key", key="escape")])
+
+        with patch.object(engine_module.keyboard, "send") as send:
+            result = engine._run_action(step, step.actions[0], {}, {})
+
+        self.assertFalse(result)
+        self.assertTrue(engine._retry_current_step)
+        send.assert_not_called()
+
+    def test_key_action_still_requires_foreground_when_mouse_gate_is_disabled(self):
+        engine = self._bare_engine()
+        engine.scenario = Scenario(
+            name="target safety",
+            target_window_title="Game",
+            require_target_foreground=False,
         )
         engine._get_target_window_rect = lambda: (500, 400, 800, 600)
         engine._foreground_window_provider = lambda _title: False

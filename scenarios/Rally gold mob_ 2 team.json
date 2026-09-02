@@ -1961,5 +1961,6 @@
   "auto_start_time": "00:20",
   "auto_start_date": "",
   "target_window_title": "Last War-Survival Game",
+  "require_target_foreground": false,
   "diagnostics_enabled": true
 }

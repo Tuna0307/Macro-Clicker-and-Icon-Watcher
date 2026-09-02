@@ -195,7 +195,12 @@ Important safety behavior includes:
 
 - do not click when target-window geometry is unavailable;
 - do not click outside the target window when a target window is configured;
-- do not send click/key actions to the wrong foreground window;
+- mouse foreground validation is scenario-configurable through
+  `require_target_foreground`, which defaults to `true`;
+- when that setting is `false`, only the mouse foreground requirement is relaxed:
+  target-window containment, fresh geometry, monitor validity, negative desktop
+  coordinates, kill-switch handling, and PyAutoGUI fail-safe remain enforced;
+- key actions still require the configured target window to be foreground;
 - recheck target-window geometry close to input dispatch;
 - preserve `pyautogui.FAILSAFE`;
 - preserve the required scenario kill switch;

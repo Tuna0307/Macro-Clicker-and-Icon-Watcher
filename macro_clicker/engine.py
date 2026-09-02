@@ -179,6 +179,14 @@ class MacroEngine(RallyMatchingMixin):
         validate_scenario(self.scenario, require_files=True)
         # Visible version marker so the GUI log proves which engine.py is running.
         self.log(f"[build] {self.RALLY_DIAGNOSTIC_BUILD} loaded")
+        if (
+            self.scenario.target_window_title.strip()
+            and not self.scenario.require_target_foreground
+        ):
+            self.log(
+                "[safety] foreground requirement disabled; target-window bounds "
+                "remain enforced"
+            )
         if getattr(self, "_sct_closed", False):
             self.sct = mss.MSS()
             self._sct_closed = False
@@ -2328,6 +2336,9 @@ class MacroEngine(RallyMatchingMixin):
         target_title = (
             scenario.target_window_title.strip() if scenario is not None else ""
         )
+        require_foreground = bool(
+            getattr(scenario, "require_target_foreground", True)
+        )
         if target_title:
             detected_rect = self._get_target_window_rect()
             if detected_rect is None:
@@ -2360,14 +2371,18 @@ class MacroEngine(RallyMatchingMixin):
             if not getattr(self, "_monitor_bounds_validation_failed", False):
                 self.log(f"  [skip] click point ({x}, {y}) is outside every monitor")
             return False
-        if target_title and not self._target_is_foreground_for_click(target_title):
+        if (
+            target_title
+            and require_foreground
+            and not self._target_is_foreground_for_click(target_title)
+        ):
             return False
         if target_title:
             final_rect = self._get_fresh_target_window_rect()
             if final_rect != target_rect:
                 self.log(
                     f"  [safety] click ({x}, {y}) skipped because the target "
-                    "window moved or resized during foreground validation"
+                    "window moved or resized during input validation"
                 )
                 return False
         move_duration = getattr(self, "click_move_duration", 0.0)
@@ -2375,9 +2390,13 @@ class MacroEngine(RallyMatchingMixin):
             pyautogui.moveTo(x, y, duration=move_duration)
             if self._stop_requested():
                 return False
-            # Focus can change while the pointer is moving. Validate again at
-            # the final input boundary instead of trusting the earlier check.
-            if target_title and not self._target_is_foreground_for_click(target_title):
+            # Focus can change while the pointer is moving. When foreground
+            # validation is enabled, recheck it at the final input boundary.
+            if (
+                target_title
+                and require_foreground
+                and not self._target_is_foreground_for_click(target_title)
+            ):
                 return False
             if target_title:
                 final_rect = self._get_fresh_target_window_rect()

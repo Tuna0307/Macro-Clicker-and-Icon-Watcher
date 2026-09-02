@@ -876,6 +876,7 @@ class Scenario:
     auto_start_time: str = "06:00"
     auto_start_date: str = ""
     target_window_title: str = ""
+    require_target_foreground: bool = True
     diagnostics_enabled: bool = True
 
     def to_dict(self):
@@ -890,6 +891,7 @@ class Scenario:
             "auto_start_time": normalize_auto_start_time(self.auto_start_time),
             "auto_start_date": normalize_auto_start_date(self.auto_start_date),
             "target_window_title": self.target_window_title,
+            "require_target_foreground": self.require_target_foreground,
             "diagnostics_enabled": self.diagnostics_enabled,
         }
 
@@ -912,6 +914,9 @@ class Scenario:
         auto_start_time = normalize_auto_start_time(d.get("auto_start_time", "06:00"))
         auto_start_date = normalize_auto_start_date(d.get("auto_start_date", ""))
         target_window_title = d.get("target_window_title", "")
+        require_target_foreground = _bool_value(
+            d.get("require_target_foreground"), True
+        )
         diagnostics_enabled = _bool_value(d.get("diagnostics_enabled"), True)
         if not isinstance(name, str) or not name.strip():
             raise ValueError("scenario name must be non-empty text")
@@ -932,6 +937,7 @@ class Scenario:
             auto_start_time=auto_start_time,
             auto_start_date=auto_start_date,
             target_window_title=target_window_title,
+            require_target_foreground=require_target_foreground,
             diagnostics_enabled=diagnostics_enabled,
         )
         validate_scenario(scenario)
@@ -1057,6 +1063,8 @@ def validate_scenario(scenario: Scenario, require_files=False):
         )
     if not isinstance(scenario.target_window_title, str):
         raise ValueError("target_window_title must be text")
+    if not isinstance(scenario.require_target_foreground, bool):
+        raise ValueError("require_target_foreground must be a boolean")
     if not isinstance(scenario.diagnostics_enabled, bool):
         raise ValueError("diagnostics_enabled must be a boolean")
 

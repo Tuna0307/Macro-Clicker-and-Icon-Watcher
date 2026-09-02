@@ -99,6 +99,27 @@ class ModelValidationTests(unittest.TestCase):
         self.assertEqual(restored.start_hotkey, "ctrl+f8")
         self.assertEqual(legacy.start_hotkey, "f8")
 
+    def test_scenario_foreground_requirement_round_trips_and_defaults_safe(self):
+        scenario = Scenario(
+            name="Background monitor clicks",
+            require_target_foreground=False,
+        )
+
+        restored = Scenario.from_dict(scenario.to_dict())
+        legacy = Scenario.from_dict({"name": "Legacy", "steps": []})
+
+        self.assertFalse(restored.require_target_foreground)
+        self.assertTrue(legacy.require_target_foreground)
+
+        with self.assertRaisesRegex(ValueError, "invalid boolean value"):
+            Scenario.from_dict(
+                {
+                    "name": "Invalid foreground setting",
+                    "steps": [],
+                    "require_target_foreground": "sometimes",
+                }
+            )
+
     def test_scenario_one_time_auto_start_round_trips_and_normalizes_time(self):
         scenario = Scenario(
             name="Scheduled",
