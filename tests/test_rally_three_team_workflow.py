@@ -93,7 +93,7 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
         result = engine._run_select_rally_team_action(selector, points, matches)
         return engine, clicks, result
 
-    def test_scenario_enters_rally_first_and_stays_dry_run_by_default(self):
+    def test_scenario_enters_rally_first_and_live_dispatch_is_enabled(self):
         validate_scenario(self.scenario, require_files=True)
         self.assertFalse(self.scenario.require_target_foreground)
         self.assertEqual(self.selector.team_priority, [3, 2, 1])
@@ -105,7 +105,7 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
             ),
             (65, 45, 45),
         )
-        self.assertTrue(self.selector.rally_team_dry_run)
+        self.assertFalse(self.selector.rally_team_dry_run)
 
         self.assertTrue(self.entry_step.enabled)
         self.assertEqual(len(self.entry_step.conditions), 1)
@@ -152,7 +152,7 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
         restored = Action.from_dict(self.selector.to_dict())
         self.assertEqual(restored.team2_click_offset, [-63, 168])
         self.assertEqual(restored.team_priority, [3, 2, 1])
-        self.assertTrue(restored.rally_team_dry_run)
+        self.assertFalse(restored.rally_team_dry_run)
         restored_probe = Action.from_dict(self.probe_action.to_dict())
         self.assertEqual(restored_probe.rally_team_status_mode, "capture")
         self.assertEqual(restored_probe.rally_team_snapshot_ttl, 3.0)
@@ -271,8 +271,10 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
         idle = {1: RALLY_TEAM_IDLE, 2: RALLY_TEAM_IDLE, 3: RALLY_TEAM_IDLE}
         engine, clicks = self._engine(self._result(idle))
         engine._pending_rally_level = 40
+        selector = copy.deepcopy(self.selector)
+        selector.rally_team_dry_run = True
         points, matches = self._context()
-        engine._run_select_rally_team_action(self.selector, points, matches)
+        engine._run_select_rally_team_action(selector, points, matches)
         self.assertEqual(clicks, [(965, 152, "left")])
         self.assertTrue(engine._abort_current_step)
         self.assertTrue(engine._cleanup_after_abort)
