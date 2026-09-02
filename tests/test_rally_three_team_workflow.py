@@ -103,7 +103,7 @@ class RallyThreeTeamWorkflowTests(unittest.TestCase):
                 self.selector.team2_max_level,
                 self.selector.team3_max_level,
             ),
-            (65, 45, 45),
+            (65, 55, 55),
         )
         self.assertFalse(self.selector.rally_team_dry_run)
 
