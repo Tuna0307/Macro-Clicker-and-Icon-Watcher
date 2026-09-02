@@ -131,6 +131,27 @@ Lower eligible levels may prefer Team 3 when it is idle, with Team 1 as fallback
 
 The focused tests in `tests/test_rally_team_selection.py` are the behavioral contract for this logic.
 
+#### Fixed-slot three-team status detector
+
+An additive checkpoint detector in `rally_matching.py` reads exact Team 1/2/3 availability from dispatch / team-selection screens that expose the fixed bottom squad cards, without changing the current two-team workflow.
+
+Team identity comes from fixed card position, not the hero portrait. The compressed world-map expedition list is not authoritative because rows disappear and shift when teams return.
+
+The 1920x1080 reference calibration is:
+
+- screen anchor template: `templates/SquadAmount.png`;
+- anchor ROI: `(900, 480, 130, 145)`, confidence `0.85`;
+- Team 1 status ROI: `(712, 937, 40, 38)`;
+- Team 2 status ROI: `(837, 937, 40, 38)`;
+- Team 3 status ROI: `(963, 937, 40, 38)`;
+- shared idle template: `templates/TeamIdleZZ.png`, confidence `0.90`.
+
+`TeamIdleZZ.png` is a 9x12 glyph-only crop from the user-supplied 1920x1080 screenshot `Screenshot 2026-09-02 204523.png`, source pixels `(728, 950)` through `(736, 961)`. It intentionally excludes the hero portrait and most card-border pixels.
+
+The taller anchor ROI deliberately covers the two observed vertical positions of the dispatch panel while remaining horizontally bounded to the `士兵數量` label. The detector scales these window-relative reference regions with the current target-window size and uses one frame for the anchor plus all three status checks. A valid screen with an idle score at or above the threshold is `IDLE`; a valid screen below threshold is `BUSY`. A missing/wrong screen, capture failure, template failure, or invalid ROI returns `UNKNOWN` rather than inferring busy.
+
+This is not yet production three-team dispatch. `Rally gold mob_ 2 team` remains on its existing Team 1/Team 3 path until a later checkpoint explicitly integrates three-team eligibility and selection.
+
 ### Position application workflows
 
 Bundled automation includes:

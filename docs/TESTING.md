@@ -97,6 +97,22 @@ A good image-regression fixture should record:
 
 Do not collect screenshots just to increase test count. Add them when they represent a real visual condition the detector must continue to handle.
 
+### Fixed Team 1/2/3 status screenshot probe
+
+The additive three-team fixed-slot detector can be tested offline without clicking or joining anything:
+
+```powershell
+python -m tools.probe_rally_team_status "C:\path\to\screenshot.png"
+```
+
+To save one visual montage containing the Team 1/2/3 status crops:
+
+```powershell
+python -m tools.probe_rally_team_status "C:\path\to\screenshot.png" --crops-dir "$env:TEMP\rally-status-probe"
+```
+
+The probe first validates the dispatch-screen anchor inside the bounded vertical band covering the observed panel positions. If that anchor is missing, every team must report `UNKNOWN`; it must not reinterpret a world-map-only or wrong screen as three busy teams. On a validated screen, the reported idle score is compared with the shared ZZ threshold and each fixed slot reports `IDLE` or `BUSY`.
+
 ## 6. Live verification
 
 Some behavior cannot be proven completely by unit tests because the external UI is live and timing-sensitive.

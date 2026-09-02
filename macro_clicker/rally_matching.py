@@ -23,6 +23,178 @@ _MATCHING_ROW_SNAPSHOT_KEY = object()
 _TEAM_LEVEL_CAP_UNSET = object()
 _TEAM_LEVEL_CAP_UNBOUNDED = "unbounded"
 
+RALLY_FIXED_TEAM_REFERENCE_SIZE = (1920, 1080)
+RALLY_FIXED_TEAM_SCREEN_ANCHOR_TEMPLATE = "templates/SquadAmount.png"
+RALLY_FIXED_TEAM_SCREEN_ANCHOR_REGION = (900, 480, 130, 145)
+RALLY_FIXED_TEAM_SCREEN_ANCHOR_CONFIDENCE = 0.85
+RALLY_FIXED_TEAM_IDLE_TEMPLATE = "templates/TeamIdleZZ.png"
+RALLY_FIXED_TEAM_IDLE_CONFIDENCE = 0.90
+RALLY_FIXED_TEAM_STATUS_REGIONS = {
+    1: (712, 937, 40, 38),
+    2: (837, 937, 40, 38),
+    3: (963, 937, 40, 38),
+}
+RALLY_TEAM_IDLE = "IDLE"
+RALLY_TEAM_BUSY = "BUSY"
+RALLY_TEAM_UNKNOWN = "UNKNOWN"
+
+
+def _scaled_fixed_team_region(region, frame_width, frame_height):
+    reference_width, reference_height = RALLY_FIXED_TEAM_REFERENCE_SIZE
+    scale_x = frame_width / reference_width
+    scale_y = frame_height / reference_height
+    left, top, width, height = region
+    return (
+        round(left * scale_x),
+        round(top * scale_y),
+        max(1, round(width * scale_x)),
+        max(1, round(height * scale_y)),
+    )
+
+
+def _fixed_team_unknown_result(error, *, frame_size=None, anchor_score=None):
+    width, height = frame_size or RALLY_FIXED_TEAM_REFERENCE_SIZE
+    status_regions = {
+        team_number: _scaled_fixed_team_region(region, width, height)
+        for team_number, region in RALLY_FIXED_TEAM_STATUS_REGIONS.items()
+    }
+    return {
+        "screen_valid": False,
+        "error": error,
+        "reference_size": RALLY_FIXED_TEAM_REFERENCE_SIZE,
+        "frame_size": (width, height),
+        "anchor_region": _scaled_fixed_team_region(
+            RALLY_FIXED_TEAM_SCREEN_ANCHOR_REGION,
+            width,
+            height,
+        ),
+        "anchor_score": anchor_score,
+        "status_regions": status_regions,
+        "states": {team_number: RALLY_TEAM_UNKNOWN for team_number in status_regions},
+        "idle_scores": {team_number: None for team_number in status_regions},
+    }
+
+
+def _fixed_team_template_score(frame, template, region, scale_x, scale_y):
+    left, top, width, height = region
+    if left < 0 or top < 0 or width <= 0 or height <= 0:
+        return None
+    right = left + width
+    bottom = top + height
+    if right > frame.shape[1] or bottom > frame.shape[0]:
+        return None
+    crop = frame[top:bottom, left:right]
+    if crop.shape[:2] != (height, width):
+        return None
+    scaled_template = resize_template_xy(template, scale_x, scale_y)
+    template_height, template_width = scaled_template.shape[:2]
+    if template_width > width or template_height > height:
+        return None
+    scores = cv2.matchTemplate(crop, scaled_template, cv2.TM_CCOEFF_NORMED)
+    if scores.size == 0:
+        return None
+    finite_scores = scores[np.isfinite(scores)]
+    if finite_scores.size == 0:
+        return None
+    return float(np.max(finite_scores))
+
+
+def detect_fixed_rally_team_status(
+    frame,
+    anchor_template,
+    idle_template,
+    *,
+    anchor_confidence=RALLY_FIXED_TEAM_SCREEN_ANCHOR_CONFIDENCE,
+    idle_confidence=RALLY_FIXED_TEAM_IDLE_CONFIDENCE,
+):
+    """Read Team 1/2/3 state from one dispatch window-relative screenshot.
+
+    Team identity comes only from the fixed card slots. A missing ZZ icon means
+    BUSY only after the dispatch screen anchor is proven. Capture, template,
+    screen, or ROI uncertainty stays UNKNOWN.
+    """
+
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] < 3:
+        return _fixed_team_unknown_result("invalid_frame")
+    frame_height, frame_width = frame.shape[:2]
+    if frame_width <= 0 or frame_height <= 0:
+        return _fixed_team_unknown_result("invalid_frame")
+    if (
+        not isinstance(anchor_template, np.ndarray)
+        or anchor_template.ndim != 3
+        or not isinstance(idle_template, np.ndarray)
+        or idle_template.ndim != 3
+    ):
+        return _fixed_team_unknown_result(
+            "template_unavailable",
+            frame_size=(frame_width, frame_height),
+        )
+
+    reference_width, reference_height = RALLY_FIXED_TEAM_REFERENCE_SIZE
+    scale_x = frame_width / reference_width
+    scale_y = frame_height / reference_height
+    anchor_region = _scaled_fixed_team_region(
+        RALLY_FIXED_TEAM_SCREEN_ANCHOR_REGION,
+        frame_width,
+        frame_height,
+    )
+    anchor_score = _fixed_team_template_score(
+        frame,
+        anchor_template,
+        anchor_region,
+        scale_x,
+        scale_y,
+    )
+    if anchor_score is None:
+        return _fixed_team_unknown_result(
+            "anchor_roi_invalid",
+            frame_size=(frame_width, frame_height),
+        )
+    if anchor_score < float(anchor_confidence):
+        return _fixed_team_unknown_result(
+            "screen_anchor_not_found",
+            frame_size=(frame_width, frame_height),
+            anchor_score=anchor_score,
+        )
+
+    status_regions = {
+        team_number: _scaled_fixed_team_region(region, frame_width, frame_height)
+        for team_number, region in RALLY_FIXED_TEAM_STATUS_REGIONS.items()
+    }
+    states = {}
+    idle_scores = {}
+    for team_number, region in status_regions.items():
+        score = _fixed_team_template_score(
+            frame,
+            idle_template,
+            region,
+            scale_x,
+            scale_y,
+        )
+        idle_scores[team_number] = score
+        if score is None:
+            states[team_number] = RALLY_TEAM_UNKNOWN
+        elif score >= float(idle_confidence):
+            states[team_number] = RALLY_TEAM_IDLE
+        else:
+            states[team_number] = RALLY_TEAM_BUSY
+
+    return {
+        "screen_valid": True,
+        "error": (
+            "status_roi_invalid"
+            if any(state == RALLY_TEAM_UNKNOWN for state in states.values())
+            else None
+        ),
+        "reference_size": RALLY_FIXED_TEAM_REFERENCE_SIZE,
+        "frame_size": (frame_width, frame_height),
+        "anchor_region": anchor_region,
+        "anchor_score": anchor_score,
+        "status_regions": status_regions,
+        "states": states,
+        "idle_scores": idle_scores,
+    }
+
 
 @dataclass(frozen=True)
 class _CaptureSnapshot:
@@ -70,6 +242,36 @@ class RallyMatchingMixin:
     _level_ocr_reader: LevelOcrReader | None
     _last_rally_team_busy_state: tuple[bool, bool, int | str | None] | None
     _last_rally_team_availability: dict
+
+    def _capture_fixed_rally_team_status(self):
+        """Capture one target-window frame and read all three fixed team slots."""
+
+        window_rect = self._get_target_window_rect()
+        if not window_rect:
+            return _fixed_team_unknown_result("target_window_unavailable")
+        try:
+            frame, off_x, off_y = self._grab(window_rect)
+            if (int(off_x), int(off_y)) != (int(window_rect[0]), int(window_rect[1])):
+                return _fixed_team_unknown_result(
+                    "capture_origin_mismatch",
+                    frame_size=(int(frame.shape[1]), int(frame.shape[0])),
+                )
+            anchor_template = self._load_template(
+                RALLY_FIXED_TEAM_SCREEN_ANCHOR_TEMPLATE
+            )
+            idle_template = self._load_template(RALLY_FIXED_TEAM_IDLE_TEMPLATE)
+            result = detect_fixed_rally_team_status(
+                frame,
+                anchor_template,
+                idle_template,
+            )
+        except Exception as exc:
+            return _fixed_team_unknown_result(
+                f"capture_or_template_error:{type(exc).__name__}"
+            )
+        result["capture_region"] = tuple(int(value) for value in window_rect)
+        result["capture_origin"] = (int(off_x), int(off_y))
+        return result
 
     def _prepare_rally_team_availability_for_entry(self, step):
         """Capture squad availability before an entry click hides the queue."""

@@ -160,6 +160,16 @@ The behavior is not simply "always use one team first." Lower eligible levels ca
 
 Tests in `tests/test_rally_team_selection.py` protect this behavior.
 
+### Fixed-slot three-team status detection
+
+Three-team work has an additive fixed-slot detector for dispatch / team-selection screens that show the fixed bottom squad cards. On those screens, the bottom cards are authoritative by position: slot 1 is Team 1, slot 2 is Team 2, and slot 3 is Team 3. Hero portraits are not team identity and must not be used as the long-term status key.
+
+The left world-map expedition list is compressed to teams that are currently out, so its row order is not authoritative team identity for three-team availability.
+
+The fixed-slot detector first validates the expected dispatch panel with `templates/SquadAmount.png` inside a bounded vertical anchor band covering the observed panel positions, then checks one generic glyph-only `templates/TeamIdleZZ.png` inside three fixed window-relative ROIs from the same atomic capture. `ZZ` present means `IDLE`; `ZZ` absent means `BUSY` only after the screen is validated. Capture, template, screen, or ROI uncertainty remains `UNKNOWN`, and `UNKNOWN` must never be treated as available.
+
+This detector is currently a checkpoint/probe and does not replace the working `Rally gold mob_ 2 team` availability path. Preserve that separation until three-team integration is explicitly implemented and validated.
+
 ## Position application workflows
 
 Bundled scenarios currently include:
