@@ -119,7 +119,26 @@ class UiComponentTests(unittest.TestCase):
 
         self.assertIn("Team 3 (unlimited)", summary)
         self.assertIn("Team 1 (unlimited)", summary)
+        self.assertNotIn("Team 2", summary)
         self.assertNotIn("None", summary)
+
+    def test_three_team_summary_uses_configured_priority_and_limits(self):
+        action = Action(
+            type="select_rally_team",
+            on_condition_index=1,
+            team_priority=[3, 2, 1],
+            team1_max_level=70,
+            team2_max_level=60,
+            team3_max_level=50,
+        )
+
+        summary = action_display_summary(action, self.conditions)
+
+        self.assertIn(
+            "Team 3 (max level 50), then Team 2 (max level 60), "
+            "then Team 1 (max level 70)",
+            summary,
+        )
 
     def test_stop_action_has_a_clear_display_summary(self):
         self.assertEqual(

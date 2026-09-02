@@ -113,6 +113,18 @@ python -m tools.probe_rally_team_status "C:\path\to\screenshot.png" --crops-dir 
 
 The probe first validates the dispatch-screen anchor inside the bounded vertical band covering the observed panel positions. If that anchor is missing, every team must report `UNKNOWN`; it must not reinterpret a world-map-only or wrong screen as three busy teams. On a validated screen, the reported idle score is compared with the shared ZZ threshold and each fixed slot reports `IDLE` or `BUSY`.
 
+The separate configuration/eligibility checkpoint is pure and can be exercised
+without screenshots or live input:
+
+```powershell
+python -m pytest -q tests/test_rally_team_policy.py tests/test_rally_team_editor.py tests/test_models_validation.py tests/test_ui_components.py
+```
+
+These tests protect Team 2 opt-in, strict priority validation, legacy `[3, 1]`
+parity, three-team `[3, 2, 1]` ordering, independent per-team limits, unlimited
+caps, and fail-closed `UNKNOWN` handling. They do not prove live three-team
+dispatch, which is intentionally not wired yet.
+
 ## 6. Live verification
 
 Some behavior cannot be proven completely by unit tests because the external UI is live and timing-sensitive.

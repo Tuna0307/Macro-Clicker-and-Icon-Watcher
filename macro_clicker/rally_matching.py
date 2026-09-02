@@ -14,6 +14,14 @@ import numpy as np
 from .detection_core import resize_template_xy
 from .level_ocr import LevelOcrReader
 from .models import Action, ImageCondition, has_smart_rally_team_prefilter
+from .rally_team_policy import (
+    RALLY_TEAM_BUSY,
+    RALLY_TEAM_IDLE,
+    RALLY_TEAM_LEVEL_CAP_UNBOUNDED,
+    RALLY_TEAM_UNKNOWN,
+    available_rally_team_level_cap,
+    effective_rally_team_priority,
+)
 
 _REFERENCE_UNSET = object()
 _LEVEL_ELIGIBLE = "eligible"
@@ -21,7 +29,7 @@ _LEVEL_INELIGIBLE = "ineligible"
 _LEVEL_UNREADABLE = "unreadable"
 _MATCHING_ROW_SNAPSHOT_KEY = object()
 _TEAM_LEVEL_CAP_UNSET = object()
-_TEAM_LEVEL_CAP_UNBOUNDED = "unbounded"
+_TEAM_LEVEL_CAP_UNBOUNDED = RALLY_TEAM_LEVEL_CAP_UNBOUNDED
 
 RALLY_FIXED_TEAM_REFERENCE_SIZE = (1920, 1080)
 RALLY_FIXED_TEAM_SCREEN_ANCHOR_TEMPLATE = "templates/SquadAmount.png"
@@ -34,9 +42,6 @@ RALLY_FIXED_TEAM_STATUS_REGIONS = {
     2: (837, 937, 40, 38),
     3: (963, 937, 40, 38),
 }
-RALLY_TEAM_IDLE = "IDLE"
-RALLY_TEAM_BUSY = "BUSY"
-RALLY_TEAM_UNKNOWN = "UNKNOWN"
 
 
 def _scaled_fixed_team_region(region, frame_width, frame_height):
@@ -569,10 +574,11 @@ class RallyMatchingMixin:
                 f"select_rally_team action; found {len(selectors)}."
             )
         selector, identity = selectors[0]
+        priority = effective_rally_team_priority(selector.team_priority)
         return (
             {
-                1: selector.team1_max_level,
-                3: selector.team3_max_level,
+                team_number: getattr(selector, f"team{team_number}_max_level")
+                for team_number in priority
             },
             "select_rally_team",
             identity,
@@ -678,17 +684,15 @@ class RallyMatchingMixin:
             team_number: score >= effective_thresholds[team_number]
             for team_number, score in scores.items()
         }
-        idle_teams = [team_number for team_number in (1, 3) if not busy[team_number]]
-        if not idle_teams:
-            level_cap: int | str | None = None
-        elif any(level_limits[team_number] is None for team_number in idle_teams):
-            level_cap = _TEAM_LEVEL_CAP_UNBOUNDED
-        else:
-            level_cap = max(
-                int(team_limit)
-                for team_number in idle_teams
-                if (team_limit := level_limits[team_number]) is not None
-            )
+        statuses = {
+            team_number: RALLY_TEAM_BUSY if is_busy else RALLY_TEAM_IDLE
+            for team_number, is_busy in busy.items()
+        }
+        level_cap = available_rally_team_level_cap(
+            statuses,
+            level_limits,
+            list(level_limits),
+        )
         state = (busy[1], busy[3], level_cap)
         if state != getattr(self, "_last_rally_team_busy_state", None):
             self.log(

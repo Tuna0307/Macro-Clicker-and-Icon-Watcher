@@ -10,6 +10,7 @@ from tkinter import ttk
 from typing import Any
 
 from .models import has_smart_rally_team_prefilter
+from .rally_team_policy import effective_rally_team_priority
 
 try:
     ctk: Any = importlib.import_module("customtkinter")
@@ -718,11 +719,12 @@ def action_display_summary(action, conditions):
             action.on_condition_index,
             "Unselected anchor",
         )
-        return (
-            f"Select idle Team 3 ({_team_limit_summary(action.team3_max_level)}), "
-            f"then Team 1 ({_team_limit_summary(action.team1_max_level)}), "
-            f"anchored to {anchor}"
-        )
+        teams = [
+            f"Team {team_number} "
+            f"({_team_limit_summary(getattr(action, f'team{team_number}_max_level'))})"
+            for team_number in effective_rally_team_priority(action.team_priority)
+        ]
+        return f"Select idle {', then '.join(teams)}, anchored to {anchor}"
     if action.type == "key":
         return f"Press {action.key or 'key'}"
     if action.type == "wait":

@@ -14,6 +14,7 @@ from macro_clicker.models import (
     project_path,
     validate_scenario,
 )
+from macro_clicker.rally_team_policy import effective_rally_team_priority
 
 
 class RallyTeamSelectionTests(unittest.TestCase):
@@ -811,6 +812,11 @@ class RallyTeamSelectionTests(unittest.TestCase):
         self.assertIsNone(row_action.max_level)
         self.assertIsNone(row_action.team1_max_level)
         self.assertIsNone(row_action.team3_max_level)
+        self.assertIsNone(team_action.team_priority)
+        self.assertEqual(
+            effective_rally_team_priority(team_action.team_priority), (3, 1)
+        )
+        self.assertIsNone(team_action.team2_max_level)
         self.assertEqual(
             row_action.team1_busy_template_path,
             "templates/Team1Busy.png",

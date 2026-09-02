@@ -31,6 +31,10 @@ from .resource_gathering import (
     GATHER_COMMANDS,
     REPLACEMENT_CLICK_OFFSETS,
 )
+from .rally_team_policy import (
+    effective_rally_team_priority,
+    validate_rally_team_priority,
+)
 
 ACTION_TYPES = frozenset(
     {
@@ -480,9 +484,12 @@ class Action:
     team1_idle_region: Optional[List[int]] = None
     team1_click_offset: Optional[List[int]] = None
     team1_max_level: Optional[int] = None
+    team2_max_level: Optional[int] = None
     team3_idle_region: Optional[List[int]] = None
     team3_click_offset: Optional[List[int]] = None
     team3_max_level: Optional[int] = None
+    # None is the serialized legacy mode and has effective priority [3, 1].
+    team_priority: Optional[List[int]] = None
     team_status_region: Optional[List[int]] = None
     team_status_reference_size: Optional[List[int]] = None
     team1_busy_template_path: str = ""
@@ -522,6 +529,11 @@ class Action:
             data.pop("gather_command", None)
             data.pop("gather_target_count", None)
             data.pop("gather_replacement_order", None)
+        if self.team_priority is None:
+            data.pop("team_priority", None)
+            if self.team2_max_level is None:
+                # Do not add new keys merely by opening/saving an old action.
+                data.pop("team2_max_level", None)
         data["team_idle_template_path"] = portable_project_path(
             self.team_idle_template_path
         )
@@ -626,13 +638,16 @@ class Action:
             if value is not None and len(value) != 2:
                 raise ValueError(f"{label} must contain [x, y]")
         a.team1_max_level = _optional_int(d.get("team1_max_level"), a.team1_max_level)
+        a.team2_max_level = _optional_int(d.get("team2_max_level"), a.team2_max_level)
         a.team3_max_level = _optional_int(d.get("team3_max_level"), a.team3_max_level)
         for label, value in (
             ("team1_max_level", a.team1_max_level),
+            ("team2_max_level", a.team2_max_level),
             ("team3_max_level", a.team3_max_level),
         ):
             if value is not None and value < 0:
                 raise ValueError(f"{label} cannot be negative")
+        a.team_priority = validate_rally_team_priority(d.get("team_priority"))
         a.team_status_region = _validate_region(
             _optional_int_list_field(d, "team_status_region", "team_status_region"),
             "team_status_region",
@@ -722,7 +737,10 @@ class Action:
                 + ", ".join(str(march) for march in unsupported_gather_marches)
             )
         if a.type == "gather_control":
-            if a.gather_command == "select_replacement" and a.on_condition_index is None:
+            if (
+                a.gather_command == "select_replacement"
+                and a.on_condition_index is None
+            ):
                 raise ValueError(
                     "select_replacement gather actions require an anchor condition"
                 )
@@ -770,23 +788,20 @@ class Action:
             )
         if self.type == "gather_control":
             if self.gather_command == "select_replacement":
-                order = " -> ".join(str(march) for march in self.gather_replacement_order)
+                order = " -> ".join(
+                    str(march) for march in self.gather_replacement_order
+                )
                 return f"Select next gathering replacement march ({order})"
             if self.gather_command == "cancel_retry":
                 return "Retry gathering without advancing replacement march"
             return f"Record gathering success ({self.gather_target_count} total)"
         if self.type == "select_rally_team":
-            team3_limit = (
-                "unlimited"
-                if self.team3_max_level is None
-                else f"max level {self.team3_max_level}"
-            )
-            team1_limit = (
-                "unlimited"
-                if self.team1_max_level is None
-                else f"max level {self.team1_max_level}"
-            )
-            return f"Select idle Team 3 ({team3_limit}), then Team 1 ({team1_limit})"
+            teams = []
+            for team_number in effective_rally_team_priority(self.team_priority):
+                maximum = getattr(self, f"team{team_number}_max_level")
+                limit = "unlimited" if maximum is None else f"max level {maximum}"
+                teams.append(f"Team {team_number} ({limit})")
+            return "Select idle " + ", then ".join(teams)
         if self.type == "key":
             extra = f" (hold {self.hold}s)" if self.hold else ""
             return f"Press key '{self.key}'{extra}"
@@ -1357,12 +1372,17 @@ def validate_scenario(scenario: Scenario, require_files=False):
                     )
                 ):
                     raise ValueError(f"{prefix} {field_name} must contain [x, y]")
-            for field_name in ("team1_max_level", "team3_max_level"):
+            for field_name in (
+                "team1_max_level",
+                "team2_max_level",
+                "team3_max_level",
+            ):
                 value = getattr(action, field_name)
                 if value is not None and (
                     isinstance(value, bool) or not isinstance(value, int) or value < 0
                 ):
                     raise ValueError(f"{prefix} {field_name} cannot be negative")
+            validate_rally_team_priority(action.team_priority)
             _validate_region(action.team_status_region, f"{prefix} team status region")
             _validate_window_size(
                 action.team_status_reference_size,

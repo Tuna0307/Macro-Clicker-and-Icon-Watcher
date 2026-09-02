@@ -170,6 +170,15 @@ The fixed-slot detector first validates the expected dispatch panel with `templa
 
 This detector is currently a checkpoint/probe and does not replace the working `Rally gold mob_ 2 team` availability path. Preserve that separation until three-team integration is explicitly implemented and validated.
 
+The follow-up configuration checkpoint adds pure three-team membership and level
+policy without changing that separation. Missing `select_rally_team.team_priority`
+means legacy `[3, 1]`; Team 2 is opt-in through explicit `[3, 2, 1]`. Per-team
+maximums are independent, `None` means unlimited, and only `IDLE` qualifies.
+`BUSY` and `UNKNOWN` remain distinguishable but unavailable. No production Team 2
+selection or three-team Rally scenario exists yet. For known levels, the pure
+policy chooses the capable team with the smallest configured maximum and uses
+configured priority to break equal-limit ties.
+
 ## Position application workflows
 
 Bundled scenarios currently include:

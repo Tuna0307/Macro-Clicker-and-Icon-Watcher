@@ -152,6 +152,32 @@ The taller anchor ROI deliberately covers the two observed vertical positions of
 
 This is not yet production three-team dispatch. `Rally gold mob_ 2 team` remains on its existing Team 1/Team 3 path until a later checkpoint explicitly integrates three-team eligibility and selection.
 
+#### Three-team configuration and eligibility policy
+
+The next additive checkpoint provides configuration and pure decisions only. A
+`select_rally_team` action now stores an optional `team_priority` plus independent
+`team1_max_level`, `team2_max_level`, and `team3_max_level` values. Missing
+`team_priority` is the backward-compatible legacy mode with effective membership
+and order `[3, 1]`; Team 2 is enabled only by an explicit priority such as the new
+three-team mode `[3, 2, 1]`. Merely loading or storing `team2_max_level` does not
+enable Team 2.
+
+For enabled teams, only `IDLE` status qualifies. `BUSY`, `UNKNOWN`, and missing
+status evidence contribute neither to the pre-entry maximum level cap nor to final
+selection. Each numeric maximum is independent of team number, and `None` means
+unlimited. The pre-entry cap is the highest maximum among enabled idle teams, or
+unbounded when any such team is unlimited. For a known Rally level, the pure policy
+selects the capable enabled idle team with the smallest configured maximum so team
+number never implies strength; configured priority breaks ties between equal
+maximums. Unlimited teams rank after finite capable teams.
+
+This policy does not complete three-team Rally support. The Checkpoint 1 fixed-slot
+detector remains isolated, the existing two-team scenario still uses its original
+Team 1/Team 3 visual availability path, and no live Team 2 dispatch or
+`Rally gold mob_ 3 team` scenario exists yet. A later integration checkpoint must
+connect authoritative fixed-slot states and Team 2 dispatch geometry to a new
+workflow without weakening `UNKNOWN` handling.
+
 ### Position application workflows
 
 Bundled automation includes:

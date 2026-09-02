@@ -14,6 +14,7 @@ from macro_clicker.models import (
     scenario_name_exists,
     validate_scenario,
 )
+from macro_clicker.rally_team_policy import effective_rally_team_priority
 
 
 class ModelValidationTests(unittest.TestCase):
@@ -315,9 +316,99 @@ class ModelValidationTests(unittest.TestCase):
         )
 
         self.assertIsNone(defaults.team1_max_level)
+        self.assertIsNone(defaults.team2_max_level)
         self.assertIsNone(defaults.team3_max_level)
         self.assertIsNone(restored.team1_max_level)
+        self.assertIsNone(restored.team2_max_level)
         self.assertIsNone(restored.team3_max_level)
+
+    def test_old_rally_team_action_remains_legacy_and_does_not_gain_team2_on_save(self):
+        action = Action.from_dict(
+            {
+                "type": "select_rally_team",
+                "team1_max_level": 70,
+                "team3_max_level": 50,
+            }
+        )
+
+        self.assertIsNone(action.team_priority)
+        self.assertEqual(effective_rally_team_priority(action.team_priority), (3, 1))
+        serialized = action.to_dict()
+        self.assertNotIn("team_priority", serialized)
+        self.assertNotIn("team2_max_level", serialized)
+        restored = Action.from_dict(serialized)
+        self.assertEqual(effective_rally_team_priority(restored.team_priority), (3, 1))
+
+    def test_three_team_priority_and_limits_round_trip_exactly(self):
+        action = Action(
+            type="select_rally_team",
+            team_priority=[3, 2, 1],
+            team1_max_level=70,
+            team2_max_level=60,
+            team3_max_level=50,
+        )
+
+        restored = Action.from_dict(action.to_dict())
+
+        self.assertEqual(restored.team_priority, [3, 2, 1])
+        self.assertEqual(restored.team1_max_level, 70)
+        self.assertEqual(restored.team2_max_level, 60)
+        self.assertEqual(restored.team3_max_level, 50)
+
+    def test_blank_three_team_team2_limit_round_trips_as_unlimited(self):
+        action = Action(
+            type="select_rally_team",
+            team_priority=[3, 2, 1],
+            team2_max_level=None,
+        )
+
+        serialized = action.to_dict()
+        restored = Action.from_dict(serialized)
+
+        self.assertIn("team2_max_level", serialized)
+        self.assertIsNone(serialized["team2_max_level"])
+        self.assertIsNone(restored.team2_max_level)
+
+    def test_team2_maximum_rejects_negative_and_boolean_values(self):
+        for maximum in (-1, True):
+            with self.subTest(maximum=maximum), self.assertRaises(ValueError):
+                Action.from_dict(
+                    {"type": "select_rally_team", "team2_max_level": maximum}
+                )
+
+    def test_rally_team_priority_rejects_malformed_values(self):
+        invalid_priorities = (
+            [],
+            [3, 3, 1],
+            [0, 1],
+            [4, 1],
+            [True, 1],
+            [3, "2", 1],
+            [3.0, 2, 1],
+            "[3,2,1]",
+            {"teams": [3, 2, 1]},
+        )
+        for priority in invalid_priorities:
+            with self.subTest(priority=priority), self.assertRaises(ValueError):
+                Action.from_dict(
+                    {"type": "select_rally_team", "team_priority": priority}
+                )
+
+    def test_directly_constructed_invalid_rally_team_priority_is_rejected(self):
+        scenario = Scenario(
+            name="Invalid rally team priority",
+            steps=[
+                Step(
+                    name="Select",
+                    actions=[
+                        Action(type="select_rally_team", team_priority=[3, 2, 2, 1])
+                    ],
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "team_priority"):
+            validate_scenario(scenario)
 
     def test_smart_row_parses_old_limits_but_serializes_them_as_null(self):
         action = Action.from_dict(
@@ -365,6 +456,21 @@ class ModelValidationTests(unittest.TestCase):
         self.assertIn("Team 3 (unlimited)", summary)
         self.assertIn("Team 1 (unlimited)", summary)
         self.assertNotIn("None", summary)
+
+    def test_three_team_action_summary_uses_priority_order(self):
+        summary = Action(
+            type="select_rally_team",
+            team_priority=[3, 2, 1],
+            team1_max_level=70,
+            team2_max_level=60,
+            team3_max_level=50,
+        ).summary()
+
+        self.assertEqual(
+            summary,
+            "Select idle Team 3 (max level 50), then Team 2 (max level 60), "
+            "then Team 1 (max level 70)",
+        )
 
     def test_nested_null_values_are_reported_as_load_errors(self):
         with tempfile.TemporaryDirectory() as folder:

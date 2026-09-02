@@ -34,6 +34,11 @@ from .models import (
     project_path,
     validate_scenario,
 )
+from .rally_team_policy import (
+    LEGACY_RALLY_TEAM_PRIORITY,
+    THREE_TEAM_RALLY_PRIORITY,
+    validate_rally_team_priority,
+)
 from .ui_components import (
     COLORS,
     CollapsibleSection,
@@ -52,6 +57,37 @@ from .window_locator import (
     relative_region_from_window,
     resolve_saved_capture_region,
 )
+
+RALLY_TEAM_MODE_LEGACY = "Two teams: Team 3 -> Team 1"
+RALLY_TEAM_MODE_THREE = "Three teams: Team 3 -> Team 2 -> Team 1"
+
+
+def rally_team_editor_modes(priority):
+    """Return the selected editor mode and exact serialized priority values."""
+    validated = validate_rally_team_priority(priority)
+    options = {
+        RALLY_TEAM_MODE_LEGACY: None,
+        RALLY_TEAM_MODE_THREE: list(THREE_TEAM_RALLY_PRIORITY),
+    }
+    if validated is None or tuple(validated) == LEGACY_RALLY_TEAM_PRIORITY:
+        return RALLY_TEAM_MODE_LEGACY, options
+    if tuple(validated) == THREE_TEAM_RALLY_PRIORITY:
+        return RALLY_TEAM_MODE_THREE, options
+    custom_label = "Custom priority: " + " -> ".join(str(team) for team in validated)
+    options[custom_label] = validated
+    return custom_label, options
+
+
+def rally_team_max_level_editor_values(action):
+    """Return Team 1/2/3 editor text, preserving blank as unlimited."""
+    return tuple(
+        "" if maximum is None else str(maximum)
+        for maximum in (
+            action.team1_max_level,
+            action.team2_max_level,
+            action.team3_max_level,
+        )
+    )
 
 
 def _monitor_box(monitor_index=1):
@@ -1039,12 +1075,14 @@ def action_dialog(
     team1_offset_vars = [tk.IntVar(value=value) for value in team1_offset]
     team3_region_vars = [tk.IntVar(value=value) for value in team3_region]
     team3_offset_vars = [tk.IntVar(value=value) for value in team3_offset]
-    team1_max_var = tk.StringVar(
-        value=str(a.team1_max_level) if a.team1_max_level is not None else ""
+    team1_max_text, team2_max_text, team3_max_text = rally_team_max_level_editor_values(
+        a
     )
-    team3_max_var = tk.StringVar(
-        value=str(a.team3_max_level) if a.team3_max_level is not None else ""
-    )
+    team1_max_var = tk.StringVar(value=team1_max_text)
+    team2_max_var = tk.StringVar(value=team2_max_text)
+    team3_max_var = tk.StringVar(value=team3_max_text)
+    team_mode_label, team_mode_options = rally_team_editor_modes(a.team_priority)
+    team_mode_var = tk.StringVar(value=team_mode_label)
 
     ttk.Label(team_frame, text="Anchor condition", style="Surface.TLabel").grid(
         row=0, column=0, sticky="w", padx=4, pady=2
@@ -1086,8 +1124,8 @@ def action_dialog(
         command=lambda: browse_idle_template(idle_template_var),
     ).grid(row=1, column=4, sticky="w", padx=4)
     for row, label, variable in (
-        (2, "Team 1 (Murphy) idle template", team1_idle_template_var),
-        (3, "Team 3 (Stetmann) idle template", team3_idle_template_var),
+        (2, "Team 1 idle template", team1_idle_template_var),
+        (3, "Team 3 idle template", team3_idle_template_var),
     ):
         ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
             row=row, column=0, sticky="w", padx=4, pady=2
@@ -1122,7 +1160,32 @@ def action_dialog(
         width=8,
     ).grid(row=4, column=3, sticky="w")
 
-    def add_team_row(row, label, region_vars, offset_vars, max_var):
+    ttk.Label(team_frame, text="Team policy", style="Surface.TLabel").grid(
+        row=5, column=0, sticky="w", padx=4, pady=(8, 2)
+    )
+    ttk.Combobox(
+        team_frame,
+        textvariable=team_mode_var,
+        values=tuple(team_mode_options),
+        state="readonly",
+        width=43,
+    ).grid(row=5, column=1, columnspan=4, sticky="w")
+    for column, (label, variable) in enumerate(
+        (
+            ("Team 1 max level", team1_max_var),
+            ("Team 2 max level", team2_max_var),
+            ("Team 3 max level", team3_max_var),
+        )
+    ):
+        grid_column = column * 2
+        ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
+            row=6, column=grid_column, sticky="w", padx=4, pady=(8, 2)
+        )
+        ttk.Entry(team_frame, textvariable=variable, width=9).grid(
+            row=7, column=grid_column, sticky="w", padx=4
+        )
+
+    def add_team_row(row, label, region_vars, offset_vars):
         ttk.Label(team_frame, text=label, style="Surface.TLabel").grid(
             row=row, column=0, sticky="w", padx=4, pady=(8, 2)
         )
@@ -1142,36 +1205,29 @@ def action_dialog(
         ttk.Entry(team_frame, textvariable=offset_vars[1], width=7).grid(
             row=row + 2, column=2, sticky="w"
         )
-        ttk.Label(team_frame, text="Max level", style="Surface.TLabel").grid(
-            row=row + 2, column=3, sticky="w", padx=(10, 4)
-        )
-        ttk.Entry(team_frame, textvariable=max_var, width=7).grid(
-            row=row + 2, column=4, sticky="w"
-        )
 
     add_team_row(
-        5,
-        "Team 3 (preferred for lower levels)",
+        8,
+        "Team 3 visual controls",
         team3_region_vars,
         team3_offset_vars,
-        team3_max_var,
     )
     add_team_row(
-        9,
-        "Team 1 (fallback and higher levels)",
+        12,
+        "Team 1 visual controls",
         team1_region_vars,
         team1_offset_vars,
-        team1_max_var,
     )
     ttk.Label(
         team_frame,
         text=(
             "These max levels also control which OCR levels Joining accepts.\n"
+            "Team 2 policy is stored but is not wired to live dispatch yet.\n"
             "Use the main Save button to keep changes after restart."
         ),
         style="Muted.TLabel",
         justify="left",
-    ).grid(row=12, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
+    ).grid(row=16, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 2))
 
     # --- resource-gathering state fields ---
     gather_command_labels = {
@@ -1196,13 +1252,10 @@ def action_dialog(
             conditions, a.on_condition_index, "Select condition"
         )
     )
-    gather_target_count_var = tk.IntVar(
-        value=getattr(a, "gather_target_count", 3)
-    )
+    gather_target_count_var = tk.IntVar(value=getattr(a, "gather_target_count", 3))
     gather_order_var = tk.StringVar(
         value=", ".join(
-            str(march)
-            for march in getattr(a, "gather_replacement_order", [3, 2, 1])
+            str(march) for march in getattr(a, "gather_replacement_order", [3, 2, 1])
         )
     )
     ttk.Label(gather_frame, text="Command", style="Surface.TLabel").grid(
@@ -1417,7 +1470,9 @@ def action_dialog(
                 new_action.team3_busy_template_path = a.team3_busy_template_path
                 new_action.team_busy_confidence = a.team_busy_confidence
                 new_action.team1_max_level = None
+                new_action.team2_max_level = None
                 new_action.team3_max_level = None
+                new_action.team_priority = None
             elif t == "select_rally_team":
                 anchor = team_anchor_var.get().strip()
                 if anchor in ("", "Select condition"):
@@ -1448,6 +1503,10 @@ def action_dialog(
                     team1_max_var.get(),
                     "Team 1 max level",
                 )
+                new_action.team2_max_level = _parse_optional_int(
+                    team2_max_var.get(),
+                    "Team 2 max level",
+                )
                 new_action.team3_idle_region = [
                     variable.get() for variable in team3_region_vars
                 ]
@@ -1458,8 +1517,13 @@ def action_dialog(
                     team3_max_var.get(),
                     "Team 3 max level",
                 )
+                new_action.team_priority = copy.deepcopy(
+                    team_mode_options[team_mode_var.get()]
+                )
             elif t == "gather_control":
-                new_action.gather_command = gather_command_values[gather_command_var.get()]
+                new_action.gather_command = gather_command_values[
+                    gather_command_var.get()
+                ]
                 new_action.gather_target_count = gather_target_count_var.get()
                 try:
                     new_action.gather_replacement_order = [
