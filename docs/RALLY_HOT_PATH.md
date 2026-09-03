@@ -6,7 +6,7 @@ This document describes the speed-sensitive runtime used only by explicit three-
 
 Rally joining is a race. The macro should spend CPU/time on expensive safety work only when that work can actually matter, while preserving fail-closed final team selection.
 
-The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, and v9 deadloop/team-availability cache.
+The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, and v10 transition-stable tray recovery.
 
 ## World-map loop
 
@@ -45,7 +45,7 @@ While latched:
 - MisClick Base recovery releases it;
 - a final three-team abort releases it;
 - a successful Attack/dispatch click releases it;
-- the all-busy tray recovery releases it.
+- a confirmed all-busy tray recovery releases it.
 
 This is a state guard, not a long cooldown.
 
@@ -87,7 +87,7 @@ The optimization is scheduling only:
 5. if the click actually opened a base popup, the same full-screen detector performs the existing recognized recovery;
 6. successful Base recovery clears stale Rally workflow state and returns control to world-map scanning.
 
-The v7 all-busy tray dismissal also arms the existing Base watchdog immediately afterward because that user-confirmed dismissal is a map-adjacent click.
+The all-busy tray dismissal also arms the existing Base watchdog immediately afterward because that user-confirmed dismissal is a map-adjacent click.
 
 ## MisClick Profile
 
@@ -117,12 +117,27 @@ v7 recognizes this state with bounded visual evidence:
 2. `templates/SquadAmount.png` is checked in the proven formation-panel anchor band;
 3. if `SquadAmount.png` is present, normal `Attack Confirm` remains in charge;
 4. only when the bottom tray is proven and the formation anchor is absent are the three fixed `TeamIdleZZ.png` slot ROIs interpreted;
-5. all three slots must positively resolve to `BUSY`;
-6. only exact `BUSY / BUSY / BUSY` triggers recovery;
+5. all three slots must resolve to `BUSY`;
+6. only exact `BUSY / BUSY / BUSY` can enter recovery;
 7. the macro clicks the user-validated neutral tray area once, never a team card and never Attack;
 8. Rally transient state is cleared, the entry latch is released, and the hot loop resumes.
 
-If any tray slot is `IDLE` or `UNKNOWN`, v7 does not guess.
+If any tray slot is `IDLE` or `UNKNOWN`, recovery is not allowed.
+
+### v10 transition-stable confirmation
+
+A supervised run on 2026-09-03 exposed an important race in the v7 rule. A valid Lv65 Rally row `+` was clicked at `21:57:22.814`. Only about 0.45 seconds later, the bottom squad-card tray had rendered while the central formation panel and ZZ glyphs were still settling. That transient frame looked like `AddSquad present + SquadAmount absent + no ZZ`, so v7 incorrectly classified it as `BUSY / BUSY / BUSY`, sent the tray-dismiss click, and cleared the Rally workflow. The real formation screen then finished opening, but `Attack Confirm` had already been disabled, leaving the macro visually stuck on the formation screen.
+
+v10 tightens only the recovery decision:
+
+- immediately after a successful Rally-row `+` click, tray-only recovery is prohibited for 1.0 second;
+- this is **not a sleep** and does not block normal dispatch: the normal engine cycle and `Attack Confirm` detection continue running throughout the grace period;
+- after the grace period, `BUSY / BUSY / BUSY` must first be observed as a candidate;
+- that candidate must remain stable for at least 0.25 second;
+- v7 then performs its own fresh capture again immediately before any dismiss click;
+- any appearance of the normal formation anchor, any `IDLE`, or any `UNKNOWN` cancels the candidate and sends no tray recovery click.
+
+Therefore a normal formation screen can proceed as soon as it is recognizable, while the rare true all-busy tray is still cleaned up after positive stable evidence.
 
 ## Exact-team availability cache
 
@@ -156,9 +171,10 @@ A current explicit-three-team run should include:
 [build] JOIN-HOT-RACE-v7 full-squad recovery loaded
 [build] JOIN-HOT-RACE-v8 mob2-paced dispatch loaded
 [build] JOIN-HOT-RACE-v9 deadloop+team-cache loaded
+[build] JOIN-HOT-RACE-v10 transition-stable tray recovery loaded
 ```
 
-Useful v9 lines include:
+Useful lines include:
 
 ```text
 [rally-v9] stale Rally entry recovered (...); workflow/latch cleared, no blind click sent
@@ -166,6 +182,8 @@ Useful v9 lines include:
 [team-cache] confirmed dispatch => T1=BUSY; remaining known-idle level ceiling recalculated
 [team-cache] using known fixed-team availability; Rally-row ceiling=55
 [team-cache] invalidated (world-map squad count changed 2/3 -> 1/3)
+[team3] all-busy tray candidate observed after formation grace; waiting for stable confirmation (normal Attack polling continues)
+[team3] stable all-busy tray confirmed after transition guard
 ```
 
 Existing race-path logs remain useful:
@@ -190,7 +208,10 @@ Tests must continue proving:
 - RallyPage/GoldMob progress disarms the deadloop watch;
 - last-moment Join revalidation uses a small fresh capture;
 - a vanished Join control cancels the stale click;
-- the normal formation fixture is not mistaken for the tray-only state;
+- normal formation detection keeps running during the v10 tray-recovery grace period;
+- v10 cannot probe/dismiss an all-busy tray during the first 1.0 second after the Rally-row `+` click;
+- v10 requires stable BUSY/BUSY/BUSY evidence before delegating to the existing fresh v7 dismiss proof;
+- any IDLE/UNKNOWN evidence cancels pending tray recovery;
 - all-busy tray recovery exits without team-card or Attack input;
 - validated fixed-slot states populate the exact-team cache;
 - a confirmed dispatch marks only the selected fixed Team BUSY in cache;
