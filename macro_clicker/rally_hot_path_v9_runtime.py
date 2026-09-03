@@ -246,7 +246,7 @@ def _cached_level_cap(engine):
         for team_number in priority
     ):
         return _rm._TEAM_LEVEL_CAP_UNSET
-    return available_rally_team_level_cap(states, limits, priority)
+    return available_rally_team_level_cap(states, limits, list(priority))
 
 
 def _mark_dispatched_team_busy(engine, team_number, now=None):
