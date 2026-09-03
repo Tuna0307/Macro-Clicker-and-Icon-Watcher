@@ -36,7 +36,9 @@ def main():
         sys.path.insert(0, APP_DIR)
     try:
         from macro_clicker.app import main as run_application
+        from macro_clicker.activity_clear_runtime import install_activity_clear_runtime
 
+        install_activity_clear_runtime()
         return run_application()
     except SystemExit as exc:
         # app.main() already reports expected non-zero exits (for example a
