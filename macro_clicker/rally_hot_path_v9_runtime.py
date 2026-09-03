@@ -209,9 +209,9 @@ def _invalidate_team_cache(engine, reason):
 
 
 def _cache_exact_fixed_states(engine, result):
-    if not _hot._is_three_team(engine):
+    if not _hot._is_three_team(engine) or not isinstance(result, dict):
         return
-    states = result.get("states", {}) if isinstance(result, dict) else {}
+    states = result.get("states", {})
     if not result.get("screen_valid") or any(
         states.get(team_number) not in {RALLY_TEAM_IDLE, RALLY_TEAM_BUSY}
         for team_number in (1, 2, 3)
@@ -317,9 +317,7 @@ def _read_world_squad_count(engine):
             ):
                 return count
 
-        one_template = loaded.get(1) or engine._load_template(
-            SQUAD_COUNT_TEMPLATES[1]
-        )
+        one_template = loaded[1]
         width = int(one_template.shape[1])
         start = min(width - 1, max(1, round(width * SQUAD_COUNT_SUFFIX_START_RATIO)))
         suffix = one_template[:, start:]
