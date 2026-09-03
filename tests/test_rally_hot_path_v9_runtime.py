@@ -34,6 +34,9 @@ class RallyHotPathV9RuntimeTests(unittest.TestCase):
         engine._rally_v9_expected_squad_count = None
         engine._rally_v9_expected_count_since = 0.0
         engine._rally_v9_last_count_poll = 0.0
+        engine._rally_v12_pending_squad_count = None
+        engine._rally_v12_pending_squad_since = 0.0
+        engine._rally_v12_last_expected_lag_log = None
         engine._reset_three_team_rally_state = lambda reason=None: None
         return engine
 
@@ -96,7 +99,12 @@ class RallyHotPathV9RuntimeTests(unittest.TestCase):
         }
         engine._rally_v9_last_squad_count = 2
 
-        changed = v9._observe_squad_count(engine, 1, now=20.0)
+        candidate = v9._observe_squad_count(engine, 1, now=20.0)
+
+        self.assertFalse(candidate)
+        self.assertTrue(engine._rally_v9_team_cache_valid)
+
+        changed = v9._observe_squad_count(engine, 1, now=20.5)
 
         self.assertTrue(changed)
         self.assertFalse(engine._rally_v9_team_cache_valid)
