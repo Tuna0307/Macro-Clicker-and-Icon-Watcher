@@ -75,6 +75,7 @@ class RallyHotPathV9RuntimeTests(unittest.TestCase):
 
     def test_confirmed_dispatch_marks_selected_team_busy_immediately(self):
         engine = self._engine()
+        selector = self._selector(engine)
         engine._rally_v9_team_cache_valid = True
         engine._rally_v9_team_states = {
             1: RALLY_TEAM_IDLE,
@@ -87,7 +88,8 @@ class RallyHotPathV9RuntimeTests(unittest.TestCase):
 
         self.assertEqual(engine._rally_v9_team_states[1], RALLY_TEAM_BUSY)
         self.assertEqual(engine._rally_v9_expected_squad_count, 2)
-        self.assertEqual(v9._cached_level_cap(engine), 55)
+        expected = max(selector.team2_max_level, selector.team3_max_level)
+        self.assertEqual(v9._cached_level_cap(engine), expected)
 
     def test_world_map_count_change_invalidates_exact_team_identity(self):
         engine = self._engine()
