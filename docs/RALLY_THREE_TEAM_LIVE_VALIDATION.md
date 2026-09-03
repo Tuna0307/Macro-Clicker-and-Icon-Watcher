@@ -15,7 +15,7 @@ The game visually defaults to Team 1, so a highlighted Team 1 card is not proof 
 
 For explicit three-team mode (`team_priority = [3, 2, 1]`), `Joining` derives its OCR ceiling from the highest configured enabled-team maximum when no exact team-availability cache is available.
 
-With the current live settings:
+With the original live settings:
 
 - Team 1 max = 65
 - Team 2 max = 55
@@ -23,6 +23,8 @@ With the current live settings:
 - broad Joining ceiling = 65
 
 Therefore Level 66+ rows are rejected before the `+` / Join control is clicked. Level 56–65 can only be dispatched by Team 1 at the final selection stage. Level 55 and below can use Teams 1/2/3 according to the fresh fixed-slot idle/busy state and priority.
+
+The user may change these maxima locally; the runtime must always use the scenario/config values actually loaded for the current run.
 
 ### Live Attack/formation screen anchor
 
@@ -83,7 +85,7 @@ A later live run reached the correct formation state and selected the correct fi
 v8 corrects that transition:
 
 - the world-map Rally click gets the working two-team 0.3 second entry settle;
-- the configured random 1.0–1.5 second dispatch delay is consumed once after Team selection;
+- the configured random dispatch delay is consumed once after Team selection;
 - only the exact `Attack.png` target is freshly revalidated after that delay;
 - if fresh Attack is proven, it is clicked through the normal safe input path;
 - if fresh Attack is not proven, no Attack input is sent.
@@ -110,7 +112,7 @@ The fixed formation slots remain the only authoritative Team identity source. v9
 
 After a successful dispatch, the selected fixed Team is immediately marked `BUSY` in the cache. `Joining` then computes its level ceiling from only the remaining known-IDLE teams.
 
-For the current settings T1=65, T2=55, T3=55:
+For the original settings T1=65, T2=55, T3=55:
 
 - if T1 is known BUSY while T2/T3 are known IDLE, the effective Rally-page ceiling is 55;
 - a Lv56–65 row is rejected by the level filter before another `+` click;
@@ -118,11 +120,7 @@ For the current settings T1=65, T2=55, T3=55:
 
 The world-map squad counter is used only to determine whether the cached identity may have become stale. It never maps a visible row or count position to a Team number.
 
-- expected `count + 1` after the macro's own confirmed dispatch preserves the exact-team cache;
-- an unexpected count change invalidates exact Team identity because a Team may have returned;
-- if the expected post-dispatch count increase never appears after the short settle window, the cache is invalidated rather than trusted.
-
-Once invalidated, the macro falls back to the broad configured ceiling (currently 65) until another validated fixed formation screen re-establishes exact Team 1/2/3 state. Final dispatch remains fail-closed and always uses a fresh fixed-slot read.
+v9 originally invalidated the exact cache immediately on an unexpected count change and also invalidated it if an expected post-dispatch count increment failed to appear after the short settle window. The 22:55 live run later proved that policy was too aggressive; v12 supersedes that staleness behavior while preserving the same exact-team cache and level-ceiling model.
 
 ## Third live failure: transient tray misclassified as all-busy
 
@@ -134,7 +132,7 @@ The relevant sequence was:
 2. The final `+` was revalidated at score `1.000` and clicked at `21:57:22.814`.
 3. At `21:57:23.266` — only about **0.45 seconds later** — v7 logged `fixed squad tray shows T1=BUSY T2=BUSY T3=BUSY` and immediately performed its tray-dismiss recovery.
 4. The macro then cleared the Rally workflow.
-5. The game continued rendering and ended on a normal formation screen with the central troop panel, blue `出征`/Attack button, and visible ZZ team-status glyphs.
+5. The game continued rendering and ended on a normal formation screen with the central troop panel, Attack button, and visible ZZ team-status glyphs.
 6. Because `Attack Confirm` had already been disabled by the false tray recovery, the macro had nothing left that could advance that screen and only the background MisClick Base watchdog continued running.
 
 The uploaded screenshot therefore is **not** the true all-busy tray state. It is the normal formation screen that completed after v7 had already made its decision on a partially rendered transition frame.
@@ -153,6 +151,70 @@ After a successful Rally-row `+` click:
 - any normal formation evidence, any IDLE, or any UNKNOWN cancels the pending tray recovery.
 
 This gives a genuine tray-only state time to prove itself without adding latency to successful formation/Attack handling.
+
+## Fourth live failure: v9 entry watchdog survived beyond entry phase
+
+A later live run successfully reached the Rally page, OCR'd an eligible row, freshly revalidated the row `+`, and clicked it. While the normal formation screen was opening, the world-map Rally icon became visible again underneath/around the transition.
+
+The v9 watchdog was still armed from the original world-map entry click and interpreted that background Rally icon as proof that initial entry had failed. It cleared the Rally workflow before `Attack Confirm`, leaving the completed formation screen with no active macro action.
+
+## v11 correction: phase-correct entry watchdog
+
+v11 makes the v9 deadloop watcher entry-only:
+
+- the watcher is valid only during world-map -> Rally-page entry;
+- positively reaching the `Joining` action disarms it;
+- a carried `_pending_rally_level` proves the workflow is already beyond initial entry;
+- an active formation-opening guard also proves the workflow is beyond initial entry;
+- once any of that progress exists, a later visible Rally icon cannot clear the workflow.
+
+No new sleep is added and the genuine failed-initial-entry v9 recovery remains available.
+
+## Fifth live failure: correct OCR, wrong availability ceiling after cache invalidation
+
+The 22:55 live run exposed why a high-level row could still receive a `+` click even though the final team selector correctly knew no capable team remained.
+
+The important sequence was:
+
+1. `Lv65` was accepted while all three fixed slots were IDLE.
+2. Team 1 was selected and successfully dispatched.
+3. v9 immediately marked exact cached Team 1 as BUSY.
+4. The world-map sidebar still appeared as `0/3` instead of the expected `1/3` long enough to exceed v9's old 0.75 second settle window.
+5. v9 invalidated the exact fixed-team cache.
+6. The next `Lv70` OCR read was correct, but `Joining` fell back to the broad configured maximum (80 in that local run), so `Lv70` was accepted and its `+` was clicked.
+7. The fresh final fixed-slot detector then proved `T1=BUSY, T2=IDLE, T3=IDLE` and correctly backed out because neither T2 nor T3 could handle Lv70.
+8. A subsequent `1/3 -> 0/3` sidebar observation invalidated the newly refreshed cache again, allowing the same Lv70 mistake to repeat.
+
+Therefore this failure was not caused by OCR and not caused by final Team selection. A weaker/lagging sidebar count was erasing stronger exact fixed-slot evidence too quickly.
+
+## v12 correction: stable squad-count cache guard and Mob2-style level refresh
+
+v12 keeps the exact fixed-slot cache authoritative across short sidebar lag and makes the existing wrong-level Back -> reopen flow effective before any `+` input.
+
+### Count evidence ordering
+
+- count polling is suppressed while Rally entry is latched or the formation-opening guard is active;
+- the world-map Rally icon must be positively visible before a sidebar count may affect the cache;
+- a single unexpected count change is only a candidate, not immediate invalidation;
+- `1/3`, `2/3`, and `3/3` changes require at least 0.45 second stable confirmation;
+- inferred `0/3` requires at least 2.0 seconds stable confirmation because there is no dedicated `0/3` template;
+- after the macro itself confirms a dispatch, the known fixed Team it sent remains authoritative while the expected count increment is merely delayed;
+- the expected increment may arrive later and still preserves cache;
+- only a prolonged 30-second failure to ever observe the expected increment invalidates that exact cache conservatively;
+- every new validated fixed-slot capture cancels a pending count-change candidate because fixed slots are stronger evidence.
+
+### Wrong-level refresh behavior
+
+The three-team `Joining` action already contains the same no-match recovery shape as the working `Rally gold mob_ 2 team` flow. When OCR resolves a level above the known available-team ceiling:
+
+1. the row is marked ineligible;
+2. the row `+` is **not** revalidated and is **not** clicked;
+3. the positively matched `BackButton.png` is clicked;
+4. the Rally sub-steps are disabled;
+5. the workflow returns to the world map;
+6. the normal Rally scanner can reopen the Rally page immediately and inspect the refreshed list.
+
+For example, if local limits are T1=80, T2=55, T3=55 and the exact cache says `T1=BUSY, T2=IDLE, T3=IDLE`, then the known available-team ceiling is 55. A Lv70 row must produce an `available-team max 55` rejection and Back recovery, with **no** row `+` click.
 
 ## Screenshot regression evidence
 
@@ -178,11 +240,12 @@ The all-busy tray classifier continues to reuse the committed `212029` BUSY / BU
 - Final Team identity still comes only from fixed Team 1/2/3 slots.
 - `UNKNOWN` never qualifies.
 - Cached availability can only reject unnecessary Rally rows earlier; it cannot authorize final dispatch.
-- An unexpected world-map squad-count change invalidates cached Team identity.
-- Deadloop timeout recovery sends no blind click.
+- A lagging sidebar count cannot immediately erase stronger exact fixed-slot knowledge.
+- An unrelated sidebar count must be stable on a positively proven world map before invalidating cached identity.
+- The v9 deadloop timeout is valid only during initial Rally entry and sends no blind click.
 - Full-screen MisClick Base coverage remains available where a Base popup can occur.
 - Final Attack remains positively image-proven immediately before input.
-- The legacy two-team runtime is unchanged.
+- The legacy two-team runtime/scenario is unchanged.
 
 ## Current live markers
 
@@ -193,19 +256,28 @@ A current explicit-three-team run should include:
 [build] JOIN-HOT-RACE-v8 mob2-paced dispatch loaded
 [build] JOIN-HOT-RACE-v9 deadloop+team-cache loaded
 [build] JOIN-HOT-RACE-v10 transition-stable tray recovery loaded
+[build] JOIN-HOT-RACE-v11 phase-correct entry watchdog loaded
+[build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
 ```
 
 Useful current lines include:
 
 ```text
 [rally-v9] stale Rally entry recovered (...); workflow/latch cleared, no blind click sent
+[rally-v11] entry watchdog disarmed (...)
 [team-cache] exact fixed slots cached: T1=... T2=... T3=...
 [team-cache] confirmed dispatch => T1=BUSY; remaining known-idle level ceiling recalculated
+[team-cache] sidebar count still 0/3 while confirmed dispatch expects 1/3; preserving exact fixed-team cache
 [team-cache] using known fixed-team availability; Rally-row ceiling=55
-[team-cache] invalidated (world-map squad count changed 2/3 -> 1/3)
+[skip] row center=(...) level read 70; 70 > available-team max 55
+[no-match] click condition #2 (...)
+[team-cache] candidate world-map squad change 2/3 -> 1/3; require 0.45s stable confirmation
+[team-cache] invalidated (stable world-map squad count changed 2/3 -> 1/3)
 [team3] all-busy tray candidate observed after formation grace; waiting for stable confirmation (normal Attack polling continues)
 [team3] stable all-busy tray confirmed after transition guard
 ```
+
+For an ineligible row there must be no subsequent `[rally-fast] revalidated last-slot +` or `click matching row` for that row.
 
 ## Validation target
 
@@ -215,12 +287,17 @@ Focused tests now cover:
 - shifted/broader `3/3` detection;
 - all-busy tray classification/recovery;
 - v8 fresh Attack-only post-selection dispatch;
-- v9 fast recovery when RallyIcon reappears;
+- v9 fast recovery when RallyIcon reappears during true initial entry;
 - v9 2.5 second no-progress recovery without blind input;
+- v11 suppressing stale entry recovery after Rally-page/formation progress;
 - exact fixed-Team cache population and selected-Team BUSY update;
 - reduced Rally-row ceiling from remaining known-IDLE Teams;
 - expected own-dispatch counter increment preserving cache;
-- unexpected squad-count change invalidating cached identity;
+- lagging own-dispatch count preserving cache instead of invalidating after 0.75 seconds;
+- a late expected count increment preserving cache;
+- stable confirmation before unrelated count changes invalidate cached identity;
+- the longer confirmation required for inferred `0/3`;
+- world-map proof before count polling may affect the cache;
 - v10 preventing any tray probe/dismiss during the formation-transition grace period;
 - v10 requiring stable BUSY/BUSY/BUSY before the existing fresh v7 dismiss proof;
 - IDLE evidence cancelling a pending tray-recovery candidate;
