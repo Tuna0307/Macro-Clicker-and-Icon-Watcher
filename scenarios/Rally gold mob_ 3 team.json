@@ -781,8 +781,8 @@
             -189,
             168
           ],
-          "team1_max_level": 65,
-          "team2_max_level": 55,
+          "team1_max_level": 80,
+          "team2_max_level": 60,
           "team2_click_offset": [
             -63,
             168
@@ -797,7 +797,7 @@
             63,
             168
           ],
-          "team3_max_level": 55,
+          "team3_max_level": 60,
           "team_priority": [
             3,
             2,
