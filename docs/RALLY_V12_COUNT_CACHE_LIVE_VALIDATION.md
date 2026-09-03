@@ -25,17 +25,18 @@ The same Lv70 row was then clicked again because another fast `1/3 -> 0/3` count
 
 The problem was therefore **not OCR** and **not the final Team selector**. The problem was evidence ordering: a lagging/transitioning sidebar count was allowed to erase stronger exact fixed-slot knowledge too quickly.
 
-## Existing mob_2-style refresh path
+## Existing mob_2-style refresh shape
 
-The three-team `Joining` action already has the same no-match recovery shape used by the working two-team Rally flow:
+The three-team `Joining` action has the same no-match Back shape used by the working two-team Rally flow:
 
 - OCR/level filtering finds no eligible row;
 - `no_match_condition_index` targets `BackButton.png`;
 - the Back button closes the Rally page;
-- `Joining`, `Attack Confirm`, `Back if wrong mob`, and `Back if no slot` are disabled;
-- the world-map Rally scanner immediately resumes and can reopen the Rally page.
+- `Joining`, `Attack Confirm`, `Back if wrong mob`, and `Back if no slot` are disabled.
 
-Therefore v12 does not add a new refresh click. It fixes the availability state so an invalid level actually reaches this existing Back -> reopen branch **before** any row `+` click.
+v12's responsibility is to preserve the correct availability evidence long enough for an invalid level to reach this branch **before** any row `+` click.
+
+A later 2026-09-04 live run proved one additional runtime detail was missing: the internal no-match Back bypassed v7's named Back-action latch-release hook. The page closed correctly, but `_rally_hot_entry_latched` remained true and suppressed the visible world-map Rally icon indefinitely. That continuation bug is corrected by v13 and documented in `RALLY_V13_NO_MATCH_BACK_LIVE_VALIDATION.md`.
 
 ## v12 correction
 
@@ -82,7 +83,7 @@ T1=BUSY T2=IDLE T3=IDLE
 
 then the Rally-page ceiling must be 60.
 
-For a Lv70 row the desired sequence is:
+For a Lv70 row the desired v12 filtering sequence is:
 
 ```text
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
@@ -101,14 +102,21 @@ click matching row
 
 for that rejected Lv70 row.
 
-After Back, the normal scanner may reopen Rally immediately, matching the working `Rally gold mob_ 2 team` refresh behavior.
+With v13 installed after v12, a successful Back fallback is followed by:
 
-## Build marker
+```text
+[rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
+```
 
-A current explicit three-team run must now include:
+and the normal scanner may then reopen Rally when `RallyIcon.png` remains visible.
+
+## Build markers
+
+A current explicit three-team run must include:
 
 ```text
 [build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
+[build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
 ```
 
 The earlier v7-v11 build markers remain expected as well.
@@ -124,5 +132,7 @@ v12 tests cover:
 - squad-count polling being suppressed while Rally entry is latched;
 - world-map Rally-icon proof being required before count polling can affect cache validity; and
 - Rally tests deriving expectations from the selector maxima loaded from the scenario instead of hard-coding old values.
+
+v13 separately covers the successful no-match Back -> latch release continuation and its fail-closed guards.
 
 The legacy two-team scenario is not modified.
