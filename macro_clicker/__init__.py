@@ -26,6 +26,10 @@ from .rally_hot_path_v11_runtime import install_rally_hot_path_v11_runtime
 
 install_rally_hot_path_v11_runtime()
 
+from .rally_hot_path_v12_runtime import install_rally_hot_path_v12_runtime
+
+install_rally_hot_path_v12_runtime()
+
 del install_rally_three_team_runtime
 del install_rally_hot_path_runtime
 del install_rally_hot_path_v7_runtime
@@ -33,3 +37,4 @@ del install_rally_hot_path_v8_runtime
 del install_rally_hot_path_v9_runtime
 del install_rally_hot_path_v10_runtime
 del install_rally_hot_path_v11_runtime
+del install_rally_hot_path_v12_runtime
