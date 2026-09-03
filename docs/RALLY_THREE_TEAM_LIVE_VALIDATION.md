@@ -124,6 +124,36 @@ The world-map squad counter is used only to determine whether the cached identit
 
 Once invalidated, the macro falls back to the broad configured ceiling (currently 65) until another validated fixed formation screen re-establishes exact Team 1/2/3 state. Final dispatch remains fail-closed and always uses a fresh fixed-slot read.
 
+## Third live failure: transient tray misclassified as all-busy
+
+The 21:57 live run exposed a different race from the real all-busy tray case.
+
+The relevant sequence was:
+
+1. `Joining` positively found a Gold rally and accepted `Lv.65`.
+2. The final `+` was revalidated at score `1.000` and clicked at `21:57:22.814`.
+3. At `21:57:23.266` — only about **0.45 seconds later** — v7 logged `fixed squad tray shows T1=BUSY T2=BUSY T3=BUSY` and immediately performed its tray-dismiss recovery.
+4. The macro then cleared the Rally workflow.
+5. The game continued rendering and ended on a normal formation screen with the central troop panel, blue `出征`/Attack button, and visible ZZ team-status glyphs.
+6. Because `Attack Confirm` had already been disabled by the false tray recovery, the macro had nothing left that could advance that screen and only the background MisClick Base watchdog continued running.
+
+The uploaded screenshot therefore is **not** the true all-busy tray state. It is the normal formation screen that completed after v7 had already made its decision on a partially rendered transition frame.
+
+## v10 correction: transition-stable tray recovery
+
+v10 keeps the real v7 all-busy recovery but prevents it from treating a half-rendered formation transition as authoritative.
+
+After a successful Rally-row `+` click:
+
+- tray-only recovery is prohibited for the first **1.0 second**;
+- this is not a blocking sleep: normal engine polling and `Attack Confirm` detection continue immediately, so a normal formation screen can advance as soon as it appears;
+- after the grace period, BUSY/BUSY/BUSY must first be observed as a candidate;
+- the candidate must remain BUSY/BUSY/BUSY for at least **0.25 second**;
+- only then is control delegated back to the existing v7 recovery, which performs another fresh tray capture immediately before any dismiss click;
+- any normal formation evidence, any IDLE, or any UNKNOWN cancels the pending tray recovery.
+
+This gives a genuine tray-only state time to prove itself without adding latency to successful formation/Attack handling.
+
 ## Screenshot regression evidence
 
 The existing committed fixed-slot matrix remains:
@@ -142,7 +172,9 @@ The all-busy tray classifier continues to reuse the committed `212029` BUSY / BU
 ## Safety contract
 
 - A positively proven `3/3` must never dispatch.
-- A validated all-busy tray must never dispatch.
+- A validated, transition-stable all-busy tray must never dispatch.
+- Tray-only recovery cannot fire during the first 1.0 second after a valid Rally-row `+` click.
+- BUSY/BUSY/BUSY must remain stable and then pass v7's final fresh proof before a dismiss click is allowed.
 - Final Team identity still comes only from fixed Team 1/2/3 slots.
 - `UNKNOWN` never qualifies.
 - Cached availability can only reject unnecessary Rally rows earlier; it cannot authorize final dispatch.
@@ -160,9 +192,10 @@ A current explicit-three-team run should include:
 [build] JOIN-HOT-RACE-v7 full-squad recovery loaded
 [build] JOIN-HOT-RACE-v8 mob2-paced dispatch loaded
 [build] JOIN-HOT-RACE-v9 deadloop+team-cache loaded
+[build] JOIN-HOT-RACE-v10 transition-stable tray recovery loaded
 ```
 
-Useful v9 lines include:
+Useful current lines include:
 
 ```text
 [rally-v9] stale Rally entry recovered (...); workflow/latch cleared, no blind click sent
@@ -170,6 +203,8 @@ Useful v9 lines include:
 [team-cache] confirmed dispatch => T1=BUSY; remaining known-idle level ceiling recalculated
 [team-cache] using known fixed-team availability; Rally-row ceiling=55
 [team-cache] invalidated (world-map squad count changed 2/3 -> 1/3)
+[team3] all-busy tray candidate observed after formation grace; waiting for stable confirmation (normal Attack polling continues)
+[team3] stable all-busy tray confirmed after transition guard
 ```
 
 ## Validation target
@@ -186,6 +221,9 @@ Focused tests now cover:
 - reduced Rally-row ceiling from remaining known-IDLE Teams;
 - expected own-dispatch counter increment preserving cache;
 - unexpected squad-count change invalidating cached identity;
+- v10 preventing any tray probe/dismiss during the formation-transition grace period;
+- v10 requiring stable BUSY/BUSY/BUSY before the existing fresh v7 dismiss proof;
+- IDLE evidence cancelling a pending tray-recovery candidate;
 - legacy two-team delegation.
 
 The repository still carries the pre-existing historical Auto Gather expectation mismatch: the test expects 12 level-up clicks while the historical scenario contains 15. CI results must distinguish that known failure from Rally regressions.
