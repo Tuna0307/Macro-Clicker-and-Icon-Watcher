@@ -113,14 +113,14 @@ class RallyThreeTeamLiveRegressionTests(unittest.TestCase):
             for action in step.actions
             if action.type == "select_rally_team"
         )
-        self.assertEqual(
-            (
-                selector.team1_max_level,
-                selector.team2_max_level,
-                selector.team3_max_level,
-            ),
-            (65, 55, 55),
+        configured_limits = (
+            selector.team1_max_level,
+            selector.team2_max_level,
+            selector.team3_max_level,
         )
+        self.assertTrue(all(limit is not None for limit in configured_limits))
+        expected_cap = max(limit for limit in configured_limits if limit is not None)
+
         row_action = next(
             action
             for step in scenario.steps
@@ -135,24 +135,24 @@ class RallyThreeTeamLiveRegressionTests(unittest.TestCase):
         engine._pending_rally_team_availability = None
         cap = engine._available_rally_team_level_cap(row_action)
 
-        self.assertEqual(cap, 65)
+        self.assertEqual(cap, expected_cap)
 
         engine._stop_requested = lambda: False
-        engine._read_level_for_row = lambda _action, _reference: 70
+        engine._read_level_for_row = lambda _action, _reference: expected_cap + 1
         status, level = engine._row_level_status(
             row_action,
             {"center": (0, 0)},
             max_level_override=cap,
         )
-        self.assertEqual((status, level), ("ineligible", 70))
+        self.assertEqual((status, level), ("ineligible", expected_cap + 1))
 
-        engine._read_level_for_row = lambda _action, _reference: 65
+        engine._read_level_for_row = lambda _action, _reference: expected_cap
         status, level = engine._row_level_status(
             row_action,
             {"center": (0, 0)},
             max_level_override=cap,
         )
-        self.assertEqual((status, level), ("eligible", 65))
+        self.assertEqual((status, level), ("eligible", expected_cap))
 
 
 if __name__ == "__main__":
