@@ -154,6 +154,68 @@ class RallyThreeTeamLiveRegressionTests(unittest.TestCase):
         )
         self.assertEqual((status, level), ("eligible", expected_cap))
 
+    def test_over_available_team_limit_selects_no_plus_and_uses_back_fallback(self):
+        scenario = load_scenario("Rally gold mob_ 3 team")
+        joining_step = next(step for step in scenario.steps if step.name == "Joining")
+        row_action = next(
+            action
+            for action in joining_step.actions
+            if action.type == "click_matching_row"
+        )
+        selector = next(
+            action
+            for step in scenario.steps
+            for action in step.actions
+            if action.type == "select_rally_team"
+        )
+        remaining_cap = max(selector.team2_max_level, selector.team3_max_level)
+        rejected_level = remaining_cap + 10
+
+        engine = object.__new__(MacroEngine)
+        engine.scenario = scenario
+        engine.log_messages = []
+        engine.log = engine.log_messages.append
+        engine._pending_rally_team_availability = None
+        engine._rally_v9_team_cache_valid = True
+        engine._rally_v9_team_states = {
+            1: RALLY_TEAM_BUSY,
+            2: RALLY_TEAM_IDLE,
+            3: RALLY_TEAM_IDLE,
+        }
+        engine._rally_v9_last_cached_cap_log = object()
+        engine._begin_level_diagnostic_generation = lambda: None
+        engine._stop_requested = lambda: False
+        engine._read_level_for_row = lambda _action, _reference: rejected_level
+
+        reference = {"center": (100, 100), "scale_x": 1.0, "scale_y": 1.0}
+        join_plus = {"center": (200, 100), "scale_x": 1.0, "scale_y": 1.0}
+        matches = {
+            row_action.match_condition_index: [reference],
+            row_action.on_condition_index: [join_plus],
+        }
+
+        selections, had_unreadable_level = engine._find_matching_row_selections(
+            row_action,
+            matches,
+            apply_level_filter=True,
+        )
+
+        self.assertEqual(selections, [])
+        self.assertFalse(had_unreadable_level)
+        self.assertTrue(
+            any(
+                f"> available-team max {remaining_cap}" in line
+                for line in engine.log_messages
+            )
+        )
+        self.assertEqual(row_action.no_match_condition_index, 2)
+        self.assertEqual(
+            joining_step.conditions[row_action.no_match_condition_index].template_path,
+            "templates/BackButton.png",
+        )
+        self.assertIn("Joining", row_action.no_match_disable_steps)
+        self.assertIn("Attack Confirm", row_action.no_match_disable_steps)
+
 
 if __name__ == "__main__":
     unittest.main()
