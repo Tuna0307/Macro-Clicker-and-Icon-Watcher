@@ -125,7 +125,10 @@ class RallyHotPathV9RuntimeTests(unittest.TestCase):
         engine = self._engine()
         engine._rally_hot_entry_latched = True
         engine._rally_v9_expect_rally_since = 40.0
-        engine._pending_rally_level = 55
+        # This fixture represents a failed *initial* world-map -> Rally-page entry.
+        # A pending Rally level would prove the Rally page had already progressed,
+        # so v11 correctly suppresses this entry-only recovery in that later phase.
+        engine._pending_rally_level = None
         engine._click_point = lambda *_args, **_kwargs: self.fail("blind click sent")
         for step in engine.scenario.steps:
             if step.name in {
