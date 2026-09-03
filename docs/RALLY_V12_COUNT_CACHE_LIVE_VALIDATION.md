@@ -66,28 +66,28 @@ A new exact fixed-slot formation capture immediately cancels any pending count-c
 
 ## Expected level-rejection behavior
 
-Example when configuration is:
+The selector maxima are editable and must never be hard-coded by the runtime or tests. At the time of this validation, the committed three-team selector is:
 
 ```text
 T1 max = 80
-T2 max = 55
-T3 max = 55
+T2 max = 60
+T3 max = 60
 ```
 
-and the exact cache says:
+If the exact cache says:
 
 ```text
 T1=BUSY T2=IDLE T3=IDLE
 ```
 
-then the Rally-page ceiling must be 55.
+then the Rally-page ceiling must be 60.
 
 For a Lv70 row the desired sequence is:
 
 ```text
-[team-cache] using known fixed-team availability; Rally-row ceiling=55
+[team-cache] using known fixed-team availability; Rally-row ceiling=60
 [level] ... read 70
-[skip] ... 70 > available-team max 55
+[skip] ... 70 > available-team max 60
 [skip] 'Joining' no valid matching row target
 [no-match] click condition #2 (...BackButton...)
 ```
@@ -121,7 +121,8 @@ v12 tests cover:
 - the expected increment arriving late without invalidating the cache;
 - derived `0/3` requiring the longer stable confirmation;
 - positive count changes using the shorter confirmation;
-- squad-count polling being suppressed while Rally entry is latched; and
-- world-map Rally-icon proof being required before count polling can affect cache validity.
+- squad-count polling being suppressed while Rally entry is latched;
+- world-map Rally-icon proof being required before count polling can affect cache validity; and
+- Rally tests deriving expectations from the selector maxima loaded from the scenario instead of hard-coding old values.
 
 The legacy two-team scenario is not modified.
