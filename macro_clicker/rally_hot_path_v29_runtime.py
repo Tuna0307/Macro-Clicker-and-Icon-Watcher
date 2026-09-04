@@ -1,17 +1,17 @@
 """Let persistent derived 0/3 evidence escape the v26 all-busy guard.
 
 A 2026-09-05 v28 live run exposed a continuity bug in the v26 derived-zero
-guard.  After a confirmed third-Team dispatch the exact cache correctly became
+guard. After a confirmed third-Team dispatch the exact cache correctly became
 T1=BUSY T2=BUSY T3=BUSY while the world-map sidebar still showed 2/3 and the
-confirmed dispatch expected 3/3.  The weak derived 0/3 detector then stayed
+confirmed dispatch expected 3/3. The weak derived 0/3 detector then stayed
 positive for many seconds.
 
 v26 intentionally keeps derived 0/3 out of v12 for an extra three seconds, but
 its implementation also cleared v12's pending zero-count candidate on every
-sample *after* that guard had opened.  Once v14's 30-second unresolved-dispatch
+sample *after* that guard had opened. Once v14's 30-second unresolved-dispatch
 horizon finally expired, v12 repeatedly logged a new
 ``2/3 -> 0/3; require 2s stable confirmation`` candidate whose age was reset to
-zero on every poll.  The exact all-busy cache could therefore never invalidate,
+zero on every poll. The exact all-busy cache could therefore never invalidate,
 so v22 hard-blocked Rally indefinitely even while the visible sidebar was 0/3.
 
 v29 keeps the same evidence hierarchy but fixes the hand-off:
@@ -26,7 +26,7 @@ v29 keeps the same evidence hierarchy but fixes the hand-off:
   recognize that the required two-second stability has long been satisfied;
 * any positive broad 3/3 proof still cancels the zero candidate immediately.
 
-This only invalidates stale identity.  It never infers which Team returned.
+This only invalidates stale identity. It never infers which Team returned.
 Rally-row filtering may become less restrictive after invalidation, but final
 Attack still requires a fresh fixed Team 1/2/3 read and fresh Attack target.
 Legacy two-team behavior is untouched.
@@ -52,6 +52,7 @@ def _reset_v29_zero_state(engine, *, clear_v12_candidate=False):
     _v26._reset_zero_guard(engine)
     engine._rally_v29_zero_released = False
     engine._rally_v29_last_release_log = 0.0
+    engine._rally_v29_stale_seed_logged = False
     if clear_v12_candidate:
         _v12._clear_count_candidate(engine)
 
@@ -83,13 +84,13 @@ def _seed_persistent_zero_candidate_if_stale_expected(engine, now, zero_since):
 
     engine._rally_v12_pending_squad_count = 0
     engine._rally_v12_pending_squad_since = float(zero_since)
-    _log_release(
-        engine,
-        "derived 0/3 remained persistent through the "
-        f"{expected_age:.1f}s unresolved-dispatch horizon; "
-        "reusing its original observation time for v12 stable-change confirmation",
-        now,
-    )
+    if not getattr(engine, "_rally_v29_stale_seed_logged", False):
+        engine._rally_v29_stale_seed_logged = True
+        engine.log(
+            "  [rally-v29] derived 0/3 remained persistent through the "
+            f"{expected_age:.1f}s unresolved-dispatch horizon; "
+            "reusing its original observation time for v12 stable-change confirmation"
+        )
     return True
 
 
@@ -120,6 +121,7 @@ def _observe_squad_count(engine, count, now=None):
         _v12._clear_count_candidate(engine)
         engine._rally_v26_zero_candidate_since = now
         engine._rally_v29_zero_released = False
+        engine._rally_v29_stale_seed_logged = False
         _log_release(
             engine,
             "derived 0/3 conflicts with exact T1=BUSY T2=BUSY T3=BUSY; "
@@ -173,6 +175,7 @@ def install_rally_hot_path_v29_runtime():
     def start(self):
         self._rally_v29_zero_released = False
         self._rally_v29_last_release_log = 0.0
+        self._rally_v29_stale_seed_logged = False
         result = _ORIGINAL_START(self)
         if _hot._is_three_team(self):
             self.log(f"[build] {BUILD_MARKER} loaded")
