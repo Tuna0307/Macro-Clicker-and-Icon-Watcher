@@ -6,7 +6,7 @@ This document describes the speed-sensitive runtime used only by explicit three-
 
 Rally joining is a race. The macro should spend CPU/time on expensive safety work only when that work can actually matter, while preserving fail-closed final Team selection.
 
-The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, v14 post-dispatch count backtrack guard, v15 multi-row no-slot Back routing, and v16 Lv80+ GoldMob identity support.
+The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, v14 post-dispatch count backtrack guard, v15 multi-row no-slot Back routing, v16 Lv80+ GoldMob identity support, and v17 fixed-panel Profile recovery.
 
 ## World-map loop
 
@@ -189,6 +189,26 @@ MisClick Base keeps full-screen coverage but is scheduled only around states whe
 
 MisClick Profile is armed around the Rally-row `+` race. Immediately before input, the selected `Join.png` control is freshly revalidated in a small local crop. If the `+` vanished, the stale click is cancelled before a replacement portrait can receive it.
 
+### v17 fixed-panel Profile recovery
+
+A 2026-09-04 live run exposed a second Profile-misclick boundary. A Lv75 Rally reached the final fixed Team screen and correctly proved `T1=BUSY T2=BUSY T3=BUSY`. The normal three-team abort then dismissed the formation panel with the existing outside-panel click above its validated anchor. That click landed on a world-map player and opened the player-profile popup.
+
+Before v17, `select_rally_team` had already disarmed the event-gated `MisClick Profile` detector. The popup was therefore visible but the scenario never evaluated its existing `FriendStatus.png` recovery step, so the Rally loop stalled after the panel-dismiss log.
+
+v17 treats `_dismiss_fixed_rally_team_panel()` as another risky click in explicit three-team mode. Before the unchanged dismissal input it arms the existing Profile detector for a bounded 3-second window. Recovery still requires positive `FriendStatus.png` evidence; v17 adds no blind popup click. If the dismissal itself fails, the previous Profile-gate state is restored. If no popup appears, a v17-owned temporary gate expires instead of remaining armed indefinitely.
+
+Expected continuation when the outside-panel dismissal happens to open a player profile is:
+
+```text
+[rally-v17] fixed-panel outside dismissal armed Profile recovery
+[fire] MisClick Profile
+[rally-fast] profile misclick recovered; rescan immediately
+```
+
+The existing v7 abort path still releases the Rally-entry latch after the failed/no-capable-Team `select_rally_team` action, so once the profile popup is closed the normal world-map scanner can resume.
+
+The legacy two-team path is unchanged.
+
 ## Full-squad tray recovery
 
 When all three squads are already out, clicking a valid Rally row `+` can expose only the fixed bottom squad-card tray instead of the normal formation panel.
@@ -265,6 +285,7 @@ A current explicit three-team run should include:
 [build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
 [build] JOIN-HOT-RACE-v15 multi-row no-slot Back routing loaded
 [build] JOIN-HOT-RACE-v16 high-level GoldMob variant loaded
+[build] JOIN-HOT-RACE-v17 fixed-panel profile recovery loaded
 ```
 
 Useful current logs include:
@@ -280,6 +301,7 @@ Useful current logs include:
 [rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
 [rally-v15] GoldMob found but no same-row Join +; routing to no-match Back refresh
 [rally-v16] Lv80+ GoldMob artwork matched; treating row as GoldMob
+[rally-v17] fixed-panel outside dismissal armed Profile recovery
 ```
 
 For a row above the available-team ceiling, expected logs are:
@@ -322,5 +344,9 @@ Tests must continue proving:
 - the normal lower-level GoldMob match stays authoritative before v16's alternate check;
 - the confirmed Lv80+ GoldMob artwork can satisfy the same three-team GoldMob condition when the original artwork misses;
 - OCR/team-cap filtering still independently rejects a visually valid Lv80 row when no capable Team is available;
-- two-team and unrelated conditions are unchanged by v16; and
+- a three-team fixed-panel outside dismissal arms Profile recovery before input;
+- a failed fixed-panel dismissal restores the previous Profile-gate state;
+- a v17-owned Profile gate expires after its bounded window if no popup appears;
+- a positively detected Profile popup can use the existing recovery click and resume the Rally loop;
+- two-team and unrelated conditions are unchanged by v16/v17; and
 - the existing fixed-slot screenshot matrix and fail-closed final selection remain green.
