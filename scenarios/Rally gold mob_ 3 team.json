@@ -855,8 +855,8 @@
           "button": "left",
           "key": "",
           "hold": 0.0,
-          "seconds": 1.0,
-          "seconds_max": 1.5,
+          "seconds": 1.3,
+          "seconds_max": 1.7,
           "step_name": "",
           "set_enabled": true
         },
