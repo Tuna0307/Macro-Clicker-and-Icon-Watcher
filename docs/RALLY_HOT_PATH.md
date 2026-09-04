@@ -6,7 +6,7 @@ This document describes the speed-sensitive runtime used only by explicit three-
 
 Rally joining is a race. The macro should spend CPU/time on expensive safety work only when that work can actually matter, while preserving fail-closed final Team selection.
 
-The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, v14 post-dispatch count backtrack guard, and v15 multi-row no-slot Back routing.
+The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, v14 post-dispatch count backtrack guard, v15 multi-row no-slot Back routing, and v16 Lv80+ GoldMob identity support.
 
 ## World-map loop
 
@@ -159,6 +159,24 @@ Expected continuation is:
 
 The legacy two-team path is unchanged.
 
+## v16 Lv80+ GoldMob identity
+
+A user-confirmed 2026-09-04 screenshot showed that the gold mob changes artwork from level 80 onward. The existing `templates/GoldMob.png` represents the lower-level portrait, so a valid Lv80 gold Rally could otherwise be treated as a wrong mob even when Team 1 is allowed to handle level 80.
+
+v16 keeps the original GoldMob template as the first and authoritative identity check. Only when that positive condition misses in explicit three-team mode does it try the confirmed Lv80+ portrait. The alternate hit is returned through the same GoldMob condition index, so the existing v9 entry-progress proof, v15 row-local Join pairing, OCR level filter, Team ceiling, and no-match Back logic all continue unchanged.
+
+This does **not** make every Lv80 Rally a GoldMob. A row still needs to match either the original GoldMob artwork or the confirmed Lv80+ gold artwork. OCR then independently decides whether the level is eligible for a currently available Team.
+
+With the current editable limits `T1=80`, `T2=60`, `T3=60`, Lv80 can be accepted only while a capable Team 1 is available. If Team 1 is known BUSY, the current ceiling is 60 and the same Lv80 gold row must be rejected before any `+` click.
+
+Expected alternate-art log:
+
+```text
+[rally-v16] Lv80+ GoldMob artwork matched; treating row as GoldMob
+```
+
+The legacy two-team path is unchanged.
+
 ## Transition pacing
 
 v8 keeps the user-confirmed two-team pacing at the world-map -> Rally boundary with one 0.3 second settle after the Rally icon click.
@@ -246,6 +264,7 @@ A current explicit three-team run should include:
 [build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
 [build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
 [build] JOIN-HOT-RACE-v15 multi-row no-slot Back routing loaded
+[build] JOIN-HOT-RACE-v16 high-level GoldMob variant loaded
 ```
 
 Useful current logs include:
@@ -260,6 +279,7 @@ Useful current logs include:
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
 [rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
 [rally-v15] GoldMob found but no same-row Join +; routing to no-match Back refresh
+[rally-v16] Lv80+ GoldMob artwork matched; treating row as GoldMob
 ```
 
 For a row above the available-team ceiling, expected logs are:
@@ -299,5 +319,8 @@ Tests must continue proving:
 - the late expected increment can still resolve after that transient backtrack;
 - a three-team GoldMob row with no same-row Join `+` reaches the no-match Back path instead of stalling at the condition gate;
 - a Join `+` from another/non-gold rally is never substituted for the missing GoldMob-row target;
-- two-team and unrelated steps are unchanged by v15; and
+- the normal lower-level GoldMob match stays authoritative before v16's alternate check;
+- the confirmed Lv80+ GoldMob artwork can satisfy the same three-team GoldMob condition when the original artwork misses;
+- OCR/team-cap filtering still independently rejects a visually valid Lv80 row when no capable Team is available;
+- two-team and unrelated conditions are unchanged by v16; and
 - the existing fixed-slot screenshot matrix and fail-closed final selection remain green.
