@@ -6,7 +6,7 @@ This document describes the speed-sensitive runtime used only by explicit three-
 
 Rally joining is a race. The macro should spend CPU/time on expensive safety work only when that work can actually matter, while preserving fail-closed final Team selection.
 
-The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, and v13 no-match Back latch release.
+The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, and v14 post-dispatch count backtrack guard.
 
 ## World-map loop
 
@@ -16,7 +16,7 @@ Before entry, the runtime can positively prove `3/3` from the left-side squad co
 
 The sidebar count never identifies Team 1/2/3. Exact Team identity comes only from the fixed formation slots.
 
-## v9/v12 squad-count observer
+## v9/v12/v14 squad-count observer
 
 v9 samples the world-map squad counter only as a staleness signal for the exact Team cache.
 
@@ -34,6 +34,31 @@ v12 tightened this evidence after a live run showed that a lagging sidebar could
 - only a prolonged 30-second failure to ever observe that expected increment abandons the cache conservatively.
 
 A fresh validated fixed-slot formation capture cancels any pending count-change candidate because fixed Team slots are stronger evidence.
+
+### v14 post-dispatch count backtrack guard
+
+A 2026-09-04 live run proved that v12 still had one unsafe evidence-ordering gap. After Team 3 was positively selected and dispatched, the exact cache was:
+
+```text
+T1=BUSY T2=IDLE T3=BUSY
+```
+
+The previous world count was `1/3`, so the macro expected its own dispatch to become visible as `2/3`. Instead the transition briefly/stably exposed `0/3`. v12 treated the changed non-expected count as unrelated, eventually invalidated the exact cache, and the Rally-page filter fell back to broad max80. A later Lv70 row then received a `+` click even though only max60 Team 2 remained idle.
+
+v14 keeps the stronger exact fixed-Team evidence authoritative during that unresolved own-dispatch window. While an expected post-dispatch count is pending and still inside v12's existing 30-second stale horizon, a count that is different from both the previous count and the expected count:
+
+- cannot replace the previous count;
+- cannot advance a v12 count-change candidate;
+- cannot invalidate the exact Team cache; and
+- therefore cannot broaden the Rally-page level ceiling.
+
+The guard logs:
+
+```text
+[team-cache] transient squad count 1/3 -> 0/3 while confirmed dispatch expects 2/3; preserving exact fixed-team cache
+```
+
+An unchanged count still uses v12's existing lag/stale handling, and the expected increment may still arrive late and be accepted normally. After the existing stale horizon expires, v12's ordinary stable-count policy is allowed to resume.
 
 ## Rally-entry latch
 
@@ -159,6 +184,14 @@ T1=BUSY T2=IDLE T3=IDLE
 
 then the effective Rally-page ceiling is 60. A Lv65 or Lv70 row is rejected before any row `+` revalidation or click.
 
+After Team 3 has also been dispatched, the cache may instead be:
+
+```text
+T1=BUSY T2=IDLE T3=BUSY
+```
+
+The ceiling is still 60 because Team 2 is the only known-IDLE Team. v14 ensures a transient post-dispatch `1/3 -> 0/3` observation cannot discard that exact evidence and accidentally restore broad max80 during the guarded own-dispatch transition.
+
 When no row is eligible, `Joining` uses its configured `BackButton.png` no-match fallback, disables the Rally sub-steps, returns to the world map, and v13 releases the entry latch so the normal Rally scanner can reopen the page and inspect a refreshed list.
 
 If all cached Teams are known BUSY, the ceiling is `none`, so no row `+` qualifies.
@@ -177,6 +210,7 @@ A current explicit three-team run should include:
 [build] JOIN-HOT-RACE-v11 phase-correct entry watchdog loaded
 [build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
 [build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
+[build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
 ```
 
 Useful current logs include:
@@ -187,6 +221,7 @@ Useful current logs include:
 [team-cache] exact fixed slots cached: T1=... T2=... T3=...
 [team-cache] confirmed dispatch => T1=BUSY; remaining known-idle level ceiling recalculated
 [team-cache] sidebar count still 0/3 while confirmed dispatch expects 1/3; preserving exact fixed-team cache
+[team-cache] transient squad count 1/3 -> 0/3 while confirmed dispatch expects 2/3; preserving exact fixed-team cache
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
 [rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
 ```
@@ -223,5 +258,7 @@ Tests must continue proving:
 - inferred `0/3` uses the longer confirmation window;
 - invalid levels never click row `+`;
 - a successful invalid-level Back fallback releases the Rally-entry latch;
-- failed/retrying/non-Back fallbacks do not release the latch; and
+- failed/retrying/non-Back fallbacks do not release the latch;
+- a changed non-expected world count during an unresolved own dispatch cannot erase the exact Team cache before the v12 stale horizon;
+- the late expected increment can still resolve after that transient backtrack; and
 - the existing fixed-slot screenshot matrix and fail-closed final selection remain green.
