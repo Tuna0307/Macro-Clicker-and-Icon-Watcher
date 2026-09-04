@@ -19,12 +19,32 @@ _INSTALLED = False
 _ORIGINAL_BUILD_UI = None
 
 
+def _clear_text_widget(log_text) -> None:
+    """Clear a Tk Text widget while preserving its configured state."""
+
+    previous_state = None
+    try:
+        previous_state = str(log_text.cget("state"))
+    except Exception:
+        # Keep compatibility with test doubles or alternate Text-like widgets.
+        previous_state = None
+
+    temporarily_enabled = previous_state == "disabled"
+    if temporarily_enabled:
+        log_text.configure(state="normal")
+    try:
+        log_text.delete("1.0", "end")
+    finally:
+        if temporarily_enabled:
+            log_text.configure(state="disabled")
+
+
 def clear_activity_view(app) -> None:
     """Clear only the visible Activity stream and stale queued UI messages."""
 
     log_text = getattr(app, "log_text", None)
     if log_text is not None:
-        log_text.delete("1.0", "end")
+        _clear_text_widget(log_text)
 
     app._log_line_count = 0
 
