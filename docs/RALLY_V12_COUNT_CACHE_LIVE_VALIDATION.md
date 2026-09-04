@@ -50,9 +50,11 @@ Instead it logs that the sidebar is lagging and preserves the fixed-team cache w
 
 A very long 30-second failure to ever observe the expected count still invalidates the cache conservatively.
 
-### Late expected increment is accepted
+### Late expected increment is accepted only inside the stale horizon
 
-If the sidebar eventually changes from (for example) `0/3 -> 1/3`, and that is the increment expected from the macro's own confirmed dispatch, the cache remains valid even if the increment arrived several seconds late.
+If the sidebar changes from (for example) `0/3 -> 1/3`, and that is the increment expected from the macro's own confirmed dispatch, the cache may remain valid when the increment arrives late **while the expected-dispatch marker is still younger than 30 seconds**.
+
+v18 tightens the other side of this rule: an expected increment that first appears at or after the existing 30-second stale horizon is no longer accepted as proof of the old dispatch. At that age the same count may represent a Team return or another unrelated world-map change, so it must go through normal stable-count confirmation instead.
 
 ### Count changes require stable world-map evidence
 
@@ -90,9 +92,61 @@ For the reproduced case the new log is:
 [team-cache] transient squad count 1/3 -> 0/3 while confirmed dispatch expects 2/3; preserving exact fixed-team cache
 ```
 
-This preserves the remaining-Team ceiling of 60 and prevents Lv70 from receiving a row `+` click. The expected `2/3` may still arrive late and is handled normally by v12.
+This preserves the remaining-Team ceiling of 60 and prevents Lv70 from receiving a row `+` click during the guarded transition. The expected `2/3` may still arrive late inside the stale horizon and is handled normally by v12.
 
 The complete v14 live note is in `RALLY_V14_POST_DISPATCH_COUNT_GUARD.md`.
+
+## v18 follow-up: an old expected increment masked a Team return
+
+A later 2026-09-04 long run exposed the opposite failure mode: the exact cache could remain **too restrictive** after Team availability changed.
+
+The relevant live sequence was:
+
+```text
+15:52:35  confirmed dispatch => T3=BUSY
+15:52:49  confirmed dispatch => T1=BUSY
+...
+15:54:10  squad count 0/3 -> 1/3 matches our confirmed dispatch;
+           exact-team cache preserved
+15:54:11  OCR reads Lv70
+15:54:11  70 > available-team max 60
+15:54:13  OCR reads Lv70
+15:54:13  70 > available-team max 60
+```
+
+At that point the old exact cache still effectively said:
+
+```text
+T1=BUSY T2=IDLE T3=BUSY
+```
+
+so the Rally-page ceiling remained 60 even though the world-map count had changed long after the old dispatch. Because the count happened to equal an old expected increment, v12 accepted it as delayed dispatch proof without checking the age of that expectation.
+
+v18 applies v12's existing 30-second stale horizon to the **arrival** branch too. When `count == expected` first appears at or after 30 seconds:
+
+1. the old expected-dispatch marker is cleared;
+2. the sample is treated as ordinary count-change evidence rather than proof of the old dispatch;
+3. the normal v12 stable confirmation still applies (`0.45s` for positive counts, `2.0s` for derived zero);
+4. only after that stable confirmation is the stale exact-Team cache invalidated; and
+5. the next formation screen still requires the existing fresh fixed Team 1/2/3 proof before any Attack input.
+
+Expected v18 log:
+
+```text
+[rally-v18] expected squad increment 0/3 -> 1/3 arrived after 80.0s; treating it as ordinary count-change evidence, not old dispatch proof
+[team-cache] candidate world-map squad change 0/3 -> 1/3; require 0.45s stable confirmation
+[team-cache] invalidated (stable world-map squad count changed 0/3 -> 1/3)
+```
+
+This intentionally does **not** infer that Team 1 returned. It only admits that the old identity cache is no longer trustworthy. A later Lv70 row may therefore open the formation screen under the broad configured ceiling, but final dispatch is still fail-closed:
+
+```text
+fresh fixed T1=IDLE  -> Lv70 may select T1 and dispatch
+fresh fixed T1=BUSY  -> no capable idle Team; back out without Attack
+fresh fixed UNKNOWN  -> fail closed; no dispatch
+```
+
+The two-team Rally path is unchanged.
 
 ## Expected level-rejection behavior
 
@@ -112,7 +166,7 @@ T1=BUSY T2=IDLE T3=IDLE
 
 then the Rally-page ceiling must be 60.
 
-For a Lv70 row the desired filtering sequence is:
+For a Lv70 row while that cache is still current, the desired filtering sequence is:
 
 ```text
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
@@ -139,6 +193,8 @@ With v13 installed after v12, a successful Back fallback is followed by:
 
 and the normal scanner may then reopen Rally when `RallyIcon.png` remains visible.
 
+Once v18 has positively invalidated a stale identity cache after a real world-count change, the next formation entry is allowed to refresh exact Team identity. The fixed-slot selector remains the final authority before Attack.
+
 ## Build markers
 
 A current explicit three-team run must include:
@@ -147,16 +203,17 @@ A current explicit three-team run must include:
 [build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
 [build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
 [build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
+[build] JOIN-HOT-RACE-v18 stale expected-count expiry loaded
 ```
 
-The earlier v7-v11 build markers remain expected as well.
+The earlier v7-v11 and later v15-v17 build markers remain expected as well.
 
 ## Regression coverage
 
 v12 tests cover:
 
 - a lagging expected dispatch count preserving the exact cache;
-- the expected increment arriving late without invalidating the cache;
+- an expected increment arriving late **inside** the stale horizon without invalidating the cache;
 - derived `0/3` requiring the longer stable confirmation;
 - positive count changes using the shorter confirmation;
 - squad-count polling being suppressed while Rally entry is latched;
@@ -166,5 +223,14 @@ v12 tests cover:
 v13 separately covers the successful no-match Back -> latch release continuation and its fail-closed guards.
 
 v14 separately covers the Team 3 live regression where a post-dispatch `1/3 -> 0/3` backtrack occurred while `2/3` was expected. That backtrack must preserve the exact Team cache and cannot become a stable invalidation candidate during the guarded own-dispatch window.
+
+v18 separately covers:
+
+- an expected increment younger than 30 seconds still preserving exact identity;
+- an expected increment at or beyond 30 seconds becoming ordinary count-change evidence;
+- stable confirmation being required before invalidating the stale cache;
+- v14's non-expected backtrack guard remaining unchanged inside its horizon;
+- invalid-cache behavior remaining unchanged; and
+- the legacy two-team path remaining unchanged.
 
 The legacy two-team scenario is not modified.
