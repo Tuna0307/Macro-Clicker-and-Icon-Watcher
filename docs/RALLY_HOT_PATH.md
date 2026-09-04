@@ -6,7 +6,7 @@ This document describes the speed-sensitive runtime used only by explicit three-
 
 Rally joining is a race. The macro should spend CPU/time on expensive safety work only when that work can actually matter, while preserving fail-closed final Team selection.
 
-The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, and v14 post-dispatch count backtrack guard.
+The current hot path combines the v6 fast scheduler, v7 entry latch/full-squad recovery, v8 Mob2-paced final dispatch, v9 deadloop/team-availability cache, v10 transition-stable tray recovery, v11 phase-correct entry watchdog, v12 stable squad-count cache guard, v13 no-match Back latch release, v14 post-dispatch count backtrack guard, and v15 multi-row no-slot Back routing.
 
 ## World-map loop
 
@@ -125,6 +125,40 @@ when the Rally icon remains visible on the world map.
 
 A failed fallback, retrying fallback, non-Back fallback, unrelated step, or two-team run does not release the latch.
 
+## v15 multi-row GoldMob no-slot routing
+
+A later 2026-09-04 live run exposed a different Rally-page stall when another mob rally appeared above the desired gold rally. The desired GoldMob row moved from roughly `y=283` to `y=560`. The engine correctly found the GoldMob at the lower row and correctly found no `Join.png` target within that GoldMob row's tolerance band, but the generic AND condition gate stopped at `LastSlot+` before `click_matching_row` could execute its normal no-match fallback.
+
+The repeated live pattern was:
+
+```text
+[join-check] BLOCKED at LastSlot+ | GoldMob=YES n=1 y=[560] | LastSlot+=NO
+```
+
+for several seconds while the Rally page remained open.
+
+v15 keeps the existing row-local target search authoritative. When all of these are true:
+
+1. explicit three-team mode;
+2. step is `Joining`;
+3. the GoldMob reference condition is positively matched;
+4. the original row-local Join search returns no target for the GoldMob row;
+
+v15 reports that target condition as pass-with-no-target so the step can reach the already-existing `click_matching_row` no-match branch. It does not invent or substitute a target. A `+` belonging to a non-gold rally remains outside the GoldMob row band and cannot be clicked.
+
+Expected continuation is:
+
+```text
+[rally-v15] GoldMob found but no same-row Join +; routing to no-match Back refresh
+[fire] Joining
+[join-rows] GoldMob y=[560]; LastSlot+ y=[]; mob_y=560->plus_y=[]
+[skip] 'Joining' no valid matching row target
+[no-match] click condition #2 (...BackButton...)
+[rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
+```
+
+The legacy two-team path is unchanged.
+
 ## Transition pacing
 
 v8 keeps the user-confirmed two-team pacing at the world-map -> Rally boundary with one 0.3 second settle after the Rally icon click.
@@ -149,9 +183,9 @@ v7 requires positive evidence:
 4. one user-validated neutral tray dismissal; and
 5. no Team-card or Attack input.
 
-Any `IDLE` or `UNKNOWN` evidence fails closed.
+Any `IDLE` or `UNKNOWN` tray state fails closed.
 
-v10 prevents a partially rendered normal formation transition from being misclassified as that all-busy tray. Tray recovery is forbidden for the first 1.0 second after a valid row `+` click, then BUSY/BUSY/BUSY must remain stable before v7 performs its own fresh final proof.
+v10 prevents a partially rendered normal formation transition from being misclassified as that all-busy tray. Tray recovery is forbidden for the first 1.0 second after a valid Rally-row `+` click, then BUSY/BUSY/BUSY must remain stable before v7 performs its own fresh final proof.
 
 Normal `Attack Confirm` polling continues during that guard; it is not a blocking sleep.
 
@@ -211,6 +245,7 @@ A current explicit three-team run should include:
 [build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
 [build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
 [build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
+[build] JOIN-HOT-RACE-v15 multi-row no-slot Back routing loaded
 ```
 
 Useful current logs include:
@@ -224,6 +259,7 @@ Useful current logs include:
 [team-cache] transient squad count 1/3 -> 0/3 while confirmed dispatch expects 2/3; preserving exact fixed-team cache
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
 [rally-v13] no-match Back completed; Rally entry latch released for world-map refresh
+[rally-v15] GoldMob found but no same-row Join +; routing to no-match Back refresh
 ```
 
 For a row above the available-team ceiling, expected logs are:
@@ -260,5 +296,8 @@ Tests must continue proving:
 - a successful invalid-level Back fallback releases the Rally-entry latch;
 - failed/retrying/non-Back fallbacks do not release the latch;
 - a changed non-expected world count during an unresolved own dispatch cannot erase the exact Team cache before the v12 stale horizon;
-- the late expected increment can still resolve after that transient backtrack; and
+- the late expected increment can still resolve after that transient backtrack;
+- a three-team GoldMob row with no same-row Join `+` reaches the no-match Back path instead of stalling at the condition gate;
+- a Join `+` from another/non-gold rally is never substituted for the missing GoldMob-row target;
+- two-team and unrelated steps are unchanged by v15; and
 - the existing fixed-slot screenshot matrix and fail-closed final selection remain green.
