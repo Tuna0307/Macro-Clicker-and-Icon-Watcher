@@ -65,6 +65,35 @@ An unrelated count change no longer invalidates exact identity from one sample.
 
 A new exact fixed-slot formation capture immediately cancels any pending count-change candidate because fixed slots are the stronger evidence source.
 
+## v14 follow-up: changed-but-non-expected count during own dispatch
+
+A 2026-09-04 live run exposed one remaining gap in v12 after a successful Team 3 dispatch.
+
+The fixed selector correctly produced:
+
+```text
+T1=BUSY T2=IDLE T3=IDLE
+Rally Lv50 -> selected T3
+Attack -> dispatch committed
+cache => T1=BUSY T2=IDLE T3=BUSY
+```
+
+At that point the previous world count was `1/3`, so the confirmed Team 3 dispatch created an expected count of `2/3`. During the transition the observer instead saw `1/3 -> 0/3`. Because that value was neither the previous count nor the expected count, v12 eventually treated it as an unrelated stable change and invalidated the exact Team cache.
+
+Once that cache was gone, a later Lv70 row fell back to broad max80 and its `+` was clicked. The fresh formation screen then re-proved `T1=BUSY T2=IDLE T3=BUSY` and correctly refused to dispatch, showing that Team 3 selection was never the problem.
+
+v14 now protects only this unresolved own-dispatch window. While an exact cache is valid and an expected post-dispatch count is pending, a **changed but non-expected** count cannot advance a v12 invalidation candidate before the existing 30-second expected-count stale horizon expires.
+
+For the reproduced case the new log is:
+
+```text
+[team-cache] transient squad count 1/3 -> 0/3 while confirmed dispatch expects 2/3; preserving exact fixed-team cache
+```
+
+This preserves the remaining-Team ceiling of 60 and prevents Lv70 from receiving a row `+` click. The expected `2/3` may still arrive late and is handled normally by v12.
+
+The complete v14 live note is in `RALLY_V14_POST_DISPATCH_COUNT_GUARD.md`.
+
 ## Expected level-rejection behavior
 
 The selector maxima are editable and must never be hard-coded by the runtime or tests. At the time of this validation, the committed three-team selector is:
@@ -83,7 +112,7 @@ T1=BUSY T2=IDLE T3=IDLE
 
 then the Rally-page ceiling must be 60.
 
-For a Lv70 row the desired v12 filtering sequence is:
+For a Lv70 row the desired filtering sequence is:
 
 ```text
 [team-cache] using known fixed-team availability; Rally-row ceiling=60
@@ -117,6 +146,7 @@ A current explicit three-team run must include:
 ```text
 [build] JOIN-HOT-RACE-v12 stable squad-count cache guard loaded
 [build] JOIN-HOT-RACE-v13 no-match Back latch release loaded
+[build] JOIN-HOT-RACE-v14 post-dispatch count backtrack guard loaded
 ```
 
 The earlier v7-v11 build markers remain expected as well.
@@ -134,5 +164,7 @@ v12 tests cover:
 - Rally tests deriving expectations from the selector maxima loaded from the scenario instead of hard-coding old values.
 
 v13 separately covers the successful no-match Back -> latch release continuation and its fail-closed guards.
+
+v14 separately covers the Team 3 live regression where a post-dispatch `1/3 -> 0/3` backtrack occurred while `2/3` was expected. That backtrack must preserve the exact Team cache and cannot become a stable invalidation candidate during the guarded own-dispatch window.
 
 The legacy two-team scenario is not modified.
