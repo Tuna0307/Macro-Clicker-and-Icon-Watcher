@@ -23,7 +23,6 @@ from __future__ import annotations
 import time
 
 from . import rally_hot_path_runtime as _hot
-from . import rally_hot_path_v17_runtime as _v17
 
 BUILD_MARKER = "JOIN-HOT-RACE-v31 profile-recovery entry priority"
 PROFILE_TRACE_INTERVAL_SECONDS = 0.75
