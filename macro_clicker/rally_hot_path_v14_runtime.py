@@ -11,10 +11,11 @@ T1=BUSY, T2=IDLE, T3=BUSY and only the max60 Team 2 remained available.
 
 v14 keeps the stronger exact fixed-Team evidence authoritative while an expected
 post-dispatch count increment is unresolved.  Until v12's existing 30-second
-expected-count stale horizon expires, any non-expected counter value is treated
-as a transient observation only: it cannot advance a count-change candidate or
-invalidate Team identity.  The expected increment can still arrive late and be
-accepted normally.  After the existing stale horizon expires, v12's ordinary
+expected-count stale horizon expires, a changed-but-non-expected counter value is
+treated as a transient observation only: it cannot advance a count-change
+candidate or invalidate Team identity.  The expected increment can still arrive
+late and be accepted normally.  An unchanged count continues through v12's
+existing lag/stale handling, and after the stale horizon expires v12's ordinary
 stable-count invalidation policy resumes.
 
 This is conservative: a real Team return during that short unresolved-dispatch
@@ -49,6 +50,8 @@ def _observe_squad_count(engine, count, now=None):
     now = time.monotonic() if now is None else float(now)
     if not _hot._is_three_team(engine):
         return _ORIGINAL_OBSERVE(engine, count, now=now)
+    if not isinstance(count, int) or count not in (0, 1, 2, 3):
+        return _ORIGINAL_OBSERVE(engine, count, now=now)
 
     previous = getattr(engine, "_rally_v9_last_squad_count", None)
     expected = getattr(engine, "_rally_v9_expected_squad_count", None)
@@ -58,6 +61,7 @@ def _observe_squad_count(engine, count, now=None):
         getattr(engine, "_rally_v9_team_cache_valid", False)
         and isinstance(previous, int)
         and isinstance(expected, int)
+        and count != previous
         and count != expected
         and max(0.0, now - since) < _v12.EXPECTED_COUNT_STALE_SECONDS
     ):
@@ -78,7 +82,7 @@ def _observe_squad_count(engine, count, now=None):
         return False
 
     result = _ORIGINAL_OBSERVE(engine, count, now=now)
-    if count == expected or expected is None:
+    if count == expected or expected is None or count == previous:
         engine._rally_v14_last_backtrack_log = None
     return result
 
