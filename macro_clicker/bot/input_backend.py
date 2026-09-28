@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -111,7 +112,7 @@ class Win32MessageInputBackend:
         return hwnd
 
     def _validate_client_point(self, hwnd: int, x: int, y: int) -> None:
-        rect = ctypes.wintypes.RECT()
+        rect = wintypes.RECT()
         if not self._user32.GetClientRect(hwnd, ctypes.byref(rect)):
             raise InputBackendError("GetClientRect failed for target window.")
         width = int(rect.right - rect.left)
