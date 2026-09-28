@@ -12,7 +12,7 @@ import ctypes
 import os
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
 from .contracts import CapabilityStatus
 
